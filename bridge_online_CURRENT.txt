@@ -1,0 +1,556 @@
+// Online agent bridge: live browser World of Claudecraft <-> PPO server.
+//
+// Reads the SAME 567-dim obs the headless RL env uses (window.WOC_OBS.encodeObs,
+// injected from the freshly-built dist-tools/obs_bundle.js), appends the
+// persistent in_combat_range latch (568th feature, hysteresis 5/7 per training),
+// sends it to the local PPO inference server, and applies the returned action to
+// the live character through the online-safe APIs (controller.move / sim.*).
+//
+// Run:
+//   node dist-tools/bridge_online.cjs --apply-actions
+// (without --apply-actions it only logs obs/predict — no character input)
+//
+// Requires: live game tab open + Chrome on :9222 + ppo_server on :5000.
+
+import puppeteer from 'puppeteer-core';
+import path from 'node:path';
+import fs from 'node:fs';
+import dns from 'node:dns';
+
+// Force IPv4 loopback resolution. Node 17+ favours IPv6 (::1) for localhost /
+// 127.0.0.1 in some setups; the ppo_server binds IPv4 only, so a bare
+// 127.0.0.1 fetch can ECONNREFUSED on ::1. ipv4first makes the bridge hit the
+// real listener.
+dns.setDefaultResultOrder('ipv4first');
+
+const ARGS = process.argv.slice(2);
+function arg(name: string, def?: string): string | undefined {
+  const i = ARGS.indexOf(`--${name}`);
+  return i >= 0 ? ARGS[i + 1] : def;
+}
+const GAME_URL = arg('url', 'https://worldofclaudecraft.com');
+const PPO_URL = arg('ppo-url', 'http://127.0.0.1:5010/predict');
+const HUD_PORT = parseInt(arg('hud-port', '8790') || '8790', 10);
+const TICK_HZ = parseInt(arg('hz', '4') || '4', 10);
+const APPLY = ARGS.includes('--apply-actions');
+const CDP = 'http://127.0.0.1:9222';
+
+// --- telemetry log (read-only; does not affect obs/action/apply logic) --------
+// One JSON line per tick: raw counters + per-tick deltas, so reward-proxy
+// noise/latency can be measured from a file instead of eyeballing the console.
+// This is the precondition data for online self-learning (step 2 of the plan),
+// not the learning loop itself -- nothing here mutates the model or the env.
+const LOG_PATH = arg('log', path.resolve(__dirname, '..', `bridge_session_${Date.now()}.jsonl`));
+const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+console.log(`[bridge] telemetry log -> ${LOG_PATH}`);
+let prevCounters: { damage: number; hits: number; kills: number; deaths: number } | null = null;
+let lastKillTs: number | null = null;
+let prevTargetHp: number | null = null; // target_hp from previous tick (for kill credit)
+let prevTargetDist: number | null = null; // target_dist from previous tick (melee contact)
+let prevObs: number[] | null = null;     // fullObs from previous tick (for transition)
+let prevAction: number = 0;             // action from previous tick
+let prevPlayerHp: number = 100;         // player hp from previous tick
+let econMode: boolean = false;           // self-learning phase A: walking to vendor to sell
+let sellCalled: boolean = false;         // set true on the tick sellAllJunk() fires (diagnostic)
+let prevCopper: number = 0;              // copper from previous tick (for sell reward)
+
+// --- transition log (online self-learning input) ------------------------------
+// One JSON line per tick: (obs_t, action_t, reward_t, obs_{t+1}, done).
+// Reward is CREDITED for a kill ONLY when the agent's own current target was
+// alive (hp>0) in the previous tick and within melee range -- this filters out
+// corpse-farming and other-players'-kills (the 61% suspicious rate seen in the
+// raw telemetry). Damage is credited at small scale only when hitting a living
+// target. Nothing here mutates the model; the trainer consumes this file.
+const TRANS_PATH = arg('transitions', path.resolve(__dirname, '..', `transitions_${Date.now()}.jsonl`));
+const transStream = fs.createWriteStream(TRANS_PATH, { flags: 'a' });
+console.log(`[bridge] transitions log -> ${TRANS_PATH}`);
+
+function computeReward(
+  dKills: number, dDamage: number, dDeaths: number,
+  tgtHas: boolean, tgtHpPrev: number | null, tgtDist: number | null,
+  tgtDistPrev: number | null,
+  playerHp: number, playerHpPrev: number,
+  copperDelta: number,
+): { reward: number; creditedKill: boolean } {
+  // Kill credit: a kill happened this tick (dKills>0) AND we had a target at
+  // the moment of the kill (tgtHas). We do NOT require melee range, because the
+  // live game lets a mob die while it is still a few yards off (it breaks melee,
+  // runs, then dies) -- requiring dist<=8 would reject most real kills. The
+  // honest signal: our selected target died this tick -> our kill.
+  const creditedKill = dKills > 0 && tgtHas;
+  let reward = 0;
+  if (creditedKill) reward += 1.0;
+  // small continuous shaping for damage dealt to a living MELEE target only
+  if (tgtHas && tgtHpPrev !== null && tgtHpPrev > 0 &&
+      tgtDist !== null && tgtDist <= 8) {
+    reward += Math.min(dDamage, 500) * 0.001;
+  }
+  // phase A: monetization shaping -- selling loot is good
+  if (copperDelta > 0) reward += Math.min(copperDelta, 5000) * 0.0005;
+  reward -= dDeaths * 0.5;                 // dying is bad
+  // tiny survive bonus to keep the agent engaged
+  if (playerHp > 0 && playerHpPrev > 0) reward += 0.001;
+  return { reward, creditedKill };
+}
+
+// --- SSE HUD -----------------------------------------------------------------
+import http from 'node:http';
+let latest: any = null;
+const sseClients = new Set<http.ServerResponse>();
+const hudServer = http.createServer((req, res) => {
+  if (req.url === '/stream') {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    sseClients.add(res);
+    req.on('close', () => sseClients.delete(res));
+    return;
+  }
+  if (req.url === '/latest') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(latest ?? {}));
+    return;
+  }
+  res.writeHead(200, { 'content-type': 'text/html' });
+  res.end('WoC Online Bridge HUD. Open debug/debug_hud.html');
+});
+function broadcast() {
+  const payload = `data: ${JSON.stringify(latest)}\n\n`;
+  for (const c of sseClients) c.write(payload);
+}
+hudServer.listen(HUD_PORT, () => console.log(`[bridge] HUD SSE on :${HUD_PORT}`));
+
+// --- latch (mirrors CombatRangeTracker from nav_features.py) ------------------
+const ENTER = 5.0, EXIT = 7.0;
+function makeTracker() {
+  let latched = false;
+  return {
+    update(has: boolean, dist: number): boolean {
+      if (!has) { latched = false; return false; }
+      if (latched) { if (dist > EXIT) latched = false; }
+      else { if (dist <= ENTER) latched = true; }
+      return latched;
+    },
+    reset() { latched = false; },
+  };
+}
+const tracker = makeTracker();
+
+// PPO action name table (must match src/sim/obs.ts ACTIONS order, first 9 + abilities)
+const ACTIONS = [
+  'noop', 'forward', 'back', 'turn_left', 'turn_right', 'strafe_left', 'strafe_right',
+  'jump', 'target_nearest', 'attack',
+  // ability_1..ability_48 filled below
+  ...Array.from({ length: 48 }, (_, i) => `ability_${i + 1}`),
+  'interact', 'stop', 'eat_drink',
+];
+
+async function main() {
+  const browser = await puppeteer.connect({ browserURL: CDP });
+  const pages = await browser.pages();
+  let page = pages.find((p) => p.url().includes('worldofclaudecraft.com')) || pages[0];
+  if (!page) { page = await browser.newPage(); await page.goto(GAME_URL, { waitUntil: 'networkidle2', timeout: 60000 }); }
+
+  // Defensive: any page.evaluate that hangs (CDP throttled / tab state) must NOT
+  // stall the self-learning loop. Wrap with a timeout so the loop keeps
+  // recording honest transitions instead of freezing after "econMode ON".
+  // Does not mutate obs/reward/model.
+  const _origEval = page.evaluate.bind(page);
+  const withTimeout = (p: any, ms: number, tag: string) =>
+    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('eval-timeout ' + tag)), ms))]);
+  (page as any).evaluate = (fn: any, ...args: any[]) =>
+    withTimeout(_origEval(fn, ...args), 4000, 'page.evaluate').catch((e: any) => {
+      console.log('[bridge] eval skipped (timeout):', e?.message);
+      return undefined;
+    });
+
+  await page.waitForFunction('!!window.__game && !!window.__game.sim && !!window.__game.sim.player', { timeout: 60000 });
+  console.log('[bridge] window.__game ready (account:', await page.evaluate(() => (window as any).__game.account?.username ?? 'NONE'), ')');
+
+  if (!APPLY) console.log('[bridge] READ-ONLY mode (no --apply-actions): logging obs/predict only');
+
+  // inject fresh obs encoder
+  await page.addScriptTag({ path: path.resolve(__dirname, '..', 'dist-tools', 'obs_bundle.js') });
+  await page.waitForFunction('!!window.WOC_OBS && typeof window.WOC_OBS.encodeObs === "function"', { timeout: 20000 });
+  console.log('[bridge] obs encoder injected (expect obsLen=567)');
+
+  let step = 0;
+  const intervalMs = Math.max(50, Math.round(1000 / TICK_HZ));
+
+  const loop = setInterval(async () => {
+    try {
+      // Self-heal: WOC_OBS (obs_bundle.js) can drop if the game tab
+      // reloads/SPA-navigates. Re-inject + wait instead of silently
+      // returning null obs every tick (which freezes the whole loop).
+      const hasWOC = await page.evaluate(() => !!window.WOC_OBS && typeof window.WOC_OBS.encodeObs === 'function').catch(() => false);
+      if (!hasWOC) {
+        console.log('[bridge] WOC_OBS missing, re-injecting obs_bundle.js');
+        try {
+          await page.addScriptTag({ path: path.resolve(__dirname, '..', 'dist-tools', 'obs_bundle.js') });
+          await page.waitForFunction('!!window.WOC_OBS && typeof window.WOC_OBS.encodeObs === "function"', { timeout: 20000 });
+          console.log('[bridge] obs encoder re-injected');
+        } catch (e: any) {
+          console.log('[bridge] re-inject failed:', e?.message);
+          return;
+        }
+      }
+      const result = await page.evaluate(() => {
+        const g: any = (window as any).__game;
+        const sim = g.sim;
+        if (!sim) return null;
+        const p = sim.player;
+        if (!sim.grid) {
+          sim.grid = {
+            forEachInRadius(x: number, z: number, r: number, cb: (e: any, d2: number) => void) {
+              const r2 = r * r;
+              for (const e of sim.entities.values()) {
+                const dx = e.pos.x - x, dz = e.pos.z - z, d2 = dx * dx + dz * dz;
+                if (d2 <= r2) cb(e, d2);
+              }
+            },
+          };
+        }
+        const obs = (window as any).WOC_OBS.encodeObs(sim);
+        const tgt = p.targetId != null ? sim.entities.get(p.targetId) ?? null : null;
+        const mobs: any[] = [];
+        for (const e of sim.entities.values()) {
+          if (e.kind === 'mob' && !e.dead) {
+            const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, dist = Math.hypot(dx, dz);
+            if (dist < 60) mobs.push({ dist, hp: (e.hp / Math.max(1, e.maxHp)) * 100, aggro: e.aggro ?? false });
+          }
+        }
+        mobs.sort((a: any, b: any) => a.dist - b.dist);
+        let target: any = null;
+        if (tgt) {
+          const dx = tgt.pos.x - p.pos.x, dz = tgt.pos.z - p.pos.z, dist = Math.hypot(dx, dz);
+          let off = (Math.atan2(dx, -dz) * 180) / Math.PI - (p.facing * 180) / Math.PI;
+          off = ((off + 180) % 360 + 360) % 360 - 180;
+          target = { has: true, dist, off_deg: off, hp: (tgt.hp / Math.max(1, tgt.maxHp)) * 100, id: p.targetId };
+        }
+        // --- economy context (self-learning phase A) ---
+        const inv: any[] = (p.inventory ?? sim.inventory) || [];
+        const _invSize = (p.inventorySize != null) ? p.inventorySize : (sim.inventorySize != null ? sim.inventorySize : (inv.length || 1));
+        const invFill = inv.length / Math.max(1, _invSize);
+        let vendor: any = null;
+        for (const e of sim.entities.values()) {
+          if (e.kind === 'npc' && /merchant|trader|vendor|broker|quartermaster/i.test(e.name ?? '')) {
+            const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+            if (!vendor || d < vendor.dist) vendor = { dist: d, x: e.pos.x, z: e.pos.z, name: e.name, id: e.id };
+          }
+        }
+        return {
+          obs,
+          target,
+          mobs: mobs.slice(0, 5),
+          player: { hp: (p.hp / Math.max(1, p.maxHp)) * 100, level: p.level, facing_deg: (p.facing * 180) / Math.PI, in_combat: p.inCombat, auto_attack: p.autoAttack, dead: !!p.dead },
+          counters: { damage: sim.deedStats?.counters?.damageDealt ?? sim.deedStats?.counters?.damage ?? 0, hits: sim.deedStats?.counters?.hitsDealt ?? 0, kills: sim.deedStats?.counters?.kills ?? 0, deaths: sim.deedStats?.counters?.deaths ?? 0 },
+          economy: { copper: sim.copper ?? 0, invFill, invLen: inv.length, vendor },
+        };
+      });
+
+      const now = Date.now();
+      if (!result || !result.obs) { console.error(`[bridge] tick ${step}: no obs`); return; }
+      const { obs, target, mobs, player, counters, economy } = result;
+
+      // Capture target state BEFORE any env-glue (corpse-loot / retarget) runs
+      // this tick. Kill credit must be evaluated against the target that was
+      // alive/engaged when the kill actually happened -- corpse-glue swaps the
+      // target to the next mob AFTER the kill, which would otherwise wipe the
+      // credit (dKills>0 but target.has already points at a fresh mob).
+      const preApplyTargetHas = target?.has ?? false;
+      const preApplyTargetDist = target?.dist ?? null;
+
+      // append latch (568th feature)
+      const tdec = obs.length >= 121 ? (() => {
+        // target block starts at offset 112: [has, hp, leveldiff, dist/40, sin, cos, hostile, dead, aggro]
+        const has = obs[112] > 0.5;
+        const dist = obs[115] * 40; // dist/40 -> yd
+        return { has, dist };
+      })() : { has: false, dist: 999 };
+      const latch = tracker.update(tdec.has, tdec.dist);
+      const fullObs = [...obs, latch ? 1.0 : 0.0];
+
+      const res = await fetch(PPO_URL, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ obs: fullObs }),
+        signal: AbortSignal.timeout(4000),
+      });
+      if (!res.ok) { console.error(`[bridge] ppo ${res.status}`); return; }
+      console.error(`[dbg] fetch ok action pending`);
+      const data = (await res.json()) as { action: number };
+      const action = data.action;
+      const actionName = ACTIONS[action] ?? `act${action}`;
+
+      if (APPLY) {
+        // --- env-glue: economy (self-learning phase A) ---
+        // When the bag is mostly full, walk to the nearest merchant and sell
+        // junk. This is the same class of glue as combat (controller.move /
+        // sim.interact): it does NOT mutate the model. The transition still
+        // records the model's chosen action honestly; reward is credited for
+        // the copper delta so the policy learns to value monetization.
+        const invFill = economy?.invFill ?? 0;
+        const vendor = economy?.vendor ?? null;
+        if (!econMode && invFill >= 0.7 && vendor && (vendor.dist ?? 999) < 200) {
+          econMode = true;
+          console.log(`[bridge] econMode ON (invFill=${invFill.toFixed(2)}, vendor=${vendor.name} @${vendor.dist?.toFixed?.(0)}yd)`);
+        }
+        if (econMode) {
+          console.log(`[bridge][dbg-econ] econMode=${econMode} invFill=${invFill?.toFixed?.(2)} vendor=${vendor?vendor.name+'@'+vendor.dist?.toFixed?.(1):'NULL'}`);
+          if (invFill < 0.4) {
+            econMode = false;
+            console.log(`[bridge] econMode OFF (bag cleared, invFill=${invFill.toFixed(2)})`);
+          } else if (vendor && (vendor.dist ?? 999) <= 3) {
+            // at the vendor: interact + sell everything junk, then retarget.
+            // Capture copper BEFORE/AFTER the exact sell call so we can prove
+            // (in transitions, not just the log) that copper rose from SELL and
+            // not from a kill-reward. Diagnostic only -- does not mutate obs/Sim.
+            const res: any = await page.evaluate(() => {
+              const g: any = (window as any).__game;
+              const sim = g.sim;
+              const before = sim.copper ?? 0;
+              try { sim.interact(); } catch (_) {}
+              try { (sim as any).sellAllJunk?.(); } catch (_) {}
+              try { (sim as any).sellItem?.(); } catch (_) {}
+              const after = sim.copper ?? before;
+              return { before, after };
+            });
+            sellCalled = true;
+            console.log(`[bridge] sold junk at ${vendor.name} (copper ${res.before} -> ${res.after}, delta=${res.after - res.before})`);
+            // stay in econMode until bag clears; keep walking back otherwise
+          } else if (vendor) {
+            // walk toward the vendor (navigate by world coords)
+            console.log(`[bridge][dbg-walk] vendor=${vendor.name} dist=${vendor.dist?.toFixed?.(1)} vx=${vendor.x} vz=${vendor.z}`);
+            await page.evaluate((vx: number, vz: number) => {
+              const g: any = (window as any).__game;
+              const sim = g.sim;
+              const p = sim.player;
+              const dx = vx - p.pos.x, dz = vz - p.pos.z;
+              const desiredFacing = Math.atan2(dx, -dz); // match encodeObs convention
+              let off = desiredFacing - p.facing;
+              off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+              try { g.controller.stop(); } catch (_) {}
+              if (Math.abs(off) > 0.25) {
+                // turn AND move forward simultaneously (same as combat-glue)
+                // to avoid getting stuck rotating in place without approaching
+                if (off > 0) g.controller.move({ turnRight: true, forward: true });
+                else g.controller.move({ turnLeft: true, forward: true });
+              } else {
+                g.controller.move({ forward: true });
+              }
+            }, vendor.x, vendor.z);
+          }
+          // skip combat glue while in econMode (we are selling, not fighting)
+          prevObs = fullObs;
+          prevTargetHp = target?.hp ?? null;
+          prevTargetDist = target?.dist ?? null;
+          prevPlayerHp = player.hp;
+          prevAction = action;
+          prevCopper = economy?.copper ?? prevCopper;
+        } else {
+        // --- NOT in econMode: respawn + combat glue below ---
+
+        // --- env-glue: respawn when dead (does NOT mutate the model) ---
+        // The character does not auto-respawn. Chain: releaseSpirit() (become
+        // ghost) -> resurrectAtCorpse() (return to corpse). Without this the
+        // bridge would sit on a corpse forever and collect zero signal.
+        // Trigger on BOTH hp<=0 AND the game's own dead flag, because in the
+        // dead state the normalized hp can read >0 while p.dead is true.
+        if (player.hp <= 0 || player.dead) {
+          await page.evaluate(() => {
+            const g: any = (window as any).__game;
+            const sim = g.sim;
+            // releaseSpirit() -> rise as ghost; resurrectAtSpiritHealer()
+            // revives at the angel (Resurrection Sickness, but alive).
+            // resurrectAtCorpse() only works when the ghost is IN RANGE of the
+            // corpse, which is usually false right after death, so we go through
+            // the healer path which always works from any graveyard.
+            try { sim.releaseSpirit(); } catch (_) {}
+            try { sim.resurrectAtSpiritHealer(); } catch (_) {}
+          });
+          // do NOT apply an action this tick; re-evaluate next tick
+          prevObs = fullObs;
+          prevTargetHp = target?.hp ?? null;
+          prevTargetDist = target?.dist ?? null;
+          prevPlayerHp = player.hp;
+          prevAction = action;
+        } else {
+        // --- env-glue: force-acquire a target when none is selected ---
+        // The policy often emits movement (turn_left) instead of target_nearest
+        // even with mobs in range, so it never engages. We force a sane target
+        // here (does NOT mutate the model; transitions stay honest).
+        if (!target || !target.has) {
+          await page.evaluate(() => {
+            const g: any = (window as any).__game;
+            const sim = g.sim;
+            const p = sim.player;
+            let best: any = null, bestD = Infinity;
+            for (const e of sim.entities.values()) {
+              if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
+              const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+              const d = Math.hypot(dx, dz);
+              if (d <= 40 && d < bestD) { bestD = d; best = e; }
+            }
+            try { if (best) sim.targetEntity(best.id); } catch (_) {}
+          });
+        }
+
+        // --- env-glue: force auto-attack on a living mob in range ---
+        // The BC/B1 policy rarely emits 'attack' on its own. The character is a
+        // RANGED class (hunter), so it fights from a distance -- we start
+        // auto-attack whenever a living target is within 40yd (well inside the
+        // bow's range), not just melee. Same class of glue as controller.move;
+        // the transition still records the model's chosen action honestly.
+        if (target && target.has && (target.dist ?? 99) <= 40) {
+          await page.evaluate(() => {
+            const g: any = (window as any).__game;
+            const sim = g.sim;
+            try { sim.startAutoAttack(); } catch (_) {}
+          });
+        }
+
+        // After a kill the target mob is dead but still the current target; the
+        // policy this causes the agent to freeze on the corpse (25% of ticks in
+        // the raw telemetry). We force loot + retarget here, same class of glue
+        // as controller.move -- the model still learns from honest transitions.
+        const tgtDead = (target && (target.hp <= 0)) || false;
+        if (tgtDead) {
+          await page.evaluate(() => {
+            const g: any = (window as any).__game;
+            const sim = g.sim;
+            const p = sim.player;
+            try { sim.interact(); } catch (_) {}  // loot corpse
+            let best: any = null, bestD = Infinity;
+            for (const e of sim.entities.values()) {
+              if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
+              const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+              const d = Math.hypot(dx, dz);
+              if (d <= 40 && d < bestD) { bestD = d; best = e; }
+            }
+            try { if (best) sim.targetEntity(best.id); else sim.tabTarget(); } catch (_) {}
+          });
+        }
+
+        await page.evaluate((a: number) => {
+          const g: any = (window as any).__game;
+          const sim = g.sim;
+          const name = (window as any).WOC_OBS.ACTIONS?.[a] ?? null;
+          // clear movement each tick
+          if (g.controller && g.controller.stop) g.controller.stop();
+          if (name === 'forward') g.controller.move({ forward: true });
+          else if (name === 'back') g.controller.move({ back: true });
+          else if (name === 'turn_left') g.controller.move({ turnLeft: true, forward: true });
+          else if (name === 'turn_right') g.controller.move({ turnRight: true, forward: true });
+          else if (name === 'strafe_left') g.controller.move({ strafeLeft: true });
+          else if (name === 'strafe_right') g.controller.move({ strafeRight: true });
+          else if (name === 'jump') g.controller.move({ jump: true, forward: true });
+          else if (name === 'target_nearest') (function(){ const g: any = (window as any).__game; const sim = g.sim; const p = sim.player; let best: any = null, bestD = Infinity; for (const e of sim.entities.values()) { if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue; const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z; const d = Math.hypot(dx, dz); if (d <= 40 && d < bestD) { bestD = d; best = e; } } try { if (best) sim.targetEntity(best.id); else sim.tabTarget(); } catch (_) {} })();
+          else if (name === 'attack') sim.startAutoAttack();
+          else if (name === 'stop') sim.stopAutoAttack();
+          else if (name === 'interact') sim.interact();
+          else if (name && name.startsWith('ability_')) sim.castAbilityBySlot(parseInt(name.slice(8), 10) - 1);
+        }, action);
+        }
+      }
+
+      console.log(`[bridge] tick ${step} obsLen=${obs.length} latch=${latch ? 1 : 0} action=${action}(${actionName}) facing=${player.facing_deg?.toFixed?.(0)} combat=${player.in_combat} kills=${counters.kills} deaths=${counters.deaths}`);
+      latest = {
+        step: ++step, mode: 'ppo', obs_len: obs.length, latch: latch ? 1 : 0,
+        action_idx: action, action_name: actionName,
+        hp: player.hp, level: player.level, facing_deg: player.facing_deg,
+        in_combat: player.in_combat, auto_attack: player.auto_attack,
+        damage: counters.damage, hits: counters.hits, kills: counters.kills, deaths: counters.deaths,
+        target, mobs,
+      };
+      broadcast();
+
+      // --- telemetry (read-only) ---
+      console.error(`[dbg] before telemetry prevCounters=${prevCounters===null}`);
+      if (prevCounters === null) {
+        // First tick: seed from real game state, do NOT diff against zero
+        // (counters are cumulative for the whole character session, not
+        // per-bridge-run -- diffing against 0 here would report the entire
+        // pre-existing kill/damage/death count as a single fake tick event).
+        prevCounters = { damage: counters.damage, hits: counters.hits, kills: counters.kills, deaths: counters.deaths };
+        logStream.write(JSON.stringify({
+          ts: now, step,
+          action_idx: action, action_name: actionName, latch,
+          target_has: target?.has ?? false, target_dist: target?.dist ?? null, target_hp: target?.hp ?? null,
+          player_hp: player.hp, in_combat: player.in_combat, auto_attack: player.auto_attack,
+          kills: counters.kills, damage: counters.damage, deaths: counters.deaths,
+          d_kills: 0, d_damage: 0, d_deaths: 0, ms_since_last_kill: null,
+          note: 'first_tick_seed',
+        }) + '\n');
+        // seed transition state so next tick can emit (obs_t, action_t, ...)
+        prevObs = fullObs;
+        prevTargetHp = target?.hp ?? null;
+        prevTargetDist = target?.dist ?? null;
+        prevPlayerHp = player.hp;
+        prevAction = action;
+      } else {
+        let dKills = counters.kills - prevCounters.kills;
+        let dDamage = counters.damage - prevCounters.damage;
+        let dDeaths = counters.deaths - prevCounters.deaths;
+        // A negative delta means the underlying counter was reset (respawn /
+        // zone change), not that kills/damage/deaths went backwards. Flag it
+        // instead of emitting a nonsensical negative event.
+        const counterReset = dKills < 0 || dDamage < 0 || dDeaths < 0;
+        if (counterReset) { dKills = 0; dDamage = 0; dDeaths = 0; }
+        if (dKills > 0) lastKillTs = now;
+        logStream.write(JSON.stringify({
+          ts: now, step,
+          action_idx: action, action_name: actionName, latch,
+          target_has: target?.has ?? false, target_dist: target?.dist ?? null, target_hp: target?.hp ?? null,
+          player_hp: player.hp, in_combat: player.in_combat, auto_attack: player.auto_attack,
+          kills: counters.kills, damage: counters.damage, deaths: counters.deaths,
+          copper: economy?.copper ?? null, inv_fill: economy?.invFill ?? null, econ_mode: econMode,
+          d_kills: dKills, d_damage: dDamage, d_deaths: dDeaths,
+          ms_since_last_kill: lastKillTs !== null ? now - lastKillTs : null,
+          counter_reset: counterReset,
+        }) + '\n');
+        prevCounters = { damage: counters.damage, hits: counters.hits, kills: counters.kills, deaths: counters.deaths };
+
+        // --- transition (online self-learning input) ---
+        if (prevObs !== null) {
+          // Kill credit uses the pre-apply target state (see capture above):
+          // corpse-glue may have already retargeted this tick, so the
+          // post-apply `target` would point at a fresh mob.
+          const tgtHas = preApplyTargetHas;
+          const tgtDist = preApplyTargetDist;
+          const playerHpPrev = prevPlayerHp; // set at top of telemetry
+          const copperDelta = (economy?.copper ?? 0) - prevCopper;
+          const { reward, creditedKill } = computeReward(
+            dKills, dDamage, dDeaths, tgtHas, prevTargetHp, tgtDist,
+            prevTargetDist,
+            player.hp, playerHpPrev, copperDelta,
+          );
+          transStream.write(JSON.stringify({
+            obs_t: prevObs, action_t: prevAction,
+            reward, obs_tp1: fullObs, done: (player.hp <= 0),
+            credited_kill: creditedKill,
+            copper: economy?.copper ?? null,
+            copper_delta: copperDelta,
+            sell_called: sellCalled,
+            econ_mode: econMode,
+            vendor_dist: economy?.vendor?.dist ?? null,
+            vendor_name: economy?.vendor?.name ?? null,
+          }) + '\n');
+        }
+        prevTargetHp = target?.hp ?? null;
+        prevTargetDist = target?.dist ?? null;
+        prevPlayerHp = player.hp;
+        prevAction = action;
+        sellCalled = false;
+      }
+      }
+    } catch (err: any) {
+      console.error('[bridge] loop error:', err?.message, '| cause:', err?.cause?.message ?? err?.cause ?? 'none');
+    }
+  }, intervalMs);
+
+  process.on('SIGINT', () => {
+    clearInterval(loop);
+    logStream.end(() => console.log(`[bridge] telemetry log closed -> ${LOG_PATH}`));
+    browser.disconnect();
+    process.exit(0);
+  });
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
