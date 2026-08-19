@@ -107,8 +107,18 @@ async function applyAction(idx) {
             }
             return { d, phase: 'chase' };
           }
-          // in melee: attack (honest API: target + startAutoAttack; the Sim
-          // applies white-hits on its update tick — no invalid castAbilityOn)
+          // in melee: FACE the mob first (swing only lands within MELEE_ARC of
+          // facing — auto_attack.ts gates on facingDiff>MELEE_ARC), then attack.
+          // Keep re-facing every tick: the mob moves, so a one-time face at entry
+          // drifts out of arc and updatePlayerAutoAttack silently drops autoAttack.
+          const desired = Math.atan2(dx, dz);
+          let off = desired - p.facing;
+          off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          if (Math.abs(off) > 0.2) {
+            if (off > 0) g.controller.move({ turnLeft: true });
+            else g.controller.move({ turnRight: true });
+            return { d, phase: 'face' };
+          }
           try { sim.targetEntity(id); } catch (_) {}
           try { sim.startAutoAttack(); } catch (_) {}
           return { d, phase: 'attack', dead: !!p.dead };
