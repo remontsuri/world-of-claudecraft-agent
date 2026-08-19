@@ -95,6 +95,15 @@ def outcome_reward(
         d_after = _safe_get(after, "distance_to_giver")
         if d_after < d_before:
             reward += (d_before - d_after) * c["dist_progress"]
+        elif d_after > d_before:
+            # DRIFT: the agent ended up FARTHER from the quest giver than before.
+            # This is a real, measurable cost (it must now re-cover that distance)
+            # and MUST be penalized, otherwise return_to_giver never learns to head
+            # back and the agent just farms forever. drift_per_unit was declared in
+            # WEIGHTS but previously never applied — that is the bug. Cap it so a
+            # single respawn teleport (huge delta) can't nuke the Q-value.
+            drift = (d_after - d_before)
+            reward += max(c["drift_cap"], drift * c["drift_per_unit"])
 
     if verdict == "SUCCESS":
         reward += c["success_bonus"]

@@ -17,8 +17,11 @@ class QuestCapability:
 
     # ---- read world state (no mutation) ----
     def find_active_quest(self) -> Optional[dict]:
-        active = self.env._last_info.get("quests", {}).get("active", []) or []
-        for q in active:
+        # Include BOTH active and ready quests. A 'ready' quest (objectives done,
+        # awaiting turn-in) lives in quests.ready, not quests.active — ignoring it
+        # meant turn_in_quest could never find a quest to turn in.
+        quests = self.env._last_info.get("quests", {}) or {}
+        for q in (quests.get("active", []) or []) + (quests.get("ready", []) or []):
             st = q.get("state")
             if st in ("active", "ready", "complete"):
                 return q
