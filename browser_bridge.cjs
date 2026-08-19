@@ -381,7 +381,6 @@ async function snapshot() {
   try { if (page) await page.bringToFront(); } catch (_) {}
   const r = await safeEval(() => {
     const g = (window).__game, sim = g.sim, p = sim.player;
-    console.error('[bridge-dbg] ents=' + (sim.entities ? sim.entities.size : 'NONE') + ' player=' + (!!p) + ' pos=' + (p && p.pos ? (p.pos.x+','+p.pos.z) : 'NONE'));
     const nearby = [];
     for (const e of sim.entities.values()) {
       if (!e.pos) continue;
@@ -436,18 +435,10 @@ async function snapshot() {
               required: (o && (o.count != null ? o.count : o.required)) || 0,
             }))
           : (qp.counts || []).map((c) => ({ current: c, required: c }));
-        // turn-in location: prefer live entity, then static Farshore layout
-        // (the live game does not expose sim.questDefs, so hardcode is the
-        // only reliable source for far-away NPCs not loaded into entities).
-        let turnInNpc = npcPos[qid] || null;
-        if (!turnInNpc) {
-          const turnInId = (def && (def.turnInNpcId || def.giverNpcId))
-            || FARSHORE_QUEST_TURNIN[qid] || null;
-          if (turnInId && FARSHORE_NPC_POS[turnInId]) {
-            turnInNpc = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
-          }
-        }
-        const entry = { id: qid, state: st, objectives: objs, turnInNpc };
+        // turn-in location is resolved on the NODE side after evaluate returns
+        // (FARSHORE_* constants live in Node scope, not in the browser context
+        // where this fn runs -> referencing them here throws ReferenceError).
+        const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
         if (st === 'active') active.push(entry);
         else if (st === 'ready') ready.push(entry);
         else if (st === 'done') done.push(entry);
@@ -482,6 +473,22 @@ async function snapshot() {
       in_combat: !!p.inCombat,
     };
   });
+  // Resolve quest turn-in NPC position on the NODE side (FARSHORE_* live here,
+  // not in the browser evaluate context). Prefer live entity pos, then static
+  // Farshore layout so the agent always knows where to walk to turn in, even
+  // when the NPC is far away and not loaded into sim.entities.
+  if (r && r.quests) {
+    for (const bucket of ['active', 'ready', 'done']) {
+      for (const q of (r.quests[bucket] || [])) {
+        if (q.turnInNpc) continue;
+        // npcPos (from live entities) is not available here; rely on static map.
+        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || null;
+        if (turnInId && FARSHORE_NPC_POS[turnInId]) {
+          q.turnInNpc = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
+        }
+      }
+    }
+  }
   return r || {};
 }
 
