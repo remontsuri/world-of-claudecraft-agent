@@ -138,7 +138,87 @@ async function applyAction(idx) {
         try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
       });
       break;
-    default: // gather/craft/heal/equip/buy/noop
+    case 5: { // gather: harvest the nearest harvestable node within range
+      const nodeId = await safeEval(() => {
+        const g = window.__game, sim = g.sim, p = sim.player;
+        let best = null, bd = Infinity;
+        for (const e of sim.entities.values()) {
+          const isNode = (e.kind === 'gather_node' || e.nodeType || e.gatherTier !== undefined);
+          if (!isNode || e.dead || e.depleted) continue;
+          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+          if (d <= 60 && d < bd) { bd = d; best = e.id; }
+        }
+        return best ? best.id : null;
+      });
+      if (nodeId != null) {
+        await safeEval((id) => { try { window.__game.sim.harvestNode(String(id)); } catch (_) {} }, nodeId);
+      }
+      break;
+    }
+    case 6: { // craft — NOT exposed in the live client (sim.craft undefined).
+      // Honest no-op with a console warning so it is never mistaken for a
+      // successful craft (no fake capability, no silent stop()).
+      console.warn('[bridge] craft requested but sim.craft is not exposed in client -> unsupported');
+      break;
+    }
+    case 7: { // heal: use the first health potion in the bag (if any)
+      const used = await safeEval(() => {
+        const sim = window.__game.sim;
+        const inv = sim.inventory;
+        const list = inv instanceof Map ? Array.from(inv.values()) : (Array.isArray(inv) ? inv : []);
+        for (const slot of list) {
+          if (!slot) continue;
+          const def = slot.def || slot.itemDef || {};
+          const name = (def.name || '').toLowerCase();
+          const id = slot.itemId || def.id;
+          if (!id) continue;
+          // health potion / healing draught: client useItem handles the heal
+          if (/potion|draught|tonic|elixir|heal/i.test(name)) {
+            try { sim.useItem(id); return true; } catch (_) { return false; }
+          }
+        }
+        return false;
+      });
+      // if no potion was available, this is an honest no-op (policy learns waste)
+      if (!used) console.warn('[bridge] heal requested but no potion in bag -> no-op');
+      break;
+    }
+    case 8: { // equip: equip the first unequipped gear item (if any)
+      const equipped = await safeEval(() => {
+        const sim = window.__game.sim;
+        const inv = sim.inventory;
+        const list = inv instanceof Map ? Array.from(inv.values()) : (Array.isArray(inv) ? inv : []);
+        for (const slot of list) {
+          if (!slot) continue;
+          const def = slot.def || slot.itemDef || {};
+          const id = slot.itemId || def.id;
+          if (!id || !def.equipSlot) continue; // only real gear
+          try { sim.equipItem(id); return true; } catch (_) { return false; }
+        }
+        return false;
+      });
+      if (!equipped) console.warn('[bridge] equip requested but nothing equippable -> no-op');
+      break;
+    }
+    case 9: { // buy: requires a vendor nearby AND an itemId. Without a target
+      // selection we can't safely buy; open the vendor so the policy can act,
+      // and report via console. Not a silent stop().
+      const v = await safeEval(() => {
+        const sim = window.__game.sim, p = sim.player;
+        for (const e of sim.entities.values()) {
+          if ((e.kind === 'npc' || e.type === 'npc') && (e.vendor || e.isVendor || e.vendorItems)) {
+            const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+            if (Math.hypot(dx, dz) <= 12) {
+              try { window.__game.hud.openVendor(e.id); return e.id; } catch (_) { return null; }
+            }
+          }
+        }
+        return null;
+      });
+      if (v == null) console.warn('[bridge] buy requested but no vendor in range -> no-op');
+      break;
+    }
+    default: // noop / unknown
       await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   }
   await sleep(TICK_MS);
@@ -287,17 +367,23 @@ const server = http.createServer((req, res) => {
         await sleep(TICK_MS);
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'respawn') {
+        // Order per the game's IWorldCombat contract (src/world_api/combat.ts):
+        //   releaseSpirit() -> becomes a ghost AT THE NEAREST GRAVEYARD (no longer
+        //     near the corpse), so calling it first would strand us away from the
+        //     body and force a healer res.
+        //   resurrectAtCorpse() -> revives AT THE BODY (no penalty) IF in range.
+        //   resurrectAtSpiritHealer() -> revives at the angel, only if still dead.
+        // Therefore: try corpse first; only if still dead do we fall back to
+        // releaseSpirit()+resurrectAtSpiritHealer() (graveyard path).
         await safeEval(() => {
-          try { window.__game.sim.releaseSpirit(); } catch (_) {}
-          // Prefer resurrect at our own corpse (no penalty). Fall back to the
-          // spirit healer only if corpse-resurrect is unavailable or we're still
-          // dead afterwards (avoids teleporting to the graveyard and breaking S).
-          try { window.__game.sim.resurrectAtCorpse(); } catch (_) {}
-          try {
-            if (window.__game.sim.player && window.__game.sim.player.dead) {
-              window.__game.sim.resurrectAtSpiritHealer();
-            }
-          } catch (_) {}
+          const sim = window.__game.sim;
+          const dead = () => !!(sim.player && sim.player.dead);
+          let revived = false;
+          try { sim.resurrectAtCorpse(); revived = !dead(); } catch (_) {}
+          if (!revived && dead()) {
+            try { sim.releaseSpirit(); } catch (_) {}
+            try { sim.resurrectAtSpiritHealer(); } catch (_) {}
+          }
         });
         await sleep(TICK_MS);
         resp = { ok: true, info: await snapshot() };

@@ -40,16 +40,27 @@ class BrowserEnv:
         self._step = 0
         self.base = BrowserBase(self)  # quest_skill uses env.base.step(ACT_FORWARD) for explore
         # prime: fetch an initial observation so _last_info is never None
-        self._last_info = self._post({"action": "snapshot"}).get("info", {})
+        self._last_info = self._require({"action": "snapshot"}).get("info", {})
 
     # ---- bridge I/O ----
     def _post(self, payload: dict, timeout: float = 30.0) -> dict:
+        """POST to the bridge and return the parsed response. The caller is
+        responsible for treating ok:false as a real failure (see _require)."""
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             BRIDGE_URL, data=data, headers={"content-type": "application/json"}
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
+
+    def _require(self, payload: dict, timeout: float = 30.0) -> dict:
+        """POST and raise RuntimeError on ok:false so the Agent records ENV_ERROR
+        (reward 0, memory untouched) instead of learning from an empty snapshot.
+        Used by every read/write path — no silent stop()/empty-info fallback."""
+        resp = self._post(payload, timeout=timeout)
+        if not resp.get("ok", False):
+            raise RuntimeError(f"bridge {payload.get('action')} failed: {resp.get('error')}")
+        return resp
 
     # ---- gym-style interface used by Agent ----
     def reset(self, seed: int = None):
@@ -61,8 +72,8 @@ class BrowserEnv:
             raise RuntimeError(f"bridge reset failed: {resp.get('error')}")
         info = resp.get("info", {})
         if info.get("player", {}).get("dead"):
-            self._post({"action": "respawn"})
-            resp = self._post({"action": "snapshot"})
+            self._require({"action": "respawn"})
+            resp = self._require({"action": "snapshot"})
             if not resp.get("ok", False):
                 raise RuntimeError(f"bridge respawn+snapshot failed: {resp.get('error')}")
             info = self._last_info = resp.get("info", {})
@@ -94,7 +105,7 @@ class BrowserEnv:
 
         `timeout` must exceed max_steps*0.22s (bridge sleeps TICK_MS per step and
         answers only AFTER the full walk loop — it blocks the HTTP response)."""
-        resp = self._post({"action": "navigate", "x": tx, "z": tz, "max_steps": max_steps}, timeout=timeout)
+        resp = self._require({"action": "navigate", "x": tx, "z": tz, "max_steps": max_steps}, timeout=timeout)
         info = resp.get("info", {})
         self._last_info = info
         return bool(resp.get("arrived"))
@@ -102,7 +113,7 @@ class BrowserEnv:
     def _raw_move(self, kind: str):
         """Send a single raw movement through the bridge (forward/back/turnLeft/
         turnRight/stop). Used by BrowserBase for explore/ACT_* actions."""
-        resp = self._post({"action": "raw_move", "kind": kind})
+        resp = self._require({"action": "raw_move", "kind": kind})
         info = resp.get("info", {})
         self._last_info = info
         return info
@@ -110,7 +121,7 @@ class BrowserEnv:
     def respawn(self):
         """Release spirit + resurrect at healer (online-safe glue; does NOT mutate
         the model). Call when the character is dead so the loop can continue."""
-        resp = self._post({"action": "respawn"})
+        resp = self._require({"action": "respawn"})
         info = resp.get("info", {})
         self._last_info = info
         return info
@@ -119,7 +130,7 @@ class BrowserEnv:
         """Sustained exploration: walk toward nearest mob/NPC (or forward) for
         `steps` ticks. Lets the agent actually traverse the world instead of
         jittering in place. Used by Agent for the `explore` skill."""
-        resp = self._post({"action": "explore", "steps": steps})
+        resp = self._require({"action": "explore", "steps": steps})
         info = resp.get("info", {})
         self._last_info = info
         return bool(resp.get("arrived"))
