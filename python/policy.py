@@ -153,6 +153,26 @@ class GoalManager:
             cands.append(SKILL_RETURN)         # atomic: navigate back to giver
         if junk:
             cands.append(SKILL_SELL)
+        # gather: a harvestable node within reach (bridge harvestNode picks nearest
+        # in radius 60). Only a candidate when such a node exists nearby.
+        if any((e.get("kind") == "gather_node" or e.get("nodeType") or e.get("gatherTier") is not None)
+               and not (e.get("dead") or e.get("depleted")) for e in near):
+            cands.append(SKILL_GATHER)
+        # equip: an unequipped gear item in the bag (bridge equipItem picks first
+        # with def.equipSlot). Only a candidate when such an item exists.
+        if any((i.get("def") or i.get("itemDef") or {}).get("equipSlot") for i in inv if i):
+            cands.append(SKILL_EQUIP)
+        # buy: a vendor NPC in range (bridge buyItem targets the nearest vendor).
+        # Only a candidate when a vendor is actually nearby.
+        ppos = info.get("player_pos") or [0, 0]
+        if any((e.get("kind") == "npc" or e.get("type") == "npc")
+               and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+               and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+               for e in near):
+            cands.append(SKILL_BUY)
+        # craft intentionally NOT a candidate: the live client exposes no recipe
+        # command (sim.craft undefined) — bridge reports it as unsupported, so
+        # offering it would only teach the agent a wasted action.
         # explore: plain forward walk — ALWAYS available. This is what lets the
         # agent leave the spawn area and discover NPCs/mobs on its own, instead of
         # standing still when no mob is in `nearby`. It is a genuine capability the

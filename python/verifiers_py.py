@@ -55,7 +55,37 @@ def _equip_slot(w, slot):
 
 
 def verify_farm(c):
-    return 'success' if _player_kills(c['after']) > _player_kills(c['before']) else 'inconclusive'
+    """Objective combat verification for the ONLINE world.
+
+    Server-authoritative `kills` does NOT always tick on a locally-driven white-hit
+    kill, so using only kills_after > kills_before hides real learning signal. We
+    therefore accept ANY honest evidence that the farm action produced a combat
+    consequence:
+      - server kills increased, OR
+      - a mob that was alive (hp>0) before is now dead/lootable/gone, OR
+      - a lootable corpse appeared that was not there before, OR
+      - player XP increased (real consequence of a kill in this Sim).
+    """
+    b, a = c['before'], c['after']
+    if _player_kills(a) > _player_kills(b):
+        return 'success'
+    # mob hp delta: any mob present before with hp>0 is now gone / dead / lootable
+    before_mobs = {(e.get('id')): e for e in (b.get('nearby') or [])
+                    if (e.get('kind') == 'mob' or e.get('type') == 'mob') and not e.get('lootable')}
+    after_mobs = {(e.get('id')): e for e in (a.get('nearby') or [])
+                   if (e.get('kind') == 'mob' or e.get('type') == 'mob')}
+    for mid, me in before_mobs.items():
+        if (me.get('hp') or 0) > 0:
+            ae = after_mobs.get(mid)
+            if ae is None or ae.get('dead') or ae.get('lootable'):
+                return 'success'
+    # a fresh lootable corpse appeared
+    if _corpse_exists(a) and not _corpse_exists(b):
+        return 'success'
+    # xp gain (real kill consequence in this Sim)
+    if (a.get('player') or {}).get('xp', 0) > (b.get('player') or {}).get('xp', 0):
+        return 'success'
+    return 'inconclusive'
 
 def verify_loot(c):
     had = _corpse_exists(c['before'], c['handle'])
