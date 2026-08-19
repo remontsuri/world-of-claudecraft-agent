@@ -1,20 +1,20 @@
 @echo off
-REM start_ragent.bat — stable singleton launcher for the ONLINE autonomous agent.
+REM start_ragent.bat — singleton launcher for the ONLINE autonomous agent.
 REM Runs OUTSIDE any MSYS/bash shell (double-click, or `cmd /c start_ragent.bat`).
 REM
 REM Runtime graph (correct entrypoint):
 REM   start_ragent.bat -> browser_bridge.cjs -> Chrome/live WoC
 REM                      -> BrowserEnv -> play_autonomous.py -> Agent -> Policy/Memory/Reward
 REM
-REM SINGLETON: this launcher keeps exactly ONE bridge + ONE agent alive. Process
-REM identity is tracked via .pid files (not WMIC/findstr, which proved flaky and
-REM caused duplicate spawns that fought over port :8791). On each loop we check
-REM the recorded PID is still alive; if not, we restart that one process only.
+REM SINGLETON: keeps exactly ONE bridge + ONE agent alive. PID is captured
+REM reliably via PowerShell Start-Process -PassThru (NOT %^PID%, which is the
+REM parent cmd's PID, not the child's). On each loop we check the recorded PID
+REM is still alive; if not, we restart that one process only.
 
 setlocal
 REM REPO = directory this .bat lives in (no hard-coded path)
 set "REPO=%~dp0"
-set "PY=%REPO%\.venv\Scripts\python.exe"
+set "PY=%REPO%.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=D:\woc-llm\therock-test\Scripts\python.exe"
 set "LOG=%REPO%ragent_launcher.log"
 set "BRIDGE_PID=%REPO%bridge.pid"
@@ -41,7 +41,8 @@ exit /b 0
   call :pid_alive "%BRIDGE_PID%"
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
-    start "woc-bridge" /min cmd /c "cd /d "%REPO%" && node browser_bridge.cjs >> "%REPO%bridge_smoke.log" 2>&1 & echo %^PID% > "%BRIDGE_PID%""
+    REM PowerShell reliably returns the child PID; write it to the pid file.
+    powershell -NoProfile -Command "Start-Process -FilePath 'node.exe' -ArgumentList 'browser_bridge.cjs' -WorkingDirectory '%REPO%' -RedirectStandardOutput '%REPO%bridge_smoke.log' -RedirectStandardError '%REPO%bridge_smoke.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id > '%BRIDGE_PID%'"
     REM give it a moment to bind the port before we might spawn a duplicate
     timeout /t 4 /nobreak >nul
   )
@@ -50,7 +51,10 @@ exit /b 0
   call :pid_alive "%AGENT_PID%"
   if errorlevel 1 (
     echo [%date% %time%] starting play_autonomous >> "%LOG%"
-    start "woc-agent" /min cmd /c "cd /d "%REPO%python" && set PYTHONPATH= && "%PY%" play_autonomous.py >> "%REPO%python\agent_run.log" 2>&1 & echo %^PID% > "%AGENT_PID%""
+    REM -I isolates from the Hermes venv (which ships an ABI-mismatched numpy
+    REM under cp311). sys.path.insert(0,...) adds the project dir so local
+    REM imports (browser_env, agent, ...) resolve. exec() runs the script.
+    powershell -NoProfile -Command "Start-Process -FilePath '%PY%' -ArgumentList '-I','-c','import sys; sys.path.insert(0, r''%REPO%python''); exec(open(r''%REPO%python\play_autonomous.py'', encoding=''utf-8'').read())' -WorkingDirectory '%REPO%python' -RedirectStandardOutput '%REPO%python\agent_run.log' -RedirectStandardError '%REPO%python\agent_run.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id > '%AGENT_PID%'"
   )
 
   REM check every 10s
