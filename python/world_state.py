@@ -61,9 +61,11 @@ def build_world_state(info: Dict) -> Dict:
     distance_to_giver = 999.0
     quest_status = "NONE"
     active = info.get("quests", {}).get("active") or []
-    if active:
+    ready = info.get("quests", {}).get("ready") or []
+    all_q = active + ready
+    if all_q:
         any_incomplete = False
-        for q in active:
+        for q in all_q:
             for o in (q.get("objectives") or []):
                 cur = o.get("current") or 0
                 req = o.get("required") or 0

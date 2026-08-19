@@ -82,16 +82,26 @@ class BrowserEnv:
         self._step = 0
         return None, info
 
-    def step(self, idx: int):
+    def step(self, idx: int, ctx: dict = None):
         """Apply one skill action (idx). Returns (obs, reward, done, truncated, info)
         like gym, but Agent only uses _last_info + the returned info.
+
+        `ctx` (e.g. {"quest": {"id": "q_fs_..."}}) is forwarded to the bridge so
+        accept_quest / turn_in_quest call the real sim.acceptQuest(questId) API
+        instead of a bare interact().
 
         An `ok:false` from the bridge is an infrastructure failure, NOT a game
         outcome — raise so the Agent records ENV_ERROR (reward 0, memory untouched)
         instead of treating the empty `info` as a real world state and learning a
         false lesson.
         """
-        resp = self._post({"action": "step", "idx": int(idx)})
+        payload = {"action": "step", "idx": int(idx)}
+        if ctx:
+            q = ctx.get("quest") or {}
+            qid = q.get("id") or ctx.get("questId")
+            if qid:
+                payload["questId"] = qid
+        resp = self._post(payload)
         if not resp.get("ok", False):
             raise RuntimeError(f"bridge step failed: {resp.get('error')}")
         info = resp.get("info", {})

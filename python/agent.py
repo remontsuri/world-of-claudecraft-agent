@@ -92,7 +92,7 @@ class Agent:
                 if idx is None:
                     return info_before, "FAILURE", "OK"
                 before = info_before
-                self.env.step(idx)
+                self.env.step(idx, ctx)
                 after = self.env._last_info
                 # verifier (objective truth)
                 handle = None

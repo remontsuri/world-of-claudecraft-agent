@@ -129,6 +129,7 @@ class GoalManager:
         inv = info.get("inventory") or []
         junk = [i for i in inv if (i.get("quality") or 0) == 0]
         active = info.get("quests", {}).get("active") or []
+        ready = info.get("quests", {}).get("ready") or []
 
         cands = []
         if ws["hp_frac"] < 1.0:
@@ -140,16 +141,15 @@ class GoalManager:
         if quest_npcs:
             cands.append(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
-        # a single "do quest" button. turn_in only when ready; return_to_giver is
-        # always an option while a quest is active (agent may learn to use it when
-        # drifted far). complete_objective is NOT auto-chosen here — the Policy
-        # picks plain FARM for progress (same primitive), keeping the decision
-        # explicit.
-        if any(q.get("state") in ("ready", "complete") for q in active) or \
-           any(all((o.get("current") or 0) >= (o.get("required") or 0)
-                    for o in (q.get("objectives") or [])) for q in active):
+        # a single "do quest" button. turn_in only when ready (objectives done);
+        # return_to_giver is always an option while a quest is active or ready
+        # (agent may learn to use it when drifted far). complete_objective is NOT
+        # auto-chosen here — the Policy picks plain FARM for progress (same
+        # primitive), keeping the decision explicit.
+        if ready or any(all((o.get("current") or 0) >= (o.get("required") or 0)
+                            for o in (q.get("objectives") or [])) for q in active):
             cands.append(SKILL_TURN_IN)        # atomic: walk + turn_in
-        if active:
+        if active or ready:
             cands.append(SKILL_RETURN)         # atomic: navigate back to giver
         if junk:
             cands.append(SKILL_SELL)

@@ -73,7 +73,7 @@ async function reconnect() {
 }
 
 // ---- action application (mirrors agent_browser.mjs / bridge_online glue) ----
-async function applyAction(idx) {
+async function applyAction(idx, cmd) {
   switch (idx) {
     case 0: { // farm: chase + attack nearest HOSTILE living mob until it dies
       // NOTE: the live game tags peaceful NPCs (e.g. Fisher Bram, a quest
@@ -144,12 +144,28 @@ async function applyAction(idx) {
     case 1: // loot
       await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
       break;
-    case 2: // accept_quest
-      await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
+    case 2: { // accept_quest: accept the specific quest offered by the nearby NPC
+      // cmd.questId is passed by the agent's Policy (ctx['quest'] from the quest NPC).
+      // Calling sim.acceptQuest(questId) is the real API; a bare interact() does NOT
+      // accept a quest in this build (that's why accept_quest was always inconclusive).
+      const qid = (cmd && cmd.questId) || null;
+      if (qid) {
+        await safeEval((id) => { try { window.__game.sim.acceptQuest(String(id)); } catch (_) {} }, qid);
+      } else {
+        // fallback: interact with the nearest quest NPC (legacy path)
+        await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
+      }
       break;
-    case 3: // turn_in_quest
-      await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
+    }
+    case 3: { // turn_in_quest: turn in the specific ready quest
+      const qid = (cmd && cmd.questId) || null;
+      if (qid) {
+        await safeEval((id) => { try { window.__game.sim.turnInQuest(String(id)); } catch (_) {} }, qid);
+      } else {
+        await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
+      }
       break;
+    }
     case 4: // sell_junk
       await safeEval(() => {
         try { window.__game.sim.interact(); } catch (_) {}
@@ -322,16 +338,40 @@ async function snapshot() {
         questIds: e.questIds || e.questId || null,
       });
     }
-    const qSrc = (g.online && g.online.quests) || sim.quests || null;
-    let active = [], done = [];
-    if (Array.isArray(qSrc)) {
-      for (const q of qSrc) {
-        if (q.status === 'active' || q.state === 'active') active.push(q);
-        else if (q.status === 'complete' || q.state === 'complete') done.push(q);
+    // Real active quests live in sim.questLog (Map<questId, QuestProgress>),
+    // NOT sim.quests / g.online.quests (those are empty in this build). QuestProgress
+    // = { questId, counts:number[], state:'active'|'ready'|'done' }. Objectives'
+    // required counts come from the QuestDef (sim.questDefs / world.questDefs).
+    let active = [], ready = [], done = [];
+    const qlog = sim.questLog || (g.world && g.world.questLog) || null;
+    const qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
+    if (qlog && typeof qlog.forEach === 'function') {
+      qlog.forEach((qp, qid) => {
+        const st = qp.state || 'active';
+        const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
+        const objs = (def && Array.isArray(def.objectives))
+          ? def.objectives.map((o, i) => ({
+              current: (qp.counts && qp.counts[i]) || 0,
+              required: (o && (o.count != null ? o.count : o.required)) || 0,
+            }))
+          : (qp.counts || []).map((c) => ({ current: c, required: c }));
+        const entry = { id: qid, state: st, objectives: objs };
+        if (st === 'active') active.push(entry);
+        else if (st === 'ready') ready.push(entry);
+        else if (st === 'done') done.push(entry);
+      });
+    } else {
+      // legacy fallback (should not happen in this build)
+      const qSrc = (g.online && g.online.quests) || sim.quests || null;
+      if (Array.isArray(qSrc)) {
+        for (const q of qSrc) {
+          if (q.status === 'active' || q.state === 'active') active.push(q);
+          else if (q.status === 'complete' || q.state === 'complete') done.push(q);
+        }
+      } else if (qSrc && typeof qSrc === 'object') {
+        active = qSrc.active || [];
+        done = qSrc.done || [];
       }
-    } else if (qSrc && typeof qSrc === 'object') {
-      active = qSrc.active || [];
-      done = qSrc.done || [];
     }
     const inv = (p.inventory || sim.inventory || []);
     const doneArr = Array.isArray(done) ? done : [];
@@ -341,7 +381,7 @@ async function snapshot() {
       player_pos: [p.pos.x, p.pos.z],
       nearby,
       inventory: inv.map((it) => ({ quality: it.quality ?? 0, name: it.name })),
-      quests: { active, done: doneArr },
+      quests: { active, ready, done: doneArr },
       kills: (sim.deedStats && sim.deedStats.counters && sim.deedStats.counters.kills) || p.kills || 0,
       xp: g.online ? g.online.xp : (p.xp || 0),
       copper: sim.copper || 0,
@@ -368,7 +408,7 @@ const server = http.createServer((req, res) => {
       try {
         const cmd = JSON.parse(body || '{}');
       if (cmd.action === 'step') {
-        await applyAction(cmd.idx || 0);
+        await applyAction(cmd.idx || 0, cmd);
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'navigate') {
         const arrived = await navigateToCoord(cmd.x, cmd.z, cmd.max_steps || 80);
