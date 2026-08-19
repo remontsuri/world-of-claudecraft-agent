@@ -56,10 +56,16 @@ class BrowserEnv:
         if seed is not None:
             self.seed = seed
         # if the character is dead on entry, respawn so the loop can start clean
-        info = self._post({"action": "snapshot"}).get("info", {})
+        resp = self._post({"action": "snapshot"})
+        if not resp.get("ok", False):
+            raise RuntimeError(f"bridge reset failed: {resp.get('error')}")
+        info = resp.get("info", {})
         if info.get("player", {}).get("dead"):
             self._post({"action": "respawn"})
-            info = self._last_info = self._post({"action": "snapshot"}).get("info", {})
+            resp = self._post({"action": "snapshot"})
+            if not resp.get("ok", False):
+                raise RuntimeError(f"bridge respawn+snapshot failed: {resp.get('error')}")
+            info = self._last_info = resp.get("info", {})
         else:
             self._last_info = info
         self._step = 0
@@ -67,8 +73,16 @@ class BrowserEnv:
 
     def step(self, idx: int):
         """Apply one skill action (idx). Returns (obs, reward, done, truncated, info)
-        like gym, but Agent only uses _last_info + the returned info."""
+        like gym, but Agent only uses _last_info + the returned info.
+
+        An `ok:false` from the bridge is an infrastructure failure, NOT a game
+        outcome — raise so the Agent records ENV_ERROR (reward 0, memory untouched)
+        instead of treating the empty `info` as a real world state and learning a
+        false lesson.
+        """
         resp = self._post({"action": "step", "idx": int(idx)})
+        if not resp.get("ok", False):
+            raise RuntimeError(f"bridge step failed: {resp.get('error')}")
         info = resp.get("info", {})
         self._last_info = info
         self._step += 1

@@ -107,13 +107,18 @@ async function applyAction(idx) {
             }
             return { d, phase: 'chase' };
           }
-          // in melee: attack
+          // in melee: attack (honest API: target + startAutoAttack; the Sim
+          // applies white-hits on its update tick — no invalid castAbilityOn)
           try { sim.targetEntity(id); } catch (_) {}
           try { sim.startAutoAttack(); } catch (_) {}
-          try { if (typeof sim.castAbilityOn === 'function') sim.castAbilityOn(id, 0); } catch (_) {}
-          return { d, phase: 'attack' };
+          return { d, phase: 'attack', dead: !!p.dead };
         }, targetId);
-        if (st.gone) break;
+        if (st.gone || st.dead) {
+          // stop autoattack + movement so a stale move command can't linger
+          try { sim.stopAutoAttack(); } catch (_) {}
+          try { g.controller.stop(); } catch (_) {}
+          break;
+        }
         await sleep(TICK_MS);
       }
       break;
@@ -145,7 +150,7 @@ async function navigateToCoord(tx, tz, maxSteps) {
       const g = window.__game, sim = g.sim, p = sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < 5) return true;
+      if (dist < 5) { try { g.controller.stop(); } catch (_) {} return true; }
       // Geometry (measured live, Test 1b/1c): player.facing=0 -> +Z;
       // turnLeft INCREASES facing, turnRight DECREASES it. So forward moves
       // along (sin(facing), cos(facing)) in (x,z), i.e. desired = atan2(dx, dz).
@@ -163,6 +168,8 @@ async function navigateToCoord(tx, tz, maxSteps) {
     if (done) return true;
     await sleep(TICK_MS);
   }
+  // always stop movement when navigation ends (target reached OR timeout)
+  await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   return false;
 }
 
@@ -248,14 +255,19 @@ async function snapshot() {
 }
 
 // ---- HTTP server ----
-const server = http.createServer(async (req, res) => {
+// Command serialization: all mutations to the single live game tab run through
+// ONE promise chain. A farm() holds the tab for ~17s; without this, a concurrent
+// raw_move/respawn from another caller would interleave and corrupt the world.
+let cmdQueue = Promise.resolve();
+const server = http.createServer((req, res) => {
   if (req.method !== 'POST') { res.writeHead(405); res.end('use POST'); return; }
   let body = '';
   req.on('data', (c) => (body += c));
-  req.on('end', async () => {
-    let resp = { ok: false };
-    try {
-      const cmd = JSON.parse(body || '{}');
+  req.on('end', () => {
+    cmdQueue = cmdQueue.then(async () => {
+      let resp = { ok: false };
+      try {
+        const cmd = JSON.parse(body || '{}');
       if (cmd.action === 'step') {
         await applyAction(cmd.idx || 0);
         resp = { ok: true, info: await snapshot() };
@@ -277,7 +289,15 @@ const server = http.createServer(async (req, res) => {
       } else if (cmd.action === 'respawn') {
         await safeEval(() => {
           try { window.__game.sim.releaseSpirit(); } catch (_) {}
-          try { window.__game.sim.resurrectAtSpiritHealer(); } catch (_) {}
+          // Prefer resurrect at our own corpse (no penalty). Fall back to the
+          // spirit healer only if corpse-resurrect is unavailable or we're still
+          // dead afterwards (avoids teleporting to the graveyard and breaking S).
+          try { window.__game.sim.resurrectAtCorpse(); } catch (_) {}
+          try {
+            if (window.__game.sim.player && window.__game.sim.player.dead) {
+              window.__game.sim.resurrectAtSpiritHealer();
+            }
+          } catch (_) {}
         });
         await sleep(TICK_MS);
         resp = { ok: true, info: await snapshot() };
@@ -294,6 +314,9 @@ const server = http.createServer(async (req, res) => {
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(resp));
+    }).catch((e) => {
+      try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: e.message })); } catch (_) {}
+    });
   });
 });
 

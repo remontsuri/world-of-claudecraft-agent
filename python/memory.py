@@ -137,17 +137,21 @@ class ExperienceStore:
         next_bucket = _bucket(next_state)
         self.experiences.append((bucket, action, round(reward, 4), next_bucket, outcome_kind))
 
-    def max_q(self, state: dict) -> float:
-        """max_a' Q(bucket(state), a') over the full action set — TD bootstrap target.
+    def max_q(self, state: dict, actions: Optional[List[str]] = None) -> float:
+        """max_a' Q(bucket(state), a') for the TD bootstrap target.
 
-        Standard Q-learning takes the max over ALL actions (not just the current
-        candidates), so the value of a state reflects the best thing the agent
-        COULD do next, even if that action isn't reachable right now.
+        Standard Q-learning takes the max over the ACTIONS reachable in the next
+        state. If `actions` is provided (the next state's candidate set), we max
+        only over those — so an unreachable action (e.g. farm when no mob is near)
+        can't inflate the bootstrap. When None (caller doesn't know candidates),
+        we fall back to the full ACTIONS set for backward compatibility.
         """
         bucket = _bucket(state)
-        return max((self.value(bucket, a) for a in self.ACTIONS), default=0.0)
+        acts = actions if actions else self.ACTIONS
+        return max((self.value(bucket, a) for a in acts), default=0.0)
 
-    def update(self, state: dict, action: str, reward: float, next_state: dict = None, outcome_kind: str = "OK"):
+    def update(self, state: dict, action: str, reward: float, next_state: dict = None,
+               outcome_kind: str = "OK", candidates: Optional[List[str]] = None):
         """Record one (state, action, reward, next_state) and shift the value estimate.
 
         TD(0) / Q-learning update (NOT contextual bandit):
@@ -157,13 +161,16 @@ class ExperienceStore:
         didn't pass it), we degrade gracefully to a bandit-style update
         (γ·max=0) instead of silently dropping the sequential-learning signal —
         honest fallback, not a silent no-op.
+
+        `candidates` is the next state's available action set; when provided the
+        bootstrap maxes only over reachable actions (see max_q).
         """
         bucket = _bucket(state)
         key = (bucket, action)
         self.counts[key] += 1
         w = self.weights[key]
         if next_state is not None:
-            bootstrap = self.gamma * self.max_q(next_state)
+            bootstrap = self.gamma * self.max_q(next_state, candidates)
         else:
             bootstrap = 0.0
         target = reward + bootstrap

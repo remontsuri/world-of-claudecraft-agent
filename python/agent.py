@@ -183,7 +183,11 @@ class Agent:
         # 7. Memory learns — UNLESS infra error (ENV_ERROR -> no false lesson)
         #    or measurement mode (learn=False).
         if learn and outcome_kind != "ENV_ERROR":
-            self.policy.learn(ws_before, action, reward, next_state=ws_after, outcome_kind=outcome_kind)
+            # candidate set of the NEXT state, so the TD bootstrap maxes only over
+            # reachable actions (not over globally-unreachable ones).
+            next_cands = self.policy._candidates(after, ws_after)
+            self.policy.learn(ws_before, action, reward, next_state=ws_after,
+                              outcome_kind=outcome_kind, candidates=next_cands)
 
         return {
             "action": action,

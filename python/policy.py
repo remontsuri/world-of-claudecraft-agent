@@ -197,8 +197,11 @@ class GoalManager:
                         break
         return action, ctx
 
-    def learn(self, ws: dict, action: str, reward: float, next_state: dict = None, outcome_kind: str = "OK"):
+    def learn(self, ws: dict, action: str, reward: float, next_state: dict = None, outcome_kind: str = "OK", candidates: Optional[List[str]] = None):
         """Feed an outcome back into memory. ws is the SAME world-state the
         decision was made from (caller passes it). next_state is the resulting
-        world-state, recorded as experience (real memory of what happened)."""
-        self.mem.update(ws, action, reward, next_state=next_state, outcome_kind=outcome_kind)
+        world-state, recorded as experience (real memory of what happened).
+        `candidates` is the next state's reachable action set, passed to the TD
+        bootstrap so it maxes only over reachable actions.
+        """
+        self.mem.update(ws, action, reward, next_state=next_state, outcome_kind=outcome_kind, candidates=candidates)

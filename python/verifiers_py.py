@@ -7,10 +7,14 @@ Each returns 'success' | 'failure' | 'inconclusive'.
 from typing import Any
 
 
-def _player_copper(w): return (w.get('player') or {}).get('copper', 0)
+def _player_copper(w):
+    # bridge puts copper at top-level info.copper (not under player.*)
+    return w.get('copper', 0) or (w.get('player') or {}).get('copper', 0)
 def _player_kills(w): return (w.get('player') or {}).get('kills', 0) or (w.get('kills', 0))
 def _player_hp(w): return (w.get('player') or {}).get('hp', 0)
-def _player_hp_max(w): return (w.get('player') or {}).get('hpMax', 1)
+def _player_hp_max(w):
+    # bridge snapshot emits player.maxHp; tolerate hpMax too for forward-compat
+    return (w.get('player') or {}).get('maxHp') or (w.get('player') or {}).get('hpMax') or 1
 def _junk_items(w):
     return [i for i in (w.get('inventory') or []) if (i.get('quality') or 0) == 0]
 def _item_count(w, item_id=None):
@@ -21,9 +25,15 @@ def _item_count(w, item_id=None):
 def _inv_total(w): return len(w.get('inventory') or [])
 def _corpse_exists(w, corpse_id=None):
     for e in (w.get('nearby') or []):
-        if corpse_id is None or e.get('id') == corpse_id:
-            if (e.get('type') == 'corpse' or e.get('kind') == 'corpse') and not e.get('looted'):
-                return True
+        if corpse_id is not None and e.get('id') != corpse_id:
+            continue
+        # unified corpse definition: explicit corpse kind/type OR a lootable dead
+        # mob (the bridge forwards dead mobs as kind='mob', dead=true,
+        # lootable=true — verifier must treat those as corpses).
+        is_corpse = (e.get('type') == 'corpse' or e.get('kind') == 'corpse')
+        is_lootable_mob = bool(e.get('lootable')) and (e.get('dead') or (e.get('kind') == 'mob' and e.get('lootable')))
+        if (is_corpse or is_lootable_mob) and not e.get('looted'):
+            return True
     return False
 def _node_by_id(w, node_id):
     for n in (w.get('gather', {}).get('nearbyNodes') or []):
