@@ -166,12 +166,29 @@ async function applyAction(idx, cmd) {
       }
       break;
     }
-    case 4: // sell_junk
-      await safeEval(() => {
-        try { window.__game.sim.interact(); } catch (_) {}
-        try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
+    case 4: { // sell_junk: only works next to a vendor NPC
+      // The live game only allows selling when the player is in interact range
+      // of a vendor. A bare interact()/sellAllJunk() with no vendor nearby is a
+      // no-op (and was producing huge inconclusive spam in the start zone where
+      // there is no vendor). Guard on a nearby vendor entity.
+      const hasVendor = await safeEval(() => {
+        const g = window.__game, sim = g.sim, p = sim.player;
+        for (const e of sim.entities.values()) {
+          const isVendor = e.vendor || e.vendorItems || e.isVendor;
+          if (!isVendor) continue;
+          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+          if (Math.hypot(dx, dz) <= 12) return true;
+        }
+        return false;
       });
+      if (hasVendor) {
+        await safeEval(() => {
+          try { window.__game.sim.interact(); } catch (_) {}
+          try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
+        });
+      }
       break;
+    }
     case 5: { // gather: harvest the nearest harvestable node within range
       const nodeId = await safeEval(() => {
         const g = window.__game, sim = g.sim, p = sim.player;
