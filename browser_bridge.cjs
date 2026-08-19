@@ -72,14 +72,33 @@ async function safeEval(fn, ...args) {
 
 async function reconnect() {
   try {
-    if (browser) { try { await browser.disconnect(); } catch (_) {} }
-    browser = await connect({ browserURL: CDP });
-    for (const p of await browser.pages()) {
-      const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
-      if (u.includes('worldofclaudecraft')) { page = p; break; }
+    // Reuse the existing browser connection; only (re)connect if we have none.
+    // Forcing browser.disconnect() on every call breaks re-acquisition when the
+    // game tab reloads (SPA navigation / respawn): connect() throws "already
+    // connected", reconnect returns false, and the bridge stays on a stale page
+    // forever -> empty snapshots. We only (re)connect when browser is null.
+    if (!browser) {
+      browser = await connect({ browserURL: CDP });
     }
-    if (!page) { console.error('[bridge] reconnect: no game tab'); return false; }
-    await page.bringToFront();
+    let pages = await browser.pages();
+    let found = null;
+    for (const p of pages) {
+      const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+      if (u.includes('worldofclaudecraft')) { found = p; break; }
+    }
+    // If no page matched, the tab may have reloaded under a different handle;
+    // retry once after a short wait.
+    if (!found) {
+      await sleep(1500);
+      pages = await browser.pages();
+      for (const p of pages) {
+        const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+        if (u.includes('worldofclaudecraft')) { found = p; break; }
+      }
+    }
+    if (!found) { console.error('[bridge] reconnect: no game tab'); return false; }
+    page = found;
+    await page.bringToFront().catch(() => {});
     await page.waitForFunction(
       '!!window.__game && !!window.__game.sim && !!window.__game.sim.player',
       { timeout: 60000 }
@@ -89,7 +108,7 @@ async function reconnect() {
       ents: window.__game.sim.entities.size,
       player: !!window.__game.sim.player,
     })).catch(() => null);
-    console.log('[bridge] reconnected to game tab', JSON.stringify(dbg));
+    console.error('[bridge] reconnected to game tab', JSON.stringify(dbg));
     return true;
   } catch (e) {
     console.error('[bridge] reconnect failed:', e.message);
