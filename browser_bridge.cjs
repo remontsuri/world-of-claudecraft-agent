@@ -18,6 +18,32 @@ const http = require('http');
 
 const CDP = 'http://127.0.0.1:9222';
 const PORT = 8791;
+
+// Static Farshore NPC positions + quest -> turn-in NPC, sourced from
+// src/sim/content/farshore.ts (FARSHORE_NPCS / FARSHORE_QUESTS). The live game
+// does NOT expose sim.questDefs / sim.npcDefs (verified: all false at runtime),
+// so we hardcode the zone's static layout here so the agent always knows where
+// to walk to turn in a quest, even when the NPC is far away and not loaded into
+// sim.entities. Keep in sync with farshore.ts if the zone layout changes.
+const FARSHORE_NPC_POS = {
+  warden_coalfast: { x: 305, z: 66 },
+  bellkeeper_tam: { x: 252, z: 18 },
+  quartermaster_edda: { x: 298, z: 74 },
+  mender_saul: { x: 312, z: 78 },
+  fisher_nell: { x: 296, z: 80 },
+  riftwatch_ollun: { x: 372, z: 2 },
+};
+const FARSHORE_QUEST_TURNIN = {
+  q_fs_bell_at_the_landing: 'warden_coalfast',
+  q_fs_bram_come_home: 'fisher_nell',
+  q_fs_hold_the_riftfields: 'warden_coalfast',
+  q_fs_moss_and_mending: 'mender_saul',
+  q_fs_song_before_the_break: 'riftwatch_ollun',
+  q_fs_stalkers_off_the_light: 'riftwatch_ollun',
+  q_fs_steel_for_the_redoubt: 'quartermaster_edda',
+  q_fs_the_great_break: 'warden_coalfast',
+  q_fs_the_three_bells: 'bellkeeper_tam',
+};
 const TICK_MS = 220;
 
 let page = null;
@@ -362,18 +388,24 @@ async function snapshot() {
     let active = [], ready = [], done = [];
     const qlog = sim.questLog || (g.world && g.world.questLog) || null;
     const qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
-    // Map questId -> turn-in NPC position, so the agent can navigate there.
-    // The quest-offering NPC carries questIds; for these quests the same NPC
-    // both offers and turns in (giverNpcId === turnInNpcId), so scanning
-    // entities for questIds gives the giver/turn-in location.
-    const npcByQuest = {};
+    // Build a questId -> turn-in NPC id map, then resolve NPC positions from
+    // EVERY available source (live entities + static npcDefs), so the agent knows
+    // where to walk even when the NPC is far away and not loaded into entities.
+    const npcPos = {};
+    const mergeNpc = (id, x, z) => {
+      if (id && x != null && z != null && !npcPos[id]) npcPos[id] = { x, z };
+    };
     for (const e of sim.entities.values()) {
-      const qids = e.questIds || e.questId;
-      if (!qids) continue;
-      const arr = Array.isArray(qids) ? qids : [qids];
-      for (const qid of arr) {
-        if (qid && e.pos) npcByQuest[qid] = { x: e.pos.x, z: e.pos.z };
-      }
+      if (e.pos) mergeNpc(e.id, e.pos.x, e.pos.z);
+    }
+    const npcDefs = sim.npcDefs || (g.world && g.world.npcDefs) || null;
+    if (npcDefs) {
+      const addFrom = (m) => {
+        if (!m) return;
+        if (typeof m.forEach === 'function') m.forEach((d, id) => { if (d && d.pos) mergeNpc(id, d.pos.x, d.pos.z); });
+        else for (const id in m) { const d = m[id]; if (d && d.pos) mergeNpc(id, d.pos.x, d.pos.z); }
+      };
+      addFrom(npcDefs);
     }
     if (qlog && typeof qlog.forEach === 'function') {
       qlog.forEach((qp, qid) => {
@@ -385,7 +417,18 @@ async function snapshot() {
               required: (o && (o.count != null ? o.count : o.required)) || 0,
             }))
           : (qp.counts || []).map((c) => ({ current: c, required: c }));
-        const entry = { id: qid, state: st, objectives: objs, turnInNpc: npcByQuest[qid] || null };
+        // turn-in location: prefer live entity, then static Farshore layout
+        // (the live game does not expose sim.questDefs, so hardcode is the
+        // only reliable source for far-away NPCs not loaded into entities).
+        let turnInNpc = npcPos[qid] || null;
+        if (!turnInNpc) {
+          const turnInId = (def && (def.turnInNpcId || def.giverNpcId))
+            || FARSHORE_QUEST_TURNIN[qid] || null;
+          if (turnInId && FARSHORE_NPC_POS[turnInId]) {
+            turnInNpc = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
+          }
+        }
+        const entry = { id: qid, state: st, objectives: objs, turnInNpc };
         if (st === 'active') active.push(entry);
         else if (st === 'ready') ready.push(entry);
         else if (st === 'done') done.push(entry);

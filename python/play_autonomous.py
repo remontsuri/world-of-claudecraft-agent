@@ -35,10 +35,51 @@ from world_state import build_world_state
 
 EXP_PATH = os.path.join(os.path.dirname(__file__), "experience_autonomous.json")
 LOG_PATH = os.path.join(os.path.dirname(__file__), "autonomous_log.jsonl")
+LOCK_PATH = os.path.join(os.path.dirname(__file__), "play_autonomous.lock")
 N_STEPS = int(os.environ.get("AUTONOMOUS_STEPS", "3000"))
 SAVE_EVERY = int(os.environ.get("SAVE_EVERY", "200"))
 WINDOW = int(os.environ.get("AUTONOMOUS_WINDOW", "500"))  # Level-4 windowed metrics
 SEED = int(os.environ.get("AUTONOMOUS_SEED", "4242"))
+
+
+def _acquire_lock():
+    """Ensure only ONE play_autonomous drives the character at a time.
+
+    The terminal(background) harness sometimes spawns two python processes for a
+    single launch; both would drive the SAME character through the same bridge and
+    corrupt the shared experience_autonomous.json / log. Refuse to start if a live
+    instance holds the lock; clear a stale lock whose PID is no longer running."""
+    import ctypes
+    pid = os.getpid()
+    if os.path.exists(LOCK_PATH):
+        try:
+            with open(LOCK_PATH) as f:
+                old = int(f.read().strip())
+        except (ValueError, OSError):
+            old = None
+        if old is not None:
+            alive = False
+            try:
+                kernel32 = ctypes.windll.kernel32
+                # PROCESS_QUERY_INFORMATION = 0x400
+                handle = kernel32.OpenProcess(0x400, False, old)
+                if handle:
+                    # WAIT_OBJECT_0 (0) = exited, WAIT_TIMEOUT (258) = still alive
+                    alive = kernel32.WaitForSingleObject(handle, 0) == 258
+                    kernel32.CloseHandle(handle)
+            except Exception:
+                alive = False
+            if alive:
+                sys.stderr.write(
+                    f"[autonomous] refusing to start: another instance (PID {old}) is alive (lock {LOCK_PATH})\n")
+                sys.exit(2)
+            try:
+                os.remove(LOCK_PATH)
+            except OSError:
+                pass
+    with open(LOCK_PATH, "w") as f:
+        f.write(str(pid))
+    return pid
 
 
 def cell_of(pos, size=20.0):
@@ -49,6 +90,7 @@ def cell_of(pos, size=20.0):
 
 
 def main():
+    _acquire_lock()  # refuse to run if another instance already drives the char
     if os.path.exists(EXP_PATH):
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
@@ -198,6 +240,12 @@ def main():
     env.close()
     _summary(m, m["steps"], start, None, final=True)
     print(f"\n[autonomous] done. log -> {LOG_PATH}, memory -> {EXP_PATH}")
+    # release the single-instance lock so a future launch can start cleanly
+    try:
+        if os.path.exists(LOCK_PATH):
+            os.remove(LOCK_PATH)
+    except OSError:
+        pass
 
 
 def _summary(m, i, start, logf, final=False):
