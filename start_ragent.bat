@@ -41,7 +41,7 @@ exit /b 0
   call :pid_alive "%BRIDGE_PID%"
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
-    start "woc-bridge" /min cmd /c "cd /d "%REPO%" && node -e "require('fs').writeFileSync('bridge.pid', String(process.pid))" && node browser_bridge.cjs >> "%REPO%bridge_smoke.log" 2>&1"
+    start "woc-bridge" /min cmd /c cd /d %REPO% ^&^& node -e "require('fs').writeFileSync('bridge.pid', String(process.pid))" ^&^& node browser_bridge.cjs >> "%REPO%bridge_smoke.log" 2^>^&1
     REM give it a moment to bind the port before we might spawn a duplicate
     timeout /t 4 /nobreak >nul
   )
@@ -51,7 +51,7 @@ exit /b 0
   call :pid_alive "%AGENT_PID%"
   if errorlevel 1 (
     echo [%date% %time%] starting play_autonomous >> "%LOG%"
-    start "woc-agent" /min cmd /c "cd /d "%REPO%python" && "%PY%" -I -c "import os; os.chdir(r'%REPO%python'); open('agent.pid','w').write(str(os.getpid())); import runpy; runpy.run_path(r'%REPO%python\play_autonomous.py', run_name='__main__')" >> "%REPO%python\agent_run.log" 2>&1"
+    start "woc-agent" /min cmd /c cd /d %REPO%python ^&^& "%PY%" -I -c "import os; os.chdir(r'%REPO%python'); open('agent.pid','w').write(str(os.getpid())); import runpy; runpy.run_path(r'%REPO%python\play_autonomous.py', run_name='__main__')" >> "%REPO%python\agent_run.log" 2^>^&1
   )
 
   REM check every 10s
