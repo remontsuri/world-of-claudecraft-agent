@@ -210,21 +210,22 @@ async function applyAction(idx) {
       if (!equipped) console.warn('[bridge] equip requested but nothing equippable -> no-op');
       break;
     }
-    case 9: { // buy: requires a vendor nearby AND an itemId. Without a target
-      // selection we can't safely buy; open the vendor so the policy can act,
-      // and report via console. Not a silent stop().
-      const v = await safeEval(() => {
+    case 9: { // buy: buy a health potion from a nearby vendor (default minor_healing_potion)
+      // Real API: sim.buyItem(npcId, itemId) (src/world_api/inventory.ts). If no
+      // vendor is in range, honest no-op (policy learns waste).
+      const DEFAULT_BUY = 'minor_healing_potion';
+      const v = await safeEval((itemId) => {
         const sim = window.__game.sim, p = sim.player;
         for (const e of sim.entities.values()) {
           if ((e.kind === 'npc' || e.type === 'npc') && (e.vendor || e.isVendor || e.vendorItems)) {
             const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
             if (Math.hypot(dx, dz) <= 12) {
-              try { window.__game.hud.openVendor(e.id); return e.id; } catch (_) { return null; }
+              try { sim.buyItem(e.id, itemId); return e.id; } catch (_) { return null; }
             }
           }
         }
         return null;
-      });
+      }, DEFAULT_BUY);
       if (v == null) console.warn('[bridge] buy requested but no vendor in range -> no-op');
       break;
     }

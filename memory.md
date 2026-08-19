@@ -54,16 +54,26 @@ D:\world-of-claudecraft\
 `0 farm, 1 loot, 2 accept_quest, 3 turn_in_quest, 4 sell_junk, 5 gather, 6 craft, 7 heal, 8 equip, 9 buy`
 - SKILLS (policy.py) = тот же список; SKILL_INDEX = enumerate(SKILLS).
 
-## Реализация capability в bridge (browser_bridge.cjs)
-- `0 farm`: chase (<7yd) → FACE mob (atan2 к mob) → targetEntity+startAutoAttack. Re-face КАЖДЫЙ тик (иначе swing вне MELEE_ARC не попадает).
-- `1 loot`: loot ближайшего трупа.
-- `2 accept_quest`, `3 turn_in_quest`: через sim (npc рядом).
-- `4 sell_junk`: sim.sellAllJunk.
-- `5 gather`: sim.harvestNode(ближайший node в радиусе 60).
-- `6 craft`: ЧЕСТНО unsupported (sim.craft undefined в клиенте) → warning, не silent stop.
-- `7 heal`: sim.useItem(первый health-potion в сумке по regex /potion|draught|tonic|elixir|heal/).
-- `8 equip`: sim.equipItem(первый gear с def.equipSlot).
-- `9 buy`: hud.openVendor(ближайший vendor в радиусе 12) — требует itemId для реальной покупки.
+## Capability-статус (2026-08-19, честно)
+- `0 farm` ✅ реальный combat (targetEntity+startAutoAttack+re-face)
+- `1 loot` ✅ loot трупа
+- `2 accept_quest` ✅ sim.interact у quest-giver
+- `3 turn_in_quest` ✅ sim.interact у giver
+- `4 sell_junk` ✅ sim.sellAllJunk
+- `5 gather` ✅ sim.harvestNode (node в радиусе 60)
+- `6 craft` ⚠️ honest NO-OP (`sim.craft` undefined в клиенте) — в списке SKILLS, policy учит waste
+- `7 heal` ✅ код корректен (`sim.useItem` на potion), НО требует potion в сумке
+- `8 equip` ✅ sim.equipItem (gear с equipSlot)
+- `9 buy` ✅ код корректен (`sim.buyItem(npcId, 'minor_healing_potion')`), НО требует trade-vendor рядом
+
+### Ограничения heal/buy (важно)
+- В СТАРТОВОЙ ЗОНЕ (zone1) НЕТ trade-vendor'а с potion. `vendorItems` у NPC пуст (len 0).
+  Проверено: `sim.buyItem` не бросает исключение, но ничего не покупает (server-authoritative: нет в ассорте).
+- Реальные trade-vendors (vendor:true) — в zone3: Quartermaster Bree (x=-5,z=668),
+  Armorer Hode (x=-2,z=672), и т.д. (см. known_points.ts).
+- Значит heal-цепочка (buy→heal) работает ТОЛЬКО у trade-vendor в zone3.
+- smoke_heal.py написан, но требует перса рядом с trade-vendor (не в стартовой зоне).
+- Позиция перса server-authoritative: прямая телепортация в zone3 не держится (откат на тик).
 
 ## Respawn (browser_bridge.cjs: respawn handler)
 Порядок по IWorldCombat: `resurrectAtCorpse()` (у тела, без штрафа, если в радиусе) → если ВСЁ ЕЩЁ dead → `releaseSpirit()` + `resurrectAtSpiritHealer()` (graveyard path).
