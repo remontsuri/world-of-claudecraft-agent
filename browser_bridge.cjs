@@ -345,6 +345,19 @@ async function snapshot() {
     let active = [], ready = [], done = [];
     const qlog = sim.questLog || (g.world && g.world.questLog) || null;
     const qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
+    // Map questId -> turn-in NPC position, so the agent can navigate there.
+    // The quest-offering NPC carries questIds; for these quests the same NPC
+    // both offers and turns in (giverNpcId === turnInNpcId), so scanning
+    // entities for questIds gives the giver/turn-in location.
+    const npcByQuest = {};
+    for (const e of sim.entities.values()) {
+      const qids = e.questIds || e.questId;
+      if (!qids) continue;
+      const arr = Array.isArray(qids) ? qids : [qids];
+      for (const qid of arr) {
+        if (qid && e.pos) npcByQuest[qid] = { x: e.pos.x, z: e.pos.z };
+      }
+    }
     if (qlog && typeof qlog.forEach === 'function') {
       qlog.forEach((qp, qid) => {
         const st = qp.state || 'active';
@@ -355,7 +368,7 @@ async function snapshot() {
               required: (o && (o.count != null ? o.count : o.required)) || 0,
             }))
           : (qp.counts || []).map((c) => ({ current: c, required: c }));
-        const entry = { id: qid, state: st, objectives: objs };
+        const entry = { id: qid, state: st, objectives: objs, turnInNpc: npcByQuest[qid] || null };
         if (st === 'active') active.push(entry);
         else if (st === 'ready') ready.push(entry);
         else if (st === 'done') done.push(entry);
