@@ -42,7 +42,7 @@ exit /b 0
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
     REM PowerShell reliably returns the child PID; write it to the pid file.
-    powershell -NoProfile -Command "Start-Process -FilePath 'node.exe' -ArgumentList 'browser_bridge.cjs' -WorkingDirectory '%REPO%' -RedirectStandardOutput '%REPO%bridge_smoke.log' -RedirectStandardError '%REPO%bridge_smoke.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id > '%BRIDGE_PID%'"
+    powershell -NoProfile -Command "Start-Process -FilePath 'node.exe' -ArgumentList 'browser_bridge.cjs' -WorkingDirectory '%REPO%' -RedirectStandardOutput '%REPO%bridge_smoke.log' -RedirectStandardError '%REPO%bridge_smoke.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id | Set-Content '%BRIDGE_PID%'"
     REM give it a moment to bind the port before we might spawn a duplicate
     timeout /t 4 /nobreak >nul
   )
@@ -54,7 +54,7 @@ exit /b 0
     REM -I isolates from the Hermes venv (which ships an ABI-mismatched numpy
     REM under cp311). sys.path.insert(0,...) adds the project dir so local
     REM imports (browser_env, agent, ...) resolve. exec() runs the script.
-    powershell -NoProfile -Command "Start-Process -FilePath '%PY%' -ArgumentList '-I','-c','import sys; sys.path.insert(0, r''%REPO%python''); exec(open(r''%REPO%python\play_autonomous.py'', encoding=''utf-8'').read())' -WorkingDirectory '%REPO%python' -RedirectStandardOutput '%REPO%python\agent_run.log' -RedirectStandardError '%REPO%python\agent_run.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id > '%AGENT_PID%'"
+    powershell -NoProfile -Command "Start-Process -FilePath '%PY%' -ArgumentList '-I','-c','import sys; sys.path.insert(0, r''%REPO%python''); exec(open(r''%REPO%python\play_autonomous.py'', encoding=''utf-8'').read())' -WorkingDirectory '%REPO%python' -RedirectStandardOutput '%REPO%python\agent_run.log' -RedirectStandardError '%REPO%python\agent_run.err' -WindowStyle Minimized -PassThru | Select-Object -ExpandProperty Id | Set-Content '%AGENT_PID%'"
   )
 
   REM check every 10s
