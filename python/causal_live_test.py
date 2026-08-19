@@ -86,6 +86,7 @@ def setup_S(env, agent, mem, policy, max_nav_attempts: int = 50):
     for attempt in range(max_nav_attempts):
         info = env._last_info
         ws = build_world_state(info)
+        print(f"[causal][setup] attempt={attempt} pos={info.get('player_pos')} mobs={len(find_mobs(info))} hp={ws.get('hp_frac')}")
         # keep ALIVE only — do NOT respawn on low hp, or we teleport to the
         # giver (mob-free zone) and lose the mob we just found. A dead char
         # cannot move; a hurt char still can and that is a valid S for the test.
@@ -95,27 +96,34 @@ def setup_S(env, agent, mem, policy, max_nav_attempts: int = 50):
             ws = build_world_state(info)
         mobs = find_mobs(info)
         if mobs:
-            m = mobs[0]
-            mx, mz = m.get("x"), m.get("z")
-            # chunked navigate: re-check hp between chunks
-            for _ in range(5):
-                cinfo = env._last_info
-                cws = build_world_state(cinfo)
-                if cinfo.get("player", {}).get("dead") or cws.get("hp_frac", 1.0) <= 0.0:
-                    break  # died during approach — outer loop will respawn
-                try:
-                    env._navigate_to_coord(mx, mz, max_steps=50, timeout=60.0)
-                except Exception as e:
-                    print(f"[causal][setup] nav timeout ({e})")
-                info = env._last_info
-                px, pz = info.get("player_pos", [0, 0])
-                d = math.hypot(mx - px, mz - pz)
-                if d <= 45:
-                    break
-            ws = build_world_state(info)
-            if d <= 45 and ws["hp_frac"] > 0.0 and ws["quest_status"] == "NONE":
-                print(f"[causal][setup] reached S: dist={d:.1f} hp={ws['hp_frac']:.2f} bucket={_bucket(ws)}")
-                return True, ws
+            mobs.sort(key=lambda m: m.get("dist", 1e9))
+            for m in mobs[:8]:  # try closest reachable mobs
+                mx, mz = m.get("x"), m.get("z")
+                start = env._last_info.get("player_pos", [0, 0])
+                reached = False
+                for _ in range(5):
+                    cinfo = env._last_info
+                    cws = build_world_state(cinfo)
+                    if cinfo.get("player", {}).get("dead") or cws.get("hp_frac", 1.0) <= 0.0:
+                        break  # died during approach — outer loop will respawn
+                    try:
+                        env._navigate_to_coord(mx, mz, max_steps=50, timeout=60.0)
+                    except Exception as e:
+                        print(f"[causal][setup] nav timeout ({e})")
+                    info = env._last_info
+                    px, pz = info.get("player_pos", [0, 0])
+                    d = math.hypot(mx - px, mz - pz)
+                    if d <= 45:
+                        reached = True
+                        break
+                moved = math.hypot(px - start[0], pz - start[1])
+                if reached:
+                    ws = build_world_state(info)
+                    if ws["hp_frac"] > 0.0:
+                        print(f"[causal][setup] reached S via {m.get('name')}: dist={d:.1f} hp={ws['hp_frac']:.2f} bucket={_bucket(ws)}")
+                        return True, ws
+                else:
+                    print(f"[causal][setup] mob {m.get('name')} unreachable (moved {moved:.1f}yd, d={d:.1f}), trying next")
         # no mob yet -> walk FORWARD (no turns) to leave the building area and
         # reach open ground where mobs spawn. explore_walk turns every 7th step
         # and circles in place, so we use raw forward instead.

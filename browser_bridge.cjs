@@ -75,23 +75,49 @@ async function reconnect() {
 // ---- action application (mirrors agent_browser.mjs / bridge_online glue) ----
 async function applyAction(idx) {
   switch (idx) {
-    case 0: // farm: acquire + attack nearest living mob
-      await safeEval(() => {
+    case 0: { // farm: chase + attack nearest living mob until it dies
+      const targetId = await safeEval(() => {
         const g = window.__game, sim = g.sim, p = sim.player;
         let best = null, bd = Infinity;
         for (const e of sim.entities.values()) {
           if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
-          if (d <= 45 && d < bd) { bd = d; best = e; }
+          if (d <= 120 && d < bd) { bd = d; best = e; }
         }
-        if (!best) { try { sim.tabTarget(); } catch (_) {} return; }
-        try { sim.targetEntity(best.id); } catch (_) {}
-        try { if (typeof sim.setTarget === 'function') sim.setTarget(best.id); } catch (_) {}
-        try { sim.startAutoAttack(); } catch (_) {}
-        // reliable damage path: cast the default ability directly on the mob
-        try { if (typeof sim.castAbilityOn === 'function') sim.castAbilityOn(best.id, 0); } catch (_) {}
+        return best ? best.id : null;
       });
+      if (targetId == null) { try { await safeEval(() => { try { window.__game.sim.tabTarget(); } catch (_) {} }); } catch (_) {} break; }
+      // unified chase+attack loop: move toward mob if far, attack if in melee
+      for (let t = 0; t < 80; t++) {
+        const st = await safeEval((id) => {
+          const g = window.__game, sim = g.sim, p = sim.player;
+          const e = sim.entities.get(id);
+          if (!e || e.dead || (e.hp ?? 0) <= 0) return { gone: true };
+          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+          if (d > 7) {
+            // chase: face + move
+            const desired = Math.atan2(dx, dz);
+            let off = desired - p.facing;
+            off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+            if (Math.abs(off) > 0.2) {
+              if (off > 0) g.controller.move({ turnLeft: true, forward: true });
+              else g.controller.move({ turnRight: true, forward: true });
+            } else {
+              g.controller.move({ forward: true });
+            }
+            return { d, phase: 'chase' };
+          }
+          // in melee: attack
+          try { sim.targetEntity(id); } catch (_) {}
+          try { sim.startAutoAttack(); } catch (_) {}
+          try { if (typeof sim.castAbilityOn === 'function') sim.castAbilityOn(id, 0); } catch (_) {}
+          return { d, phase: 'attack' };
+        }, targetId);
+        if (st.gone) break;
+        await sleep(TICK_MS);
+      }
       break;
+    }
     case 1: // loot
       await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
       break;
@@ -120,13 +146,15 @@ async function navigateToCoord(tx, tz, maxSteps) {
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 5) return true;
-      const desired = Math.atan2(dx, -dz);
+      // Geometry (measured live, Test 1b/1c): player.facing=0 -> +Z;
+      // turnLeft INCREASES facing, turnRight DECREASES it. So forward moves
+      // along (sin(facing), cos(facing)) in (x,z), i.e. desired = atan2(dx, dz).
+      const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      try { g.controller.stop(); } catch (_) {}
       if (Math.abs(off) > 0.2) {
-        if (off > 0) g.controller.move({ turnRight: true, forward: true });
-        else g.controller.move({ turnLeft: true, forward: true });
+        if (off > 0) g.controller.move({ turnLeft: true, forward: true });
+        else g.controller.move({ turnRight: true, forward: true });
       } else {
         g.controller.move({ forward: true });
       }

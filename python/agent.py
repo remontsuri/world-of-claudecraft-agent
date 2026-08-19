@@ -158,6 +158,11 @@ class Agent:
         return self._cycle(learn=False, exploration_weight=exploration_weight)
 
     def _cycle(self, learn: bool = True, exploration_weight: float = 1.0) -> dict:
+        # 0. Survival: a dead character cannot act. Respawn (release spirit +
+        # resurrect at healer) so the loop keeps running instead of spinning
+        # on a corpse. This is infra safety, NOT a learned action.
+        if self.env._last_info.get("player", {}).get("dead"):
+            self.env.respawn()
         info_before = self.env._last_info
         ws_before = _world_state_dict(info_before)
 
