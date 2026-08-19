@@ -20,6 +20,7 @@ reward 0.0 — it must NOT poison the policy with a false "farm is bad" lesson.
 """
 
 import sys
+import time
 import traceback
 
 from hierarchical_env import HierarchicalWoWEnv, ACT_FORWARD, ACT_TURN_LEFT, SKILLS
@@ -223,8 +224,23 @@ class Agent:
                       f"qprog={rec['ws_after']['quest_progress']} "
                       f"dist={rec['ws_after']['distance_to_giver']:.0f}")
             if rec["outcome_kind"] == "ENV_ERROR":
-                print(f"  >> ENV_ERROR at step {i} — stopping (infra failure, not a lesson)")
-                break
+                # Infra failure (bridge/CDP down), NOT a game lesson. Instead of
+                # stopping, wait for the bridge to come back and keep playing so the
+                # agent is truly autonomous (survives transient bridge restarts).
+                print(f"  >> ENV_ERROR at step {i} — bridge down, waiting for recovery (no lesson)")
+                waited = 0
+                while waited < 1800:  # up to 30 min
+                    time.sleep(10)
+                    waited += 10
+                    try:
+                        if self.env._last_info.get("player") is not None:
+                            print(f"  >> bridge recovered after {waited}s, resuming")
+                            break
+                    except Exception:
+                        pass
+                else:
+                    print("  >> bridge not recovered in 30m — giving up")
+                    break
             if save_every and (i + 1) % save_every == 0:
                 self.mem.save()
         # persist + report what was learned
