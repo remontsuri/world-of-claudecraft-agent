@@ -17,6 +17,10 @@ set LOG=%REPO%\ragent_launcher.log
 
 echo [%date% %time%] launcher start >> %LOG%
 
+REM Pull latest fixes so the bridge/agent always run the committed fixed code.
+cd /d %REPO%
+git pull mine backup >> %LOG% 2>&1
+
 :loop
   REM --- bridge: alive if any node.exe has browser_bridge.cjs in its command line ---
   wmic process where "name='node.exe'" get CommandLine /FORMAT:CSV 2>nul | findstr /I "browser_bridge.cjs" >nul
