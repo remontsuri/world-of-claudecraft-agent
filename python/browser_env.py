@@ -99,6 +99,10 @@ class BrowserEnv:
         if ctx:
             q = ctx.get("quest") or {}
             qid = q.get("id") or ctx.get("questId")
+            if not qid and ctx.get("npc"):
+                nq = ctx["npc"].get("questIds") or ctx["npc"].get("questId")
+                if nq:
+                    qid = (nq[0] if isinstance(nq, (list, tuple)) else nq)
             if qid:
                 payload["questId"] = qid
         resp = self._post(payload)
