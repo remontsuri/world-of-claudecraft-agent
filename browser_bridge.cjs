@@ -75,18 +75,26 @@ async function reconnect() {
 // ---- action application (mirrors agent_browser.mjs / bridge_online glue) ----
 async function applyAction(idx) {
   switch (idx) {
-    case 0: { // farm: chase + attack nearest living mob until it dies
+    case 0: { // farm: chase + attack nearest HOSTILE living mob until it dies
+      // NOTE: the live game tags peaceful NPCs (e.g. Fisher Bram, a quest
+      // villager) as kind:'mob' too, but marks them hostile:false. We must only
+      // target hostile mobs, otherwise the agent attacks peaceful NPCs.
       const targetId = await safeEval(() => {
         const g = window.__game, sim = g.sim, p = sim.player;
         let best = null, bd = Infinity;
         for (const e of sim.entities.values()) {
           if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
+          if (e.hostile === false) continue;  // peaceful NPC (quest giver / villager)
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
           if (d <= 120 && d < bd) { bd = d; best = e; }
         }
         return best ? best.id : null;
       });
-      if (targetId == null) { try { await safeEval(() => { try { window.__game.sim.tabTarget(); } catch (_) {} }); } catch (_) {} break; }
+      // NO tabTarget() fallback: if no hostile mob is in range, do nothing rather
+      // than tapping the nearest peaceful NPC / object (would waste the action and
+      // can hit quest NPCs). The agent simply gets an inconclusive farm and may
+      // choose explore/return instead.
+      if (targetId == null) break;
       // unified chase+attack loop: move toward mob if far, attack if in melee
       for (let t = 0; t < 80; t++) {
         const st = await safeEval((id) => {
