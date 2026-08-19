@@ -198,9 +198,15 @@ class Agent:
             "ws_after": ws_after,
         }
 
-    def run(self, n_steps: int = 200, accept_welcome: bool = True):
+    def run(self, n_steps: int = 200, accept_welcome: bool = True, save_every: int = 50):
         """Run n learning-cycle steps. Optionally accept the welcome quest first
-        (so there is an objective to learn against)."""
+        (so there is an objective to learn against).
+
+        Autonomous mode: loops until n_steps done or ENV_ERROR. Saves memory
+        every `save_every` steps so a killed/restarted process resumes learning
+        from the persisted ExperienceStore (no lesson lost). On exit, stops the
+        player's movement so the character does not keep spinning (the bridge
+        holds controller input until a stop() arrives)."""
         if accept_welcome:
             self._maybe_accept_welcome()
         for i in range(n_steps):
@@ -219,8 +225,21 @@ class Agent:
             if rec["outcome_kind"] == "ENV_ERROR":
                 print(f"  >> ENV_ERROR at step {i} — stopping (infra failure, not a lesson)")
                 break
+            if save_every and (i + 1) % save_every == 0:
+                self.mem.save()
         # persist + report what was learned
         self.mem.save()
+        # stop residual movement (bridge holds controller input otherwise)
+        try:
+            if hasattr(self.env, "base") and hasattr(self.env.base, "stop"):
+                self.env.base.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self.env, "_post"):
+                self.env._post({"action": "raw_move", "kind": "stop"})
+        except Exception:
+            pass
         return self.mem.snapshot()
 
     def _maybe_accept_welcome(self):
