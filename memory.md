@@ -100,8 +100,19 @@ player_hp: 44 -> 219 (выжил)
 PASS: mob died via Sim combat
 ```
 
-## Ограничения (честно)
-- `kills`-счётчик в snapshot НЕ растёт при локальном убийстве (server-authoritative в онлайн, не всегда тикает на локальный white-hit kill). Поэтому PASS = смерть моба, а не рост kills.
+## Autonomous self-play (2026-08-19)
+- `agent.py` `run(n_steps=3000, save_every=100)`: долгий автономный цикл.
+  Сохраняет ExperienceStore каждые 100 шагов (resumable). Stop движения на выходе.
+- Агент балансирует ВЕСЬ скилл-сет через выученную policy (НЕ скриптованный бот):
+  quest/loot/sell/farm/heal/buy/equip/explore.
+- Подтверждено (run 200 шагов): Q в боевом бакете выросли
+  (return_to_giver +4.2, farm +3.4, accept_quest +3.2, loot +3.2, sell_junk +3.0).
+  `farm` дал первый positive reward (+0.32) — бой засчитался.
+- Ограничение: в стартовой зоне мобов/vendor'ов мало → explore выводит агента
+  к zone3 (Thornpeak, x≈4,z≈664), где buy/heal/equip становятся доступны.
+- Запуск: поднять бридж (`node browser_bridge.cjs`), затем
+  `cd python && PYTHONPATH="" /d/woc-llm/therock-test/Scripts/python.exe agent.py`
+
 - `craft` (idx=6) невозможен: `sim.craft` undefined в живом клиенте.
 - `buy` (idx=9) требует vendor+itemId; bridge только открывает vendor.
 - Позиция перса server-authoritative: прямая запись `p.pos.x/z` НЕ держится (откатывается на след. тик). Переместить перса можно только через `controller.move` (навигация) или respawn.

@@ -268,11 +268,15 @@ class Agent:
 
 
 if __name__ == "__main__":
+    # Long autonomous self-play: the agent balances the FULL skill set
+    # (quest/loot/sell/farm/heal/buy/equip/explore) via its learned policy,
+    # not a scripted bot. 3000 steps ~ enough to walk out of the start zone,
+    # reach mobs + trade-vendors, and exercise buy/heal/equip for real.
     env = HierarchicalWoWEnv(player_class="warrior", max_steps=5000, seed=42)
     obs, info = env.reset(seed=42)
     mem = ExperienceStore()
     agent = Agent(env, mem, seed=12345)
-    learned = agent.run(n_steps=200)
+    learned = agent.run(n_steps=3000, save_every=100)
     print("\n=== Learned value snapshot (state_bucket -> {action: value}) ===")
     for bucket, acts in learned.items():
         print(bucket)
