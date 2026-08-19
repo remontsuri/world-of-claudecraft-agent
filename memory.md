@@ -1,0 +1,109 @@
+# WoC-Ragent — Project Memory
+
+> Актуальное состояние на 2026-08-19. Переписано полностью (старого memory.md не было).
+> Репозиторий: `D:\world-of-claudecraft` — CLONE `levy-street/world-of-claudecraft`
+> (origin, публичная игра) + наш агент-код. Backup-remote: `remontsuri/world-of-claudecraft-agent`
+> (ветка `mine/backup`, локальная ветка `backup`).
+
+## Статус (коротко)
+- Agent может: observe → policy → farm → реальный combat Sim → kill/death → reward → TD memory → следующее решение.
+- Цепочка `navigate → targetEntity → startAutoAttack → mob dies` ПОДТВЕРЖДЕНА живым smoke-тестом (2×).
+- Длинный autonomous/PPO-run НЕ запускался (решено: сначала smoke, потом run).
+- Бридж остановлен по приказу пользователя; перс выведен в стартовую локацию (zone1, -5,-52) и замер.
+
+## Git / коммиты
+HEAD (`mine/backup`): `7de297e05`
+Цепочка исправлений:
+- `ead45a23d` — farm navigation: turn geometry, убран блокирующий stop(), chase+attack loop
+- `ea31f4be6` — P0/P1: cross-check bridge/verifiers против оригинального game API
+- `ebd835636` — respawn-at-corpse order, honest heal/gather/equip/buy, end-to-end ok:false guard
+- `7de297e05` — combat re-face fix + smoke_combat.py
+Рабочий флоу: правки → `git commit` → `git push mine backup`.
+
+## Структура репозитория
+```
+D:\world-of-claudecraft\
+├── browser_bridge.cjs        # HTTP-мост (:8791) к живому Chrome (CDP :9222)
+│                             #   cmdQueue (1 live browser, сериализация команд)
+│                             #   action idx 0..9, respawn, snapshot, navigate, raw_move, explore
+├── python/
+│   ├── agent.py              # GoalManager loop: observe → decide → skill → cap API
+│   ├── policy.py             # tabular policy, SKILL_INDEX = enumerate(SKILLS)
+│   ├── browser_env.py        # BrowserEnv — I/O к bridge (_require = ok:false guard)
+│   ├── memory.py             # ExperienceStore (TD-память)
+│   ├── reward.py             # reward-функция
+│   ├── smoke_combat.py       # ЧЕСТНЫЙ smoke: navigate→target→autoattack→kill
+│   └── *_nav_report_*, bc_nav_*, experience_*.json   # диагностика/логи
+├── tools/adapter_v1/
+│   ├── world_facade.ts       # LiveWorldFacade — ЧЕСТНЫЙ адаптер к window.__game
+│   ├── known_points.ts       # статические giver/vendor координаты
+│   └── types.ts              # контракт WorldFacade
+├── src/                      # ИСХОДНИКИ ИГРЫ (levy-street, не наш код)
+│   ├── sim/sim.ts            # Sim: player, entities, harvestNode, equipItem, buyItem, targetEntity
+│   ├── sim/combat/auto_attack.ts  # startAutoAttack/updatePlayerAutoAttack — swing gate
+│   ├── sim/targeting.ts      # targetEntity (ставит p.targetId)
+│   ├── sim/items.ts          # useItem (potion/heal)
+│   ├── sim/content/graveyards.ts  # graveyards (gy_willowfen, gy_vale_chapel...)
+│   └── world_api/combat.ts   # IWorldCombat: resurrectAtCorpse/releaseSpirit/resurrectAtSpiritHealer
+├── dist-tools/               # архивные/доставочные варианты (не трогать)
+├── audit_pack*/              # аудит-копии (не трогать)
+└── _*.cjs                    # временные зонды (удалять по необходимости)
+```
+
+## Маппинг action idx (browser_env.py: AGENT→bridge)
+`0 farm, 1 loot, 2 accept_quest, 3 turn_in_quest, 4 sell_junk, 5 gather, 6 craft, 7 heal, 8 equip, 9 buy`
+- SKILLS (policy.py) = тот же список; SKILL_INDEX = enumerate(SKILLS).
+
+## Реализация capability в bridge (browser_bridge.cjs)
+- `0 farm`: chase (<7yd) → FACE mob (atan2 к mob) → targetEntity+startAutoAttack. Re-face КАЖДЫЙ тик (иначе swing вне MELEE_ARC не попадает).
+- `1 loot`: loot ближайшего трупа.
+- `2 accept_quest`, `3 turn_in_quest`: через sim (npc рядом).
+- `4 sell_junk`: sim.sellAllJunk.
+- `5 gather`: sim.harvestNode(ближайший node в радиусе 60).
+- `6 craft`: ЧЕСТНО unsupported (sim.craft undefined в клиенте) → warning, не silent stop.
+- `7 heal`: sim.useItem(первый health-potion в сумке по regex /potion|draught|tonic|elixir|heal/).
+- `8 equip`: sim.equipItem(первый gear с def.equipSlot).
+- `9 buy`: hud.openVendor(ближайший vendor в радиусе 12) — требует itemId для реальной покупки.
+
+## Respawn (browser_bridge.cjs: respawn handler)
+Порядок по IWorldCombat: `resurrectAtCorpse()` (у тела, без штрафа, если в радиусе) → если ВСЁ ЕЩЁ dead → `releaseSpirit()` + `resurrectAtSpiritHealer()` (graveyard path).
+Старый порядок (releaseSpirit → corpse) был неверен: после releaseSpirit игрок уже не у тела.
+
+## Combat (почему работает)
+- `startAutoAttack` (auto_attack.ts) берёт уже существующий `p.targetId` (его ставит targetEntity) и вкл. autoAttack.
+- Swing идёт в `updatePlayerAutoAttack` на tick, НО только если `d <= MELEE_RANGE (5yd)` И `facingDiff <= MELEE_ARC (2.2rad)`.
+- Баг был: farm не держал facing → swing не попадал → перс бил вхолостую. Фикс: re-face в attack-ветке.
+
+## Smoke-тест (python/smoke_combat.py)
+Запуск (бридж поднят):
+```
+cd D:\world-of-claudecraft\python
+PYTHONPATH="" D:\woc-llm\therock-test\Scripts\python.exe smoke_combat.py
+```
+Критерий PASS = моб dead (hp→0/dead/lootable) после navigate→target→autoattack.
+Логирует: player_pos, mob_pos, distance, mob_hp_before/after, kills_before/after, player_hp, deaths.
+Последний честный прогон:
+```
+navigate: dist 38.9 -> 28.5yd
+mob_hp: 66 -> 0, dead=True
+player_hp: 44 -> 219 (выжил)
+PASS: mob died via Sim combat
+```
+
+## Ограничения (честно)
+- `kills`-счётчик в snapshot НЕ растёт при локальном убийстве (server-authoritative в онлайн, не всегда тикает на локальный white-hit kill). Поэтому PASS = смерть моба, а не рост kills.
+- `craft` (idx=6) невозможен: `sim.craft` undefined в живом клиенте.
+- `buy` (idx=9) требует vendor+itemId; bridge только открывает vendor.
+- Позиция перса server-authoritative: прямая запись `p.pos.x/z` НЕ держится (откатывается на след. тик). Переместить перса можно только через `controller.move` (навигация) или respawn.
+- Heal требует реальной potion в сумке; если нет — honest no-op (policy учит waste).
+
+## Запуск бриджа (background падает с "stdin is not a tty" в MSYS — это ок, бридж жив)
+```
+cd D:\world-of-claudecraft && node browser_bridge.cjs
+# слушает :8791; подключается к Chrome CDP :9222 (game-tab worldofclaudecraft)
+```
+
+## Что НЕ делать
+- Не трогать `tools/adapter_v1/world_facade.ts` obs/Sim/reward/PPO (это честный адаптер, отдельный слой).
+- Не убивать running bg-задачи без нужды.
+- Не выдумывать PASS: verify-before-done (прямой probe/живой smoke).
