@@ -17,8 +17,17 @@ No reward logic, no Sim edits, no PPO here.
 import json
 import urllib.request
 import urllib.error
+import socket
 
 BRIDGE_URL = "http://127.0.0.1:8791"
+
+
+class BrowserBridgeError(RuntimeError):
+    """Infrastructure failure: the bridge/CDP/HTTP transport is down or rejected
+    the request. This is NOT a game outcome and must NOT be confused with a
+    programming error (NameError/KeyError/TypeError in policy/skill/reward).
+    Agent catches this as ENV_ERROR (no false lesson, wait for recovery); any
+    other Exception is a real bug and must crash loudly."""
 
 # skill indices MUST match hierarchical_env.SKILLS order so Agent's SKILL_INDEX
 # mapping stays valid:
@@ -50,16 +59,23 @@ class BrowserEnv:
         req = urllib.request.Request(
             BRIDGE_URL, data=data, headers={"content-type": "application/json"}
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
+            # Transport down (bridge not listening / CDP dead). This is infra,
+            # not a game outcome — surface as BrowserBridgeError so Agent treats
+            # it as ENV_ERROR and recovers, never as a false lesson or a bug.
+            raise BrowserBridgeError(f"bridge POST {payload.get('action')} failed: {e}") from e
 
     def _require(self, payload: dict, timeout: float = 30.0) -> dict:
-        """POST and raise RuntimeError on ok:false so the Agent records ENV_ERROR
-        (reward 0, memory untouched) instead of learning from an empty snapshot.
-        Used by every read/write path — no silent stop()/empty-info fallback."""
+        """POST and raise BrowserBridgeError on ok:false so the Agent records
+        ENV_ERROR (reward 0, memory untouched) instead of learning from an empty
+        snapshot. Used by every read/write path — no silent stop()/empty-info
+        fallback."""
         resp = self._post(payload, timeout=timeout)
         if not resp.get("ok", False):
-            raise RuntimeError(f"bridge {payload.get('action')} failed: {resp.get('error')}")
+            raise BrowserBridgeError(f"bridge {payload.get('action')} failed: {resp.get('error')}")
         return resp
 
     # ---- gym-style interface used by Agent ----
@@ -69,13 +85,13 @@ class BrowserEnv:
         # if the character is dead on entry, respawn so the loop can start clean
         resp = self._post({"action": "snapshot"})
         if not resp.get("ok", False):
-            raise RuntimeError(f"bridge reset failed: {resp.get('error')}")
+            raise BrowserBridgeError(f"bridge reset failed: {resp.get('error')}")
         info = resp.get("info", {})
         if info.get("player", {}).get("dead"):
             self._require({"action": "respawn"})
             resp = self._require({"action": "snapshot"})
             if not resp.get("ok", False):
-                raise RuntimeError(f"bridge respawn+snapshot failed: {resp.get('error')}")
+                raise BrowserBridgeError(f"bridge respawn+snapshot failed: {resp.get('error')}")
             info = self._last_info = resp.get("info", {})
         else:
             self._last_info = info
@@ -107,7 +123,7 @@ class BrowserEnv:
                 payload["questId"] = qid
         resp = self._post(payload)
         if not resp.get("ok", False):
-            raise RuntimeError(f"bridge step failed: {resp.get('error')}")
+            raise BrowserBridgeError(f"bridge step failed: {resp.get('error')}")
         info = resp.get("info", {})
         self._last_info = info
         self._step += 1

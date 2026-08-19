@@ -120,4 +120,8 @@ def return_to_giver(env, ctx: dict) -> str:
     d1 = ((tNpc["x"] - px2) ** 2 + (tNpc["z"] - pz2) ** 2) ** 0.5
     if d1 < 6:
         return "SUCCESS"
-    return "PARTIAL" if d1 < d0 else "PARTIAL"
+    # Mid-chain: the leg ran but the giver is not reached yet. reward.py scores
+    # the MEASURED distance delta (d0 -> d1), so PARTIAL is correct whether we
+    # closed or drifted distance this call. (Old code had a dead `if d1 < d0
+    # else PARTIAL` — both branches returned PARTIAL; collapsed to one return.)
+    return "PARTIAL"

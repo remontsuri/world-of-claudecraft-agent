@@ -22,6 +22,7 @@ reward 0.0 — it must NOT poison the policy with a false "farm is bad" lesson.
 import sys
 import time
 import traceback
+from browser_env import BrowserBridgeError
 
 from hierarchical_env import HierarchicalWoWEnv, ACT_FORWARD, ACT_TURN_LEFT, SKILLS
 from verifiers_py import verify_skill
@@ -213,10 +214,20 @@ class Agent:
         for i in range(n_steps):
             try:
                 rec = self.step()
-            except Exception as ex:
+            except BrowserBridgeError as ex:
+                # Infra failure (bridge/CDP down, transport rejected). This is
+                # NOT a game lesson: record ENV_ERROR, do NOT learn, wait for
+                # recovery. Distinct from a programming bug below.
                 rec = {"action": "?", "verdict": "ERROR", "outcome_kind": "ENV_ERROR",
                        "reward": 0.0, "error": str(ex)}
                 traceback.print_exc()
+            except Exception as ex:
+                # Programming error (NameError/KeyError/TypeError/AttributeError
+                # in policy/skill/reward/world_state). This is a REAL BUG — crash
+                # loudly so it cannot hide behind ENV_ERROR and silently poison
+                # 10h of self-play. Do NOT mask as ENV_ERROR, do NOT continue.
+                traceback.print_exc()
+                raise
             if i % 10 == 0 or rec["outcome_kind"] == "ENV_ERROR":
                 print(f"[{i}] {rec['action']:14s} v={rec['verdict']:12s} "
                       f"kind={rec['outcome_kind']:12s} r={rec['reward']:+.2f} "

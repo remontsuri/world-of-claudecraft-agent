@@ -18,8 +18,10 @@ Design:
 """
 
 import json
-import math
 import os
+import tempfile
+import math
+import traceback
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
@@ -115,15 +117,33 @@ class ExperienceStore:
         ]
 
     def save(self):
+        """Atomically persist memory. Write to a temp file in the same directory
+        then os.replace() (atomic rename on Windows) so a kill/restart mid-write
+        can never leave a truncated/corrupt file that silently wipes all learned
+        experience on next load (the old code wrote directly and swallowed
+        errors with `except: pass`, losing the whole store)."""
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "weights": [[list(k), v] for k, v in self.weights.items()],
-                    "counts": [[list(k), v] for k, v in self.counts.items()],
-                    "experiences": [[b, a, r, nb, ok] for (b, a, r, nb, ok) in self.experiences[-500:]],
-                }, f, ensure_ascii=False, indent=1)
+            data = {
+                "weights": [[list(k), v] for k, v in self.weights.items()],
+                "counts": [[list(k), v] for k, v in self.counts.items()],
+                "experiences": [[b, a, r, nb, ok] for (b, a, r, nb, ok) in self.experiences[-500:]],
+            }
+            d = os.path.dirname(os.path.abspath(self.path)) or "."
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".mem_", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, self.path)  # atomic on Windows
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
         except Exception:
-            pass
+            # Last-resort guard: never crash the learning loop on a save failure,
+            # but DO NOT silently eat the error — surface it.
+            traceback.print_exc()
 
     # ---- core API ----
     def value(self, bucket: str, action: str) -> float:

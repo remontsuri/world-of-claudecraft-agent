@@ -36,7 +36,8 @@ SKILL_RETURN = "return_to_giver"
 SKILL_HEAL = "heal"
 SKILL_SELL = "sell_junk"
 SKILL_GATHER = "gather"
-SKILL_QUEST = "quest"  # legacy alias, no longer a candidate (atomized below)
+SKILL_EQUIP = "equip"      # unequipped gear item in bag -> bridge equipItem
+SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
 SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
@@ -152,7 +153,20 @@ class GoalManager:
         if active or ready:
             cands.append(SKILL_RETURN)         # atomic: navigate back to giver
         if junk:
-            cands.append(SKILL_SELL)
+            # Only offer sell_junk when a vendor is actually nearby. Without
+            # this the agent picks sell_junk while the vendor is far away, gets
+            # an inconclusive (bridge no-ops "no merchant nearby"), and can
+            # never reach the vendor because navigate_to_vendor does not exist.
+            # Mirror the SKILL_BUY distance gate.
+            ppos = info.get("player_pos") or [0, 0]
+            vendor_near = any(
+                (e.get("kind") == "npc" or e.get("type") == "npc")
+                and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+                and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+                for e in near
+            )
+            if vendor_near:
+                cands.append(SKILL_SELL)
         # gather: a harvestable node within reach (bridge harvestNode picks nearest
         # in radius 60). Only a candidate when such a node exists nearby.
         if any((e.get("kind") == "gather_node" or e.get("nodeType") or e.get("gatherTier") is not None)

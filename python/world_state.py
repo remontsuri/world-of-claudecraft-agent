@@ -56,6 +56,17 @@ def build_world_state(info: Dict) -> Dict:
     inv = info.get("inventory") or []
     has_junk = any((i.get("quality") or 0) == 0 for i in inv)
 
+    # vendor proximity: is a vendor NPC within interact range? Drives sell_junk
+    # candidacy in policy (no point offering sell_junk when the vendor is far,
+    # since navigate_to_vendor does not exist and the bridge no-ops the call).
+    ppos = info.get("player_pos") or [0, 0]
+    vendor_nearby = any(
+        (e.get("kind") == "npc" or e.get("type") == "npc")
+        and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+        and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+        for e in nearby
+    )
+
     # quest facts: progress, status, and MEASURED distance to the turn-in NPC
     quest_progress = 0
     distance_to_giver = 999.0
@@ -75,7 +86,10 @@ def build_world_state(info: Dict) -> Dict:
             tNpc = q.get("turnInNpc") or {}
             if tNpc.get("x") is not None:
                 px, pz = info.get("player_pos", [0, 0])
-                distance_to_giver = ((tNpc["x"] - px) ** 2 + (tNpc["z"] - pz) ** 2) ** 0.5
+                d = ((tNpc["x"] - px) ** 2 + (tNpc["z"] - pz) ** 2) ** 0.5
+                # keep the CLOSEST turn-in NPC, not the last one iterated
+                if d < distance_to_giver:
+                    distance_to_giver = d
         quest_status = "ACTIVE" if any_incomplete else "READY_TO_TURN_IN"
 
     in_combat = bool(info.get("in_combat"))
@@ -88,6 +102,7 @@ def build_world_state(info: Dict) -> Dict:
         "has_mob": has_mob,
         "has_corpse": has_corpse,
         "has_junk": has_junk,
+        "vendor_nearby": vendor_nearby,
         "danger": danger,
         "distance_to_giver": distance_to_giver,
         "in_combat": in_combat,
