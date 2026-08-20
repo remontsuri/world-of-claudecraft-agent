@@ -66,7 +66,7 @@ class ExperienceStore:
     ACTIONS = ["farm", "loot", "accept_quest", "turn_in_quest", "return_to_giver",
                "heal", "sell_junk", "gather", "quest", "explore"]
 
-    def __init__(self, lr: float = 0.2, decay: float = 0.999, gamma: float = 0.9, path: Optional[str] = None):
+    def __init__(self, lr: float = 0.2, decay: float = None, gamma: float = 0.9, path: Optional[str] = None):
         # (bucket, action) -> float value estimate
         self.weights: Dict[Tuple[str, str], float] = defaultdict(float)
         # (bucket, action) -> count (for confidence / exploration bonus)
@@ -76,6 +76,10 @@ class ExperienceStore:
         # "in a similar state I did farm -> X happened -> -0.48 -> P(farm) dropped".
         self.experiences: List[Tuple[str, str, float, str, str]] = []
         self.lr = lr
+        # `decay` is accepted for backward compatibility but NO LONGER APPLIED.
+        # Per-step decay exponentially erased all lessons (incl. good ones) by
+        # absolute step count, which conflicted with "learn across sessions".
+        # Tabular Q-learning is adaptive on its own via the TD update above.
         self.decay = decay
         self.gamma = gamma
         self.path = path or os.path.join(os.path.dirname(__file__), "experience.json")
@@ -195,9 +199,12 @@ class ExperienceStore:
             bootstrap = 0.0
         target = reward + bootstrap
         self.weights[key] = w + self.lr * (target - w)
-        # slow decay of all weights so very old lessons fade (keeps policy adaptive)
-        for k in self.weights:
-            self.weights[k] *= self.decay
+        # NOTE: no per-step decay. Tabular Q-learning is already adaptive — new
+        # experience re-estimates Q(bucket,action), pushing out old lessons on
+        # its own. Per-step decay multiplied EVERY weight by <1 each update,
+        # exponentially erasing ALL lessons (good ones included) by absolute step
+        # count, which conflicts with "learn across sessions". If stale lessons
+        # ever dominate, add an explicit age-based consolidate() instead.
         # record the experience for real memory / analysis
         if next_state is not None:
             self.record(state, action, reward, next_state, outcome_kind)

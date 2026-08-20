@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+import atexit
 from collections import Counter, defaultdict
 
 from browser_env import BrowserEnv
@@ -82,6 +83,19 @@ def _acquire_lock():
     return pid
 
 
+def _release_lock():
+    """Best-effort removal of the single-instance lock. Registered via atexit so
+    it runs on ANY process exit (normal, uncaught exception, sys.exit). Without
+    this a dead agent (e.g. bridge down -> sys.exit(3)) leaves a stale lock whose
+    PID is no longer alive, and the launcher would see a 'live' PID and skip the
+    restart — the agent would never come back until someone deletes the lock."""
+    try:
+        if os.path.exists(LOCK_PATH):
+            os.remove(LOCK_PATH)
+    except OSError:
+        pass
+
+
 def cell_of(pos, size=20.0):
     """Coarse position cell for exploration tracking."""
     if not pos:
@@ -91,12 +105,36 @@ def cell_of(pos, size=20.0):
 
 def main():
     _acquire_lock()  # refuse to run if another instance already drives the char
+    # Release the single-instance lock on ANY exit (normal, exception, sys.exit),
+    # so a dead agent (e.g. bridge down -> sys.exit(3)) never leaves a stale
+    # lock with a dead PID that fools the launcher into thinking it is alive and
+    # skipping the restart. atexit fires even on sys.exit().
+    atexit.register(_release_lock)
+    # Record our live PID so the launcher's singleton check (agent.pid) tracks
+    # the real long-lived process. (Previously the launcher wrote this via a
+    # python -c wrapper; now the module records it directly and reliably.)
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "agent.pid"), "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
     if os.path.exists(EXP_PATH):
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
     mem = ExperienceStore(path=EXP_PATH)
-    env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED)
-    env.reset(seed=SEED)
+    try:
+        env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED)
+        env.reset(seed=SEED)
+    except Exception as e:
+        # The bridge is down (CDP/HTTP transport rejected) or the game tab is
+        # not ready. Previously this threw at import time with __file__ undefined
+        # (launcher used exec(open().read())) and died silently with an empty
+        # agent_run.log. Now we log it honestly and exit so the launcher's 10s
+        # loop restarts us cleanly once the bridge is up.
+        sys.stderr.write(
+            f"[autonomous] FATAL: cannot init BrowserEnv (bridge up? game tab ready?): {type(e).__name__}: {e}\n"
+        )
+        sys.exit(3)
     agent = Agent(env, mem, seed=SEED * 3 + 7)
 
     # metrics

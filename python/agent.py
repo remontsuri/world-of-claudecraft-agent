@@ -73,6 +73,9 @@ class Agent:
                     self.env.explore_walk(steps=10)
                 else:
                     self.env.base.step(ACT_FORWARD)
+                    # base updated base._last_info; mirror it onto the wrapper so
+                    # the after-state reflects the real world, not a stale snapshot.
+                    self.env._last_info = getattr(self.env.base, "_last_info", self.env._last_info)
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"
             if action == "turn_in_quest":
@@ -229,11 +232,13 @@ class Agent:
                 traceback.print_exc()
                 raise
             if i % 10 == 0 or rec["outcome_kind"] == "ENV_ERROR":
+                wb = rec.get("ws_before") or {}
+                wa = rec.get("ws_after") or {}
                 print(f"[{i}] {rec['action']:14s} v={rec['verdict']:12s} "
                       f"kind={rec['outcome_kind']:12s} r={rec['reward']:+.2f} "
-                      f"hp={rec['ws_before']['hp_frac']:.2f} "
-                      f"qprog={rec['ws_after']['quest_progress']} "
-                      f"dist={rec['ws_after']['distance_to_giver']:.0f}")
+                      f"hp={wb.get('hp_frac', 0):.2f} "
+                      f"qprog={wa.get('quest_progress')} "
+                      f"dist={wa.get('distance_to_giver', 0):.0f}")
             if rec["outcome_kind"] == "ENV_ERROR":
                 # Infra failure (bridge/CDP down), NOT a game lesson. Instead of
                 # stopping, wait for the bridge to come back and keep playing so the
@@ -244,7 +249,7 @@ class Agent:
                     time.sleep(10)
                     waited += 10
                     try:
-                        if self.env._last_info.get("player") is not None:
+                        if (self.env._last_info or {}).get("player") is not None:
                             print(f"  >> bridge recovered after {waited}s, resuming")
                             break
                     except Exception:
@@ -290,7 +295,9 @@ class Agent:
         if giver:
             qid = (giver.get("questIds") or [None])[0]
             self.env._navigate_to_coord(giver.get("x"), giver.get("z"), max_steps=80)
-            self.env.step(2)  # accept_quest skill index
+            # pass the giver ctx so env.step(2) issues acceptQuest(questId),
+            # not a bare interact (the online bridge requires the questId).
+            self.env.step(2, {"npc": giver, "questId": qid})
             self.env._last_info = self.env._last_info
 
 

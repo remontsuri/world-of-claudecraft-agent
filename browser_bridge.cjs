@@ -567,6 +567,13 @@ const server = http.createServer((req, res) => {
 async function main() {
   if (!await reconnect()) { console.error('[bridge] initial connect failed'); process.exit(1); }
   console.log('[bridge] online game tab ready; serving on :' + PORT);
+  server.on('error', (e) => {
+    // EADDRINUSE means a previous bridge instance is still holding :PORT.
+    // Exit loudly so the launcher's 10s loop can restart us cleanly once the
+    // stale instance is gone, instead of silently dying with no log clue.
+    console.error('[bridge] server error:', e.code || e.message);
+    process.exit(e.code === 'EADDRINUSE' ? 2 : 1);
+  });
   server.listen(PORT);
 }
 
