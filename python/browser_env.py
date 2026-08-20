@@ -18,6 +18,7 @@ import json
 import urllib.request
 import urllib.error
 import socket
+import http.client
 
 BRIDGE_URL = "http://127.0.0.1:8791"
 
@@ -63,11 +64,11 @@ class BrowserEnv:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as e:
+        except (urllib.error.URLError, socket.timeout, TimeoutError, http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ConnectionError, OSError) as e:
             # Transport down (bridge not listening / CDP dead). This is infra,
             # not a game outcome — surface as BrowserBridgeError so Agent treats
             # it as ENV_ERROR and recovers, never as a false lesson or a bug.
-            raise BrowserBridgeError(f"bridge POST {payload.get('action')} failed: {e}") from e
+            raise BrowserBridgeError(f"bridge POST {payload.get('action')} failed: {type(e).__name__}: {e}") from e
 
     def _require(self, payload: dict, timeout: float = 30.0) -> dict:
         """POST and raise BrowserBridgeError on ok:false so the Agent records

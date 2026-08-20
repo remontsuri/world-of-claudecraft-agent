@@ -140,3 +140,67 @@ def return_to_giver(env, ctx: dict, world_mem=None) -> str:
     # closed or drifted distance this call. (Old code had a dead `if d1 < d0
     # else PARTIAL` — both branches returned PARTIAL; collapsed to one return.)
     return "PARTIAL"
+
+
+def sell_junk(env, world_mem=None, max_steps: int = 80) -> str:
+    """Sell junk using remembered vendor knowledge.
+
+    This is an atomic capability: it may spend one bounded navigation leg to a
+    vendor already learned from the world. It never invents a vendor location.
+    Returns SUCCESS when the sell action was issued at vendor range, PARTIAL when
+    navigation moved toward a known vendor but did not reach it, FAILURE when no
+    vendor is known and none is currently nearby.
+    """
+    info = env._last_info or {}
+    p = info.get("player_pos") or [0, 0]
+    px, pz = p[0], p[1]
+    nearby = info.get("nearby") or []
+
+    def is_vendor(e):
+        return ((e.get("kind") == "npc" or e.get("type") == "npc") and
+                (e.get("vendor") or e.get("vendorItems") or e.get("isVendor")))
+
+    # Learn/refresh all visible vendors before choosing a route.
+    if world_mem is not None:
+        for e in nearby:
+            if is_vendor(e) and e.get("id") is not None and e.get("x") is not None:
+                world_mem.remember_vendor(str(e["id"]), {"x": e["x"], "z": e["z"]})
+        world_mem.save()
+
+    visible = [e for e in nearby if is_vendor(e) and e.get("x") is not None and e.get("z") is not None]
+    if visible:
+        visible.sort(key=lambda e: ((e["x"]-px)**2 + (e["z"]-pz)**2) ** 0.5)
+        d = ((visible[0]["x"]-px)**2 + (visible[0]["z"]-pz)**2) ** 0.5
+        if d > 12:
+            env._navigate_to_coord(visible[0]["x"], visible[0]["z"], max_steps=max_steps)
+        px, pz = env._last_info.get("player_pos", [px, pz])
+        d = ((visible[0]["x"]-px)**2 + (visible[0]["z"]-pz)**2) ** 0.5
+        if d <= 12:
+            env.step(4)
+            return "SUCCESS"
+        return "PARTIAL"
+
+    # No visible vendor: use persistent memory, nearest known vendor first.
+    candidates = []
+    if world_mem is not None:
+        for npc_id, rec in world_mem.vendors.items():
+            pos = (rec or {}).get("pos") or {}
+            if pos.get("x") is None or pos.get("z") is None:
+                continue
+            d = ((pos["x"]-px)**2 + (pos["z"]-pz)**2) ** 0.5
+            candidates.append((d, npc_id, pos))
+    if not candidates:
+        return "FAILURE"
+    _, _, pos = min(candidates, key=lambda x: x[0])
+    env._navigate_to_coord(pos["x"], pos["z"], max_steps=max_steps)
+    info2 = env._last_info or {}
+    px2, pz2 = info2.get("player_pos", [px, pz])
+    # We need a fresh live vendor confirmation before selling; memory alone is
+    # location knowledge, not proof that the NPC is currently interactable.
+    live = [e for e in (info2.get("nearby") or []) if is_vendor(e) and e.get("x") is not None]
+    if live:
+        d2 = min(((e["x"]-px2)**2 + (e["z"]-pz2)**2) ** 0.5 for e in live)
+        if d2 <= 12:
+            env.step(4)
+            return "SUCCESS"
+    return "PARTIAL"

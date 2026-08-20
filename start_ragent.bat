@@ -59,7 +59,7 @@ exit /b 0
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
     call :rotate_log "%BRIDGE_LOG%"
-    start "woc-bridge" /min cmd /c "%REPO%\bridge_launch.bat" >> "%BRIDGE_LOG%" 2^>^&1
+    start "woc-bridge" /min cmd /c node "%REPO%\browser_bridge.cjs" >> "%BRIDGE_LOG%" 2^>^&1
     ping -n 5 127.0.0.1 >nul
   )
 

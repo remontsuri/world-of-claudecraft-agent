@@ -58,6 +58,18 @@ class Agent:
         self.policy = GoalManager(memory, temperature=1.2, seed=seed)
         self.cap = QuestCapability(env)
 
+    def _remember_visible_world(self, info: dict):
+        """Persist NPC facts observed by the live browser without steering policy."""
+        changed = False
+        for e in (info.get("nearby") or []):
+            if (e.get("kind") == "npc" or e.get("type") == "npc") and e.get("id") is not None:
+                is_vendor = bool(e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+                if is_vendor and e.get("x") is not None and e.get("z") is not None:
+                    self.world_mem.remember_vendor(str(e["id"]), {"x": e["x"], "z": e["z"]})
+                    changed = True
+        if changed:
+            self.world_mem.save()
+
     def _run_skill(self, action: str, ctx: dict, info_before: dict) -> dict:
         """Execute one skill, return (after_info, verdict, outcome_kind)."""
         try:
@@ -80,6 +92,13 @@ class Agent:
                     self.env._last_info = getattr(self.env.base, "_last_info", self.env._last_info)
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"
+            if action == "sell_junk":
+                # atomic economy capability: use a live vendor when present or a
+                # persistent vendor location learned from prior observations.
+                res = quest_skill.sell_junk(self.env, self.world_mem)
+                after = self.env._last_info
+                verdict = "SUCCESS" if res == "SUCCESS" else ("INCONCLUSIVE" if res == "PARTIAL" else "FAILURE")
+                return after, verdict, "OK"
             if action == "turn_in_quest":
                 # atomic: walk back (short nav) + turn_in. Use QuestCapability path
                 # so we get the server-side turn-in + verifier-correct handle.
@@ -149,6 +168,7 @@ class Agent:
         from the real world; only the CHOICE is forced.
         """
         info_before = self.env._last_info
+        self._remember_visible_world(info_before)
         ws_before = _world_state_dict(info_before)
         ctx = {}
         if action in ("turn_in_quest", "return_to_giver", "accept_quest"):
@@ -191,6 +211,7 @@ class Agent:
         if self.env._last_info.get("player", {}).get("dead"):
             self.env.respawn()
         info_before = self.env._last_info
+        self._remember_visible_world(info_before)
         ws_before = _world_state_dict(info_before)
 
         # 1. Policy decides (learned + exploration).
@@ -202,6 +223,9 @@ class Agent:
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
+
+        # Persist newly observed vendors/NPC facts after every real transition.
+        self._remember_visible_world(after)
 
         # 6. Reward from FACT (reward.py), not from our opinion
         ws_after = _world_state_dict(after)

@@ -25,6 +25,7 @@ process.on('unhandledRejection', (e) => {
 });
 process.on('exit', (code) => {
   try { fs.writeFileSync('bridge_crash.txt', 'exit code=' + code + ' at ' + new Date().toISOString() + '\n'); } catch (_) {}
+  try { if (BRIDGE_PID_PATH && fs.existsSync(BRIDGE_PID_PATH)) fs.unlinkSync(BRIDGE_PID_PATH); } catch (_) {}
 });
 
 // CRITICAL: on shutdown (SIGTERM/SIGINT) release ALL held inputs in the game so
@@ -43,6 +44,7 @@ async function releaseInputsAndExit(code) {
       try { await p.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} }); } catch (_) {}
     }
   } catch (_) {}
+  try { if (fs.existsSync(BRIDGE_PID_PATH)) fs.unlinkSync(BRIDGE_PID_PATH); } catch (_) {}
   process.exit(code);
 }
 process.on('SIGTERM', () => { releaseInputsAndExit(0); });
@@ -81,6 +83,7 @@ const FARSHORE_QUEST_TURNIN = {
 const TICK_MS = 220;
 
 const path = require('path');
+const BRIDGE_PID_PATH = path.join(__dirname, 'bridge.pid');
 // WorldMemory JSON written by python/memory.py WorldMemory.remember_giver(). It is
 // the persistent source for "quest X -> turn-in NPC at (x,z)" — the agent learns
 // the giver at accept time (the live game does NOT expose giverId in sim.questLog).
@@ -121,6 +124,28 @@ async function safeEval(fn, ...args) {
     }
   }
   return null;
+}
+
+
+// Execute a concrete game API call and preserve API-level errors. Transport/
+// page failures still go through safeEval and become null; an actual Sim API
+// rejection becomes a structured error instead of being swallowed by `catch {}`.
+async function simCall(method, args = []) {
+  const result = await safeEval((name, argv) => {
+    const sim = window.__game && window.__game.sim;
+    if (!sim) throw new Error('game sim unavailable');
+    const fn = sim[name];
+    if (typeof fn !== 'function') throw new Error(`sim.${name} is not available`);
+    try {
+      fn.apply(sim, argv || []);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e && (e.message || e) || 'unknown Sim API error') };
+    }
+  }, method, args);
+  if (!result) throw new Error(`sim.${method} failed: no browser result`);
+  if (!result.ok) throw new Error(`sim.${method}: ${result.error}`);
+  return result;
 }
 
 // Re-acquire the live game tab handle from the browser (never reuse a cached one
@@ -293,7 +318,7 @@ async function applyAction(idx, cmd) {
       }
       lastAccept = { questId: qid, giverId: npcId, giverPos };
       if (qid) {
-        await safeEval((id) => { try { window.__game.sim.acceptQuest(String(id)); } catch (_) {} }, qid);
+        await simCall('acceptQuest', [String(qid)]);
       } else {
         // fallback: interact with the nearest quest NPC (legacy path)
         await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
@@ -303,7 +328,7 @@ async function applyAction(idx, cmd) {
     case 3: { // turn_in_quest: turn in the specific ready quest
       const qid = (cmd && cmd.questId) || null;
       if (qid) {
-        await safeEval((id) => { try { window.__game.sim.turnInQuest(String(id)); } catch (_) {} }, qid);
+        await simCall('turnInQuest', [String(qid)]);
       } else {
         await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
       }
@@ -325,10 +350,8 @@ async function applyAction(idx, cmd) {
         return false;
       });
       if (hasVendor) {
-        await safeEval(() => {
-          try { window.__game.sim.interact(); } catch (_) {}
-          try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
-        });
+        await simCall('interact', []);
+        await simCall('sellAllJunk', []);
       }
       break;
     }
@@ -622,7 +645,7 @@ let cmdQueue = Promise.resolve();
 // Last accept_quest result (questId/giverId/giverPos), surfaced to Python so it
 // can persist the turn-in NPC in WorldMemory (the game does not return giverId).
 let lastAccept = null;
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   // Health probe (start_ragent.bat does `HEAD /` expecting 200). Keep POST
   // for real commands; answer liveness with 200 so the launcher starts the agent.
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -635,8 +658,8 @@ const server = http.createServer((req, res) => {
       if (page) {
         health.page = true;
         try {
-          health.game = !!page.evaluate(
-            () => !!(window.__game && window.__game.sim && window.__game.sim.player));
+          health.game = !!(await page.evaluate(
+            () => !!(window.__game && window.__game.sim && window.__game.sim.player)));
         } catch (_) { health.game = false; }
       }
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -700,6 +723,7 @@ const server = http.createServer((req, res) => {
           await sleep(TICK_MS);
           revived = await safeEval(() => !!(window.__game.sim.player && !window.__game.sim.player.dead)).catch(() => false);
         }
+        if (!revived) throw new Error('respawn failed: spirit-healer did not revive the player within timeout');
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'explore') {
         // sustained walk: head toward nearest mob/NPC (or just forward if none),
@@ -721,6 +745,7 @@ const server = http.createServer((req, res) => {
 });
 
 async function main() {
+  try { fs.writeFileSync(BRIDGE_PID_PATH, String(process.pid), 'utf8'); } catch (_) {}
   if (!await reconnect()) { console.error('[bridge] initial connect failed'); process.exit(1); }
   console.log('[bridge] online game tab ready; serving on :' + PORT);
   server.on('error', (e) => {
