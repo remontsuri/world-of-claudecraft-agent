@@ -443,52 +443,112 @@ async function applyAction(idx, cmd) {
 }
 
 async function navigateToCoord(tx, tz, maxSteps) {
+  // IMPORTANT: controller.move({turnLeft:true, forward:true}) is a steering
+  // action, not a rotation-in-place action. Using it every tick while chasing a
+  // point makes the character orbit/spiral around the target. Navigation therefore
+  // separates TURN and FORWARD into different ticks.
+  let lastDist = Infinity;
+  let stagnant = 0;
   for (let i = 0; i < maxSteps; i++) {
-    const done = await safeEval((tx, tz) => {
+    const st = await safeEval((tx, tz) => {
       const g = window.__game, sim = g.sim, p = sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < 5) { try { g.controller.stop(); } catch (_) {} return true; }
-      // Geometry (measured live, Test 1b/1c): player.facing=0 -> +Z;
-      // turnLeft INCREASES facing, turnRight DECREASES it. So forward moves
-      // along (sin(facing), cos(facing)) in (x,z), i.e. desired = atan2(dx, dz).
+      if (dist < 5) {
+        try { g.controller.stop(); } catch (_) {}
+        return { done: true, dist };
+      }
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      if (Math.abs(off) > 0.2) {
-        if (off > 0) g.controller.move({ turnLeft: true, forward: true });
-        else g.controller.move({ turnRight: true, forward: true });
-      } else {
-        g.controller.move({ forward: true });
+      const abs = Math.abs(off);
+
+      // Large heading error: rotate in place. Direct controller.move() accepts
+      // turnLeft/turnRight without forward, unlike the high-level applyAction path.
+      if (abs > 0.35) {
+        try { g.controller.stop(); } catch (_) {}
+        if (off > 0) g.controller.move({ turnLeft: true });
+        else g.controller.move({ turnRight: true });
+        return { done: false, dist, phase: 'turn', off };
       }
-      return false;
+
+      // Once aligned, take a short straight step. Recompute heading every tick.
+      try { g.controller.stop(); } catch (_) {}
+      g.controller.move({ forward: true });
+      return { done: false, dist, phase: 'forward', off };
     }, tx, tz);
-    if (done) return true;
+
+    if (!st) throw new Error('navigation evaluate failed');
+    if (st.done) return true;
+
+    // If distance is not improving for too long, stop rather than walking a
+    // deterministic circle forever. The next policy step can re-plan.
+    if (st.dist >= lastDist - 0.25) stagnant += 1;
+    else stagnant = 0;
+    lastDist = st.dist;
+    if (stagnant >= 18) break;
     await sleep(TICK_MS);
   }
-  // always stop movement when navigation ends (target reached OR timeout)
   await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   return false;
 }
 
 async function exploreWalk(steps) {
-  // Simple sustained walk: forward + occasional turn (mirrors the working
-  // raw_move path). Ignoring nearby-target seeking because it made the agent
-  // jitter in place; plain forward actually covers ground (verified: raw_move
-  // moves ~13yd / 5 calls).
+  // Exploration must not contain a fixed "turn every N ticks" rule: that creates
+  // a literal circle and prevents discovering distant NPCs. Walk straight for the
+  // bounded burst; the learned policy can choose another explore burst later.
   for (let i = 0; i < steps; i++) {
-    const turn = (i % 7 === 6); // turn every 7th step to cover new ground
-    await safeEval((t) => {
+    await safeEval(() => {
       try { window.__game.controller.stop(); } catch (_) {}
-      if (t) {
-        try { window.__game.controller.move({ turnLeft: true, forward: true }); } catch (_) {}
-      } else {
-        try { window.__game.controller.move({ forward: true }); } catch (_) {}
-      }
-    }, turn);
+      window.__game.controller.move({ forward: true });
+    });
     await sleep(TICK_MS);
   }
+  await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   return false;
+}
+
+async function findSpiritHealer() {
+  // The server checks proximity to a spirit healer; calling
+  // resurrectAtSpiritHealer() immediately after releaseSpirit() is therefore
+  // guaranteed to fail when the corpse is elsewhere. Search the full entity
+  // collection (not just nearby) for a healer and return its world position.
+  const r = await safeEval(() => {
+    const sim = window.__game && window.__game.sim;
+    if (!sim) return null;
+    const values = [];
+    try { for (const e of sim.entities.values()) values.push(e); } catch (_) {}
+    const npcDefs = sim.npcDefs || null;
+    if (npcDefs) {
+      try {
+        if (typeof npcDefs.forEach === 'function') npcDefs.forEach((e) => values.push(e));
+        else for (const k of Object.keys(npcDefs)) values.push(npcDefs[k]);
+      } catch (_) {}
+    }
+    const score = (e) => {
+      if (!e) return -1;
+      const text = [
+        e.name, e.title, e.role, e.type, e.kind, e.npcType, e.subtype
+      ].filter(Boolean).join(' ').toLowerCase();
+      let s = 0;
+      if (e.isSpiritHealer || e.spiritHealer || e.isHealer) s += 100;
+      if (text.includes('spirit healer')) s += 100;
+      else if (text.includes('spirit-healer')) s += 100;
+      else if (text.includes('healer')) s += 40;
+      return s;
+    };
+    let best = null, bestScore = 0;
+    for (const e of values) {
+      const p = e && e.pos;
+      const sc = score(e);
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.z) && sc > bestScore) {
+        best = { id: e.id, name: e.name || e.title || '', x: p.x, z: p.z, score: sc };
+        bestScore = sc;
+      }
+    }
+    return best;
+  });
+  return r;
 }
 
 async function snapshot() {
@@ -694,7 +754,6 @@ const server = http.createServer(async (req, res) => {
       } else if (cmd.action === 'navigate') {
         const arrived = await navigateToCoord(cmd.x, cmd.z, cmd.max_steps || 80);
         resp = { ok: true, arrived, info: await snapshot() };
-        resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'raw_move') {
         await safeEval((kind) => {
           try { window.__game.controller.stop(); } catch (_) {}
@@ -706,25 +765,50 @@ const server = http.createServer(async (req, res) => {
         await sleep(TICK_MS);
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'respawn') {
-        // Per src/sim/obs.ts (game's own death-recovery path): releaseSpirit()
-        // FIRST, then resurrectAtSpiritHealer(). resurrectAtCorpse() only works
-        // if the player is still physically near the body (not a ghost), so it is
-        // useless once dead:true with full hp. The server processes the resurrect
-        // async — it does NOT flip player.dead synchronously — so we must POLL
-        // (with a timeout) instead of snapshotting immediately after the call.
-        await safeEval(() => {
+        // Death is a two-stage server operation:
+        //   1) release the spirit;
+        //   2) WALK THE GHOST to the spirit healer;
+        //   3) resurrect at the healer.
+        // Calling resurrectAtSpiritHealer() at the corpse is rejected by the
+        // authoritative server. The old bridge did exactly that, so every death
+        // became a permanent ghost.
+        const released = await safeEval(() => {
           const sim = window.__game.sim;
-          try { sim.releaseSpirit(); } catch (_) {}
-          try { sim.resurrectAtSpiritHealer(); } catch (_) {}
+          if (!sim.player || !sim.player.dead) return { dead: false };
+          sim.releaseSpirit();
+          return { dead: !!sim.player.dead };
         });
-        // Poll up to ~6s for the server to flip dead:false (TICK_MS * 30).
-        let revived = false;
-        for (let i = 0; i < 30 && !revived; i++) {
-          await sleep(TICK_MS);
-          revived = await safeEval(() => !!(window.__game.sim.player && !window.__game.sim.player.dead)).catch(() => false);
+        if (!released) throw new Error('respawn failed: releaseSpirit evaluate failed');
+
+        // Give the server a tick to switch the character into ghost state.
+        await sleep(TICK_MS);
+        const healer = await findSpiritHealer();
+        if (!healer) {
+          throw new Error('respawn failed: no spirit healer found in game entities');
         }
-        if (!revived) throw new Error('respawn failed: spirit-healer did not revive the player within timeout');
-        resp = { ok: true, info: await snapshot() };
+
+        // Ghost navigation uses the same safe coordinate navigator, but does not
+        // require a living player. The controller remains usable after release.
+        const arrived = await navigateToCoord(healer.x, healer.z, 160);
+        if (!arrived) {
+          throw new Error(`respawn failed: could not reach spirit healer ${healer.name || healer.id || ''}`);
+        }
+
+        // Try the server operation after we are physically in healer range.
+        await simCall('resurrectAtSpiritHealer', []);
+        let revived = false;
+        for (let i = 0; i < 50 && !revived; i++) {
+          await sleep(TICK_MS);
+          const probe = await safeEval(() => ({
+            dead: !!(window.__game.sim.player && window.__game.sim.player.dead),
+            hp: window.__game.sim.player && window.__game.sim.player.hp
+          }));
+          revived = !!(probe && !probe.dead);
+        }
+        if (!revived) {
+          throw new Error('respawn failed: spirit healer did not revive player after reaching healer');
+        }
+        resp = { ok: true, info: await snapshot(), healer };
       } else if (cmd.action === 'explore') {
         // sustained walk: head toward nearest mob/NPC (or just forward if none),
         // so the agent actually covers ground instead of 1-step jitter.

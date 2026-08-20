@@ -9,16 +9,20 @@ setlocal enabledelayedexpansion
 set "REPO=%~dp0"
 set "REPO=%REPO:~0,-1%"
 
+set "LOG=%REPO%\ragent_launcher.log"
 set "PY=%REPO%\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=D:\woc-llm\therock-test\Scripts\python.exe"
-
-set "LOG=%REPO%\ragent_launcher.log"
+if not exist "%PY%" (
+  echo [%date% %time%] FATAL: no usable Python interpreter >> "%LOG%"
+  exit /b 2
+)
 set "BRIDGE_PID=%REPO%\bridge.pid"
 set "BRIDGE_LOG=%REPO%\bridge_smoke.log"
 set "AGENT_PID=%REPO%\python\play_autonomous.lock"
 set "AGENT_LOG=%REPO%\python\agent_run.log"
 set "LAUNCHER_PID=%REPO%\launcher.pid"
 set "MAX_LOG_SIZE=10485760"
+set "BRIDGE_BAD=0"
 
 echo launcher > "%LAUNCHER_PID%"
 
@@ -37,11 +41,16 @@ if errorlevel 1 exit /b 1
 exit /b 0
 
 :bridge_health
-set "BH="
-for /f "tokens=*" %%R in ('powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://127.0.0.1:8791/health -TimeoutSec 2 -UseBasicParsing).Content}catch{exit 1}" 2^>nul') do set "BH=%%R"
-echo %BH% | findstr game >nul
-if not errorlevel 1 exit /b 0
-exit /b 1
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; try { $j=Invoke-RestMethod -Uri 'http://127.0.0.1:8791/health' -TimeoutSec 2; if($j.ok -and $j.bridge -and $j.page -and $j.game){exit 0}else{exit 1} } catch { exit 1 }" >nul 2>&1
+exit /b %errorlevel%
+
+:kill_pidfile
+if not exist "%~1" exit /b 0
+set "KPID="
+for /f "usebackq tokens=*" %%a in ("%~1") do set "KPID=%%a"
+if not "%KPID%"=="" taskkill /PID %KPID% /T /F >nul 2>&1
+del /f /q "%~1" >nul 2>&1
+exit /b 0
 
 :rotate_log
 if not exist "%~1" exit /b 0
@@ -59,20 +68,27 @@ exit /b 0
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
     call :rotate_log "%BRIDGE_LOG%"
-    start "woc-bridge" /min cmd /c node "%REPO%\browser_bridge.cjs" >> "%BRIDGE_LOG%" 2^>^&1
+    start "woc-bridge" /min cmd /d /c ""node" "%REPO%\browser_bridge.cjs" >> "%BRIDGE_LOG%" 2^>^&1"
     ping -n 5 127.0.0.1 >nul
   )
 
   call :bridge_health
   if errorlevel 1 (
-    echo [%date% %time%] bridge not ready yet - skipping agent start >> "%LOG%"
+    set /a BRIDGE_BAD+=1
+    echo [%date% %time%] bridge not ready (health game=false) attempt=!BRIDGE_BAD! >> "%LOG%"
+    if !BRIDGE_BAD! GEQ 3 (
+      echo [%date% %time%] bridge unhealthy for 3 probes - restarting >> "%LOG%"
+      call :kill_pidfile "%BRIDGE_PID%"
+      set "BRIDGE_BAD=0"
+    )
     goto wait
   )
+  set "BRIDGE_BAD=0"
   call :pid_alive "%AGENT_PID%"
   if errorlevel 1 (
     echo [%date% %time%] starting play_autonomous >> "%LOG%"
     call :rotate_log "%AGENT_LOG%"
-    start "woc-agent" /min cmd /c cd /d %REPO%\python ^&^& set "PYTHONPATH=%REPO%\python" ^&^& "%PY%" -X faulthandler -m play_autonomous >> "%AGENT_LOG%" 2^>^&1
+    start "woc-agent" /min cmd /d /c "cd /d ""%REPO%\python"" && set ""PYTHONPATH=%REPO%\python"" && ""%PY%"" -X faulthandler -m play_autonomous >> ""%AGENT_LOG%"" 2>&1"
   )
 
   :wait

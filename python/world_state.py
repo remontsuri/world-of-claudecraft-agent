@@ -93,7 +93,8 @@ def build_world_state(info: Dict) -> Dict:
         quest_status = "ACTIVE" if any_incomplete else "READY_TO_TURN_IN"
 
     in_combat = bool(info.get("in_combat"))
-    danger = (hp_frac < 0.3) or in_combat
+    dead = bool(p.get("dead"))
+    danger = dead or (hp_frac < 0.3) or in_combat
 
     return {
         # bucket features (observations)
@@ -106,6 +107,7 @@ def build_world_state(info: Dict) -> Dict:
         "danger": danger,
         "distance_to_giver": distance_to_giver,
         "in_combat": in_combat,
+        "dead": dead,
         # reward counters (deltas computed by reward.outcome_reward)
         "kills": info.get("kills", 0),
         "xp": info.get("xp", 0),
