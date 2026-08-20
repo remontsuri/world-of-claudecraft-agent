@@ -15,10 +15,17 @@ No reward logic, no Sim edits, no PPO here.
 """
 
 import json
-import urllib.request
-import urllib.error
 import socket
-import http.client
+
+try:
+    import requests  # preferred: honest connect+read timeout, no urllib read hang (bpo-22870)
+    _HAVE_REQUESTS = True
+except Exception:  # pragma: no cover - only when requests is absent
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import http.client
+    _HAVE_REQUESTS = False
 
 BRIDGE_URL = "http://127.0.0.1:8791"
 
@@ -56,15 +63,36 @@ class BrowserEnv:
     # ---- bridge I/O ----
     def _post(self, payload: dict, timeout: float = 30.0) -> dict:
         """POST to the bridge and return the parsed response. The caller is
-        responsible for treating ok:false as a real failure (see _require)."""
+        responsible for treating ok:false as a real failure (see _require).
+
+        Uses `requests` when available: it enforces BOTH connect and read
+        timeouts honestly (urllib ignores the read-phase timeout on Windows,
+        bpo-22870, so a slow bridge reply hangs the process until faulthandler).
+        `Connection: close` forces the Node server to end the socket so the
+        client never blocks on a keep-alive that never delivers EOF.
+        """
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            BRIDGE_URL, data=data, headers={"content-type": "application/json"}
-        )
+        headers = {"content-type": "application/json", "Connection": "close"}
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, socket.timeout, TimeoutError, http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ConnectionError, OSError) as e:
+            if _HAVE_REQUESTS:
+                resp = requests.post(
+                    BRIDGE_URL, data=data, headers=headers,
+                    timeout=(5.0, float(timeout)),
+                )
+                return resp.json()
+            # fallback: http.client with explicit socket timeout on read phase
+            import http.client as _hc
+            parsed = urllib.parse.urlparse(BRIDGE_URL)
+            conn = _hc.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
+            try:
+                conn.sock.settimeout(float(timeout))
+            except Exception:
+                pass
+            conn.request("POST", parsed.path or "/", body=data, headers=headers)
+            with conn.getresponse() as r:
+                raw = r.read()
+            return json.loads(raw.decode("utf-8"))
+        except (requests.exceptions.RequestException if _HAVE_REQUESTS else Exception) as e:
             # Transport down (bridge not listening / CDP dead). This is infra,
             # not a game outcome — surface as BrowserBridgeError so Agent treats
             # it as ENV_ERROR and recovers, never as a false lesson or a bug.

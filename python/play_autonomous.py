@@ -217,6 +217,21 @@ def main():
         ws = build_world_state(info)
         return ws
 
+    # INIT RESPAWN: if the character is already dead (ghost / hp depleted) at
+    # startup, revive BEFORE the first step so the agent never begins a learning
+    # episode from a broken state. Without this the agent would call explore on a
+    # dead body, the bridge exploreWalk may stall, and faulthandler would kill it
+    # before the in-loop respawn-glue (which only runs AFTER a completed step).
+    try:
+        _p0 = (env._last_info or {}).get("player", {}) or {}
+        if _p0.get("dead") or _p0.get("hp", 1) <= 0:
+            print("[autonomous] init: character dead at startup -> respawning")
+            env.respawn()
+            m["respawns"] += 1
+    except Exception as e:
+        # respawn failure at init is infra, not a programming bug; log and continue
+        sys.stderr.write(f"[autonomous] init respawn failed (continuing): {type(e).__name__}: {e}\n")
+
     prev = snap(env._last_info)
     start = time.time()
 
