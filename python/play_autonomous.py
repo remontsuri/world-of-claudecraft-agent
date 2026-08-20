@@ -40,6 +40,12 @@ LOCK_PATH = os.path.join(os.path.dirname(__file__), "play_autonomous.lock")
 N_STEPS = int(os.environ.get("AUTONOMOUS_STEPS", "3000"))
 SAVE_EVERY = int(os.environ.get("SAVE_EVERY", "200"))
 WINDOW = int(os.environ.get("AUTONOMOUS_WINDOW", "500"))  # Level-4 windowed metrics
+# Frozen-eval cadence: every MEASURE_EVERY steps, run a MEASUREMENT step
+# (exploration_weight=0 -> no exploration bonus, learn=False -> no weight update).
+# This measures the CURRENT policy's choice probabilities without contaminating
+# them, so BEFORE/AFTER comparisons are valid (user audit 2026-08-20: the
+# exploration_weight=0 path existed in agent.step_no_learn but was never called).
+MEASURE_EVERY = int(os.environ.get("MEASURE_EVERY", "0"))  # 0 = disabled
 SEED = int(os.environ.get("AUTONOMOUS_SEED", "4242"))
 
 
@@ -195,7 +201,15 @@ def main():
 
     for i in range(N_STEPS):
         try:
-            rec = agent.step()
+            if MEASURE_EVERY > 0 and i > 0 and i % MEASURE_EVERY == 0:
+                # FROZEN EVAL: measure current policy WITHOUT learning (exploration
+                # bonus off, no weight update). The resulting verdict/reward still
+                # flow into metrics, but memory is untouched -> BEFORE/AFTER valid.
+                rec = agent.step_no_learn(exploration_weight=0.0)
+                rec = dict(rec)
+                rec["verdict"] = (rec.get("verdict") or "") + " [MEASURE]"
+            else:
+                rec = agent.step()
         except BrowserBridgeError:
             # Infra failure (bridge/CDP/HTTP down). Same category as ENV_ERROR:
             # recover by re-init'ing the env, keep learning. NOT a programming bug.
