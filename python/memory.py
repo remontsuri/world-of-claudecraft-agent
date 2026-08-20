@@ -136,7 +136,15 @@ class ExperienceStore:
             fd, tmp = tempfile.mkstemp(dir=d, prefix=".mem_", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    try:
+                        open(os.path.join(d, "_mem.log"), "a", encoding="utf-8").write("SAVE START %s\n" % time.time())
+                    except Exception:
+                        pass
                     json.dump(data, f, ensure_ascii=False, indent=1)
+                    try:
+                        open(os.path.join(d, "_mem.log"), "a", encoding="utf-8").write("SAVE DONE %s\n" % time.time())
+                    except Exception:
+                        pass
                 os.replace(tmp, self.path)  # atomic on Windows
             except Exception:
                 try:

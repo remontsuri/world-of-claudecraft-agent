@@ -68,7 +68,7 @@ exit /b 0
   if errorlevel 1 (
     echo [%date% %time%] starting bridge >> "%LOG%"
     call :rotate_log "%BRIDGE_LOG%"
-    start "woc-bridge" /min cmd /d /c ""node" "%REPO%\browser_bridge.cjs" >> "%BRIDGE_LOG%" 2^>^&1"
+    start "woc-bridge" cmd /d /c ""node" "%REPO%\browser_bridge.cjs" >> "%BRIDGE_LOG%" 2^>^&1"
     ping -n 5 127.0.0.1 >nul
   )
 
@@ -88,7 +88,8 @@ exit /b 0
   if errorlevel 1 (
     echo [%date% %time%] starting play_autonomous >> "%LOG%"
     call :rotate_log "%AGENT_LOG%"
-    start "woc-agent" /min cmd /d /c "cd /d ""%REPO%\python"" && set ""PYTHONPATH=%REPO%\python"" && ""%PY%"" -X faulthandler -m play_autonomous >> ""%AGENT_LOG%"" 2>&1"
+    set "PYTHONPATH=%REPO%\python"
+    start "woc-agent" "%PY%" -X faulthandler -m play_autonomous >> "%AGENT_LOG%" 2>&1
   )
 
   :wait

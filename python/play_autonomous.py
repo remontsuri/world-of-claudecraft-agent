@@ -127,7 +127,7 @@ def main():
     sys.excepthook = _excepthook
     try:
         import faulthandler as _fh
-        _fh.dump_traceback_later(120, exit=True, file=open(_crash_path, "a", encoding="utf-8"))
+        _fh.dump_traceback_later(15, exit=True, file=open(_crash_path, "a", encoding="utf-8"))
     except Exception:
         pass
 
