@@ -46,6 +46,22 @@ const FARSHORE_QUEST_TURNIN = {
 };
 const TICK_MS = 220;
 
+const fs = require('fs');
+const path = require('path');
+// WorldMemory JSON written by python/memory.py WorldMemory.remember_giver(). It is
+// the persistent source for "quest X -> turn-in NPC at (x,z)" — the agent learns
+// the giver at accept time (the live game does NOT expose giverId in sim.questLog).
+// FARSHORE_* static tables are only a fallback when this file is absent/empty.
+function loadWorldMemory() {
+  try {
+    const p = path.join(__dirname, 'python', 'world_memory.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (_) {
+    return null;
+  }
+}
+
 let page = null;
 let browser = null;
 
@@ -194,6 +210,21 @@ async function applyAction(idx, cmd) {
       // Calling sim.acceptQuest(questId) is the real API; a bare interact() does NOT
       // accept a quest in this build (that's why accept_quest was always inconclusive).
       const qid = (cmd && cmd.questId) || null;
+      // Capture the giver (NPC id + live position) so Python can persist it in
+      // WorldMemory as the turn-in location. The live game does NOT return giverId
+      // inside sim.questLog, so the agent must learn it HERE (it knows the NPC).
+      const npcId = (cmd && cmd.npcId) || null;
+      let giverPos = null;
+      if (npcId) {
+        giverPos = await safeEval((id) => {
+          const sim = window.__game.sim;
+          for (const e of sim.entities.values()) {
+            if (String(e.id) === String(id) && e.pos) return { x: e.pos.x, z: e.pos.z };
+          }
+          return null;
+        }, npcId).catch(() => null);
+      }
+      lastAccept = { questId: qid, giverId: npcId, giverPos };
       if (qid) {
         await safeEval((id) => { try { window.__game.sim.acceptQuest(String(id)); } catch (_) {} }, qid);
       } else {
@@ -473,19 +504,28 @@ async function snapshot() {
       in_combat: !!p.inCombat,
     };
   });
-  // Resolve quest turn-in NPC position on the NODE side (FARSHORE_* live here,
-  // not in the browser evaluate context). Prefer live entity pos, then static
-  // Farshore layout so the agent always knows where to walk to turn in, even
-  // when the NPC is far away and not loaded into sim.entities.
+  // Resolve quest turn-in NPC position on the NODE side. Priority:
+  //   1. live entity pos (already in q.turnInNpc, skipped above)
+  //   2. WorldMemory JSON (python/world_memory.json) — agent persists giver here
+  //      at accept time; this is the real persistent source for "quest X -> NPC".
+  //   3. FARSHORE_* static tables — fallback only (first run / unknown zone).
+  const wm = loadWorldMemory();
   if (r && r.quests) {
     for (const bucket of ['active', 'ready', 'done']) {
       for (const q of (r.quests[bucket] || [])) {
         if (q.turnInNpc) continue;
-        // npcPos (from live entities) is not available here; rely on static map.
-        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || null;
-        if (turnInId && FARSHORE_NPC_POS[turnInId]) {
-          q.turnInNpc = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
+        let pos = null;
+        // 2. WorldMemory (agent-acquired, persists across runs)
+        const wg = wm && wm.quest_givers && wm.quest_givers[q.id];
+        if (wg && wg.giver_pos) pos = { x: wg.giver_pos.x, z: wg.giver_pos.z };
+        // 3. FARSHORE static fallback
+        if (!pos) {
+          const turnInId = FARSHORE_QUEST_TURNIN[q.id] || null;
+          if (turnInId && FARSHORE_NPC_POS[turnInId]) {
+            pos = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
+          }
         }
+        if (pos) q.turnInNpc = pos;
       }
     }
   }
@@ -497,10 +537,31 @@ async function snapshot() {
 // ONE promise chain. A farm() holds the tab for ~17s; without this, a concurrent
 // raw_move/respawn from another caller would interleave and corrupt the world.
 let cmdQueue = Promise.resolve();
+// Last accept_quest result (questId/giverId/giverPos), surfaced to Python so it
+// can persist the turn-in NPC in WorldMemory (the game does not return giverId).
+let lastAccept = null;
 const server = http.createServer((req, res) => {
   // Health probe (start_ragent.bat does `HEAD /` expecting 200). Keep POST
   // for real commands; answer liveness with 200 so the launcher starts the agent.
   if (req.method === 'GET' || req.method === 'HEAD') {
+    const url = (req.url || '/').split('?')[0];
+    if (url === '/health') {
+      // Honest health: prove the bridge is actually driving a LIVE game tab,
+      // not just that the HTTP socket is open. Used by start_ragent.bat so it
+      // only starts the Python agent once the game is really reachable.
+      const health = { ok: true, bridge: true, page: false, game: false };
+      if (page) {
+        health.page = true;
+        try {
+          health.game = !!page.evaluate(
+            () => !!(window.__game && window.__game.sim && window.__game.sim.player));
+        } catch (_) { health.game = false; }
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(health));
+      return;
+    }
+    // simple liveness probe (back-compat)
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, alive: true }));
     return;
@@ -516,10 +577,14 @@ const server = http.createServer((req, res) => {
       if (cmd.action === 'step') {
         await applyAction(cmd.idx || 0, cmd);
         resp = { ok: true, info: await snapshot() };
+        // Surface the giver the agent just accepted from (if this step was accept_quest)
+        if (lastAccept && (cmd.idx === 2 || cmd.questId)) {
+          resp.giver = lastAccept;
+          lastAccept = null;
+        }
       } else if (cmd.action === 'navigate') {
         const arrived = await navigateToCoord(cmd.x, cmd.z, cmd.max_steps || 80);
         resp = { ok: true, arrived, info: await snapshot() };
-      } else if (cmd.action === 'snapshot') {
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'raw_move') {
         await safeEval((kind) => {

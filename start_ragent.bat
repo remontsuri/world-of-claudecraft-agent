@@ -63,11 +63,14 @@ tasklist /FI "PID eq %PID%" 2>nul | findstr /R /C:"\<%PID%\>" >nul
 if errorlevel 1 exit /b 1
 exit /b 0
 
-REM Is the bridge HTTP endpoint answering on :8791?
+REM Is the bridge HTTP endpoint answering on :8791 AND driving a live game?
+REM Honest health: GET /health must return game:true (window.__game present).
+REM A bare 200 on / is NOT enough — the bridge can be up while the tab is dead.
 :bridge_health
 set "BH="
-for /f "tokens=*" %%R in ('powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://127.0.0.1:8791/ -Method HEAD -TimeoutSec 2 -UseBasicParsing).StatusCode}catch{exit 1}" 2^>nul') do set "BH=%%R"
-if "%BH%"=="200" exit /b 0
+for /f "tokens=*" %%R in ('powershell -NoProfile -Command "try{(Invoke-WebRequest -Uri http://127.0.0.1:8791/health -TimeoutSec 2 -UseBasicParsing).Content}catch{exit 1}" 2^>nul') do set "BH=%%R"
+echo %BH% | findstr /C "\"game\":true" >nul
+if not errorlevel 1 exit /b 0
 exit /b 1
 
 REM Rotate a log if it exceeds MAX_LOG_SIZE (keep a single .bak).

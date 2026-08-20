@@ -222,3 +222,85 @@ class ExperienceStore:
                 continue
             out.setdefault(bucket, {})[action] = round(w, 3)
         return out
+
+
+# ---- World Memory: persistent quest-giver / vendor knowledge -----------------
+# SINGLE SOURCE OF TRUTH for "where does quest X get turned in" and "where is the
+# vendor". The live game does NOT expose sim.questDefs/sim.npcDefs, and the server
+# does not return giverId inside sim.questLog — so the agent must ACQUIRE this
+# knowledge at accept time (it knows the NPC + questId + NPC position) and persist
+# it. FARSHORE_* static tables in the bridge are only a FALLBACK when this memory
+# is empty (e.g. first run, or a zone with no prior knowledge).
+class WorldMemory:
+    def __init__(self, path: Optional[str] = None):
+        self.path = path or os.path.join(os.path.dirname(__file__), "world_memory.json")
+        # quest_id -> {giver_id, giver_pos:{x,z}, zone, last_seen}
+        self.quest_givers: Dict[str, dict] = {}
+        # npc_id -> {pos:{x,z}, last_seen}
+        self.vendors: Dict[str, dict] = {}
+        self._load()
+
+    def _load(self):
+        if not os.path.exists(self.path):
+            return
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.quest_givers = data.get("quest_givers", {}) or {}
+            self.vendors = data.get("vendors", {}) or {}
+        except Exception:
+            return  # unreadable -> fresh world memory
+
+    def save(self):
+        try:
+            data = {
+                "quest_givers": self.quest_givers,
+                "vendors": self.vendors,
+            }
+            d = os.path.dirname(os.path.abspath(self.path)) or "."
+            fd, tmp = tempfile.mkstemp(dir=d, prefix=".wm_", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+                os.replace(tmp, self.path)  # atomic on Windows
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        except Exception:
+            traceback.print_exc()
+
+    def remember_giver(self, quest_id: str, giver_id: str, giver_pos: dict, zone: str = "farshore"):
+        """Record (or refresh) the turn-in NPC for a quest."""
+        if not quest_id:
+            return
+        self.quest_givers[str(quest_id)] = {
+            "giver_id": str(giver_id) if giver_id else None,
+            "giver_pos": {"x": giver_pos.get("x"), "z": giver_pos.get("z")}
+                        if isinstance(giver_pos, dict) else None,
+            "zone": zone,
+            "last_seen": time.time(),
+        }
+
+    def giver_pos(self, quest_id: str) -> Optional[dict]:
+        """Return {x,z} for the turn-in NPC of a quest, or None if unknown."""
+        g = self.quest_givers.get(str(quest_id))
+        if g and g.get("giver_pos"):
+            return g["giver_pos"]
+        return None
+
+    def remember_vendor(self, npc_id: str, pos: dict, zone: str = "farshore"):
+        if not npc_id:
+            return
+        self.vendors[str(npc_id)] = {
+            "pos": {"x": pos.get("x"), "z": pos.get("z")} if isinstance(pos, dict) else None,
+            "zone": zone,
+            "last_seen": time.time(),
+        }
+
+    def vendor_pos(self, npc_id: str) -> Optional[dict]:
+        v = self.vendors.get(str(npc_id))
+        if v and v.get("pos"):
+            return v["pos"]
+        return None

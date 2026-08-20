@@ -47,6 +47,7 @@ class BrowserEnv:
         self.seed = seed
         self._last_info = None
         self._step = 0
+        self.last_giver = None  # surfaced by bridge on accept_quest (see step())
         self.base = BrowserBase(self)  # quest_skill uses env.base.step(ACT_FORWARD) for explore
         # prime: fetch an initial observation so _last_info is never None
         self._last_info = self._require({"action": "snapshot"}).get("info", {})
@@ -121,11 +122,21 @@ class BrowserEnv:
                     qid = (nq[0] if isinstance(nq, (list, tuple)) else nq)
             if qid:
                 payload["questId"] = qid
+            # giver id (NPC entity id) — the bridge returns its live position so
+            # Python can persist it in WorldMemory as the turn-in location.
+            npc = ctx.get("npc") or {}
+            nid = npc.get("id") or ctx.get("npcId")
+            if nid:
+                payload["npcId"] = str(nid)
         resp = self._post(payload)
         if not resp.get("ok", False):
             raise BrowserBridgeError(f"bridge step failed: {resp.get('error')}")
         info = resp.get("info", {})
         self._last_info = info
+        # giver metadata surfaced by the bridge on accept_quest (questId/giverId/
+        # giverPos) — Agent persists it in WorldMemory. Stored on the env so the
+        # caller can read it after the step without re-parsing the response.
+        self.last_giver = resp.get("giver")
         self._step += 1
         done = bool(info.get("player", {}).get("dead"))
         return None, 0.0, done, False, info

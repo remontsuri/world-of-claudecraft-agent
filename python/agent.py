@@ -27,7 +27,7 @@ from browser_env import BrowserBridgeError
 from hierarchical_env import HierarchicalWoWEnv, ACT_FORWARD, ACT_TURN_LEFT, SKILLS
 from verifiers_py import verify_skill
 from policy import GoalManager
-from memory import ExperienceStore
+from memory import ExperienceStore, _bucket, WorldMemory
 from reward import outcome_reward
 from world_state import build_world_state
 import quest_skill
@@ -50,9 +50,11 @@ def _world_state_dict(info: dict) -> dict:
 
 
 class Agent:
-    def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None):
+    def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None,
+                 world_mem: "WorldMemory" = None):
         self.env = env
         self.mem = memory
+        self.world_mem = world_mem or WorldMemory()
         self.policy = GoalManager(memory, temperature=1.2, seed=seed)
         self.cap = QuestCapability(env)
 
@@ -98,6 +100,19 @@ class Agent:
                 before = info_before
                 self.env.step(idx, ctx)
                 after = self.env._last_info
+                # Persist the turn-in NPC in WorldMemory when we just accepted a quest.
+                # The live game does NOT return giverId in sim.questLog, so this is
+                # the ONLY place the agent acquires "quest X -> NPC Y at (x,z)".
+                # FARSHORE_* static tables in the bridge are only a fallback when this
+                # memory is empty. (Acceptance test #1 depends on this.)
+                if action == "accept_quest" and getattr(self.env, "last_giver", None):
+                    lg = self.env.last_giver
+                    qid = lg.get("questId") or (ctx.get("quest") or {}).get("id") or ctx.get("questId")
+                    gid = lg.get("giverId")
+                    gpos = lg.get("giverPos")
+                    if qid and gid:
+                        self.world_mem.remember_giver(str(qid), str(gid), gpos or {})
+                        self.world_mem.save()
                 # verifier (objective truth)
                 handle = None
                 if action == "turn_in_quest" and ctx.get("quest"):
@@ -108,9 +123,16 @@ class Agent:
                 v = verify_skill(action, {"before": before, "after": after, "handle": handle})
                 verdict = v if isinstance(v, str) else str(v)
                 return after, verdict, "OK"
-        except Exception:
-            # server crash / infra failure — treat as ENV_ERROR, NOT a game outcome
+        except BrowserBridgeError:
+            # Infra failure (bridge/CDP/HTTP down or rejected the request) — NOT a
+            # game outcome, NOT a programming bug. Treat as ENV_ERROR so the loop
+            # recovers (reconnect/restart) without poisoning memory with a false
+            # lesson. This is the ONLY exception _run_skill swallows.
             return info_before, "FAILURE", "ENV_ERROR"
+        # Any OTHER exception (NameError/KeyError/TypeError/AttributeError/
+        # AssertionError/RuntimeError from policy/skill/reward) is a PROGRAMMING
+        # BUG. It MUST propagate — crash loudly with a traceback so it is fixed,
+        # never masked as ENV_ERROR (which would hide a broken agent for hours).
 
     def step(self) -> dict:
         """One full learning-cycle iteration."""
@@ -298,6 +320,12 @@ class Agent:
             # pass the giver ctx so env.step(2) issues acceptQuest(questId),
             # not a bare interact (the online bridge requires the questId).
             self.env.step(2, {"npc": giver, "questId": qid})
+            # Persist the turn-in NPC (accept_quest surfaced it via env.last_giver).
+            lg = getattr(self.env, "last_giver", None)
+            if lg and lg.get("questId"):
+                self.world_mem.remember_giver(str(lg["questId"]), str(lg.get("giverId")),
+                                              lg.get("giverPos") or {})
+                self.world_mem.save()
             self.env._last_info = self.env._last_info
 
 

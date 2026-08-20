@@ -29,9 +29,9 @@ import time
 import atexit
 from collections import Counter, defaultdict
 
-from browser_env import BrowserEnv
+from browser_env import BrowserEnv, BrowserBridgeError
 from agent import Agent
-from memory import ExperienceStore, _bucket
+from memory import ExperienceStore, _bucket, WorldMemory
 from world_state import build_world_state
 
 EXP_PATH = os.path.join(os.path.dirname(__file__), "experience_autonomous.json")
@@ -137,16 +137,45 @@ def main():
         sys.exit(3)
     agent = Agent(env, mem, seed=SEED * 3 + 7)
 
-    # metrics
+    # WorldMemory (persistent quest-giver / vendor knowledge) — used to attribute
+    # return/turn-in navigation to a remembered giver vs a fallback.
+    world_mem = WorldMemory()
+
+    # metrics — extended per user audit (2026-08-20). These separate real
+    # long-horizon autonomy from short-loop survival, and are the acceptance
+    # criteria for the self-learning stage (esp. quest_turnin_rate).
     m = {
-    "steps": 0, "kills": 0, "quests_accepted": 0, "quests_done": 0,
-    "deaths": 0, "xp": 0, "copper": 0,
-    "unique_npcs": set(), "explored_cells": set(),
-    "action_counts": Counter(), "env_errors": 0,
-    "neg_lessons": 0, "recovery_after_neg": 0,
-    "repeated_mistakes": 0,
-    "win_reward": 0.0, "win_deaths": 0, "win_repeat": 0,
-    "win_actions": Counter(), "win_steps": 0, "deaths_prev": 0,
+        "steps": 0, "kills": 0, "quests_accepted": 0, "quests_done": 0,
+        "deaths": 0, "xp": 0, "copper": 0,
+        "unique_npcs": set(), "explored_cells": set(),
+        "action_counts": Counter(), "env_errors": 0,
+        "neg_lessons": 0, "recovery_after_neg": 0,
+        "repeated_mistakes": 0,
+        "win_reward": 0.0, "win_deaths": 0, "win_repeat": 0,
+        "win_actions": Counter(), "win_steps": 0, "deaths_prev": 0,
+        # --- extended autonomy metrics ---
+        "quests_completed": 0,        # objectives done, awaiting turn-in
+        "quests_turned_in": 0,        # actually turned in (verifier SUCCESS)
+        "quest_turnin_failures": 0,    # turn_in attempted but FAILURE/INCONCLUSIVE
+        "giver_memory_hits": 0,       # return/turn-in used a remembered giver
+        "giver_memory_misses": 0,      # return/turn-in had no remembered giver (fallback)
+        "vendors_found": 0,            # distinct vendor NPCs ever seen
+        "vendor_navigation_success": 0,
+        "items_sold": 0,               # sell_junk SUCCESS (inventory shrank)
+        "sell_failures": 0,
+        "navigation_success": 0,       # return/turn_in arrived (SUCCESS)
+        "navigation_stuck": 0,         # return/turn_in PARTIAL repeatedly (no progress)
+        "navigation_recovery": 0,      # stuck -> later arrived
+        "programming_errors": 0,       # FATAL crash from a code bug (should be 0)
+        "bridge_errors": 0,            # ENV_ERROR recoveries (infra)
+        "goal_switches": 0,            # policy changed action category vs prev step
+        "goal_completed": 0,           # a goal (quest) reached DONE
+        "episodes": 1,                 # restarts count as new episodes
+        "respawns": 0,
+        "reward_mean": 0.0,            # running mean over steps
+        "reward_window": 0.0,          # last-window sum (alias of win_reward)
+        "prev_goal": None,
+        "_last_turnin_partial": False,
     }
     # track per-bucket last action + whether it was negative, to measure recovery
     last_bucket_action = {}
@@ -167,9 +196,12 @@ def main():
     for i in range(N_STEPS):
         try:
             rec = agent.step()
-        except Exception:
+        except BrowserBridgeError:
+            # Infra failure (bridge/CDP/HTTP down). Same category as ENV_ERROR:
+            # recover by re-init'ing the env, keep learning. NOT a programming bug.
             m["env_errors"] += 1
-            # restart a fresh env if the server died
+            m["bridge_errors"] += 1
+            m["episodes"] += 1
             try:
                 env.close()
             except Exception:
@@ -179,11 +211,29 @@ def main():
             agent = Agent(env, mem, seed=SEED * 3 + 7 + i)
             rec = {"action": "RESTART", "verdict": "ENV_ERROR", "outcome_kind": "ENV_ERROR",
                    "reward": 0.0, "ws_before": prev, "ws_after": snap(env._last_info)}
+        except Exception:
+            # PROGRAMMING BUG (NameError/KeyError/TypeError/AssertionError/...).
+            # Must NOT be masked as a silent restart — crash loudly with traceback
+            # so the broken code is found (acceptance test #3). Flush the loop.
+            m["programming_errors"] += 1
+            traceback.print_exc()
+            sys.stderr.write(
+                f"[autonomous] FATAL programming error at step {i}: aborting run "
+                f"(memory saved at {EXP_PATH})\n"
+            )
+            mem.save()
+            try:
+                if os.path.exists(LOCK_PATH):
+                    os.remove(LOCK_PATH)
+            except OSError:
+                pass
+            sys.exit(1)
 
         # respawn glue: if the character died, release spirit + revive so the
         # loop keeps collecting honest signal (does NOT mutate the model)
         if rec["ws_after"].get("hp_frac", 1.0) <= 0.0 or rec.get("ws_after", {}).get("deaths", 0) > m["deaths"]:
             env.respawn()
+            m["respawns"] += 1
             rec["ws_after"] = snap(env._last_info)
 
         ws = rec["ws_after"]
@@ -197,9 +247,67 @@ def main():
         m["kills"] = ws.get("kills", m["kills"])
         # quests
         active = info.get("quests", {}).get("active") or []
+        ready = info.get("quests", {}).get("ready") or []
         done = info.get("quests", {}).get("done") or []
-        m["quests_accepted"] = max(m["quests_accepted"], len(active) + len(done))
+        m["quests_accepted"] = max(m["quests_accepted"], len(active) + len(ready) + len(done))
         m["quests_done"] = max(m["quests_done"], len(done))
+        m["quests_completed"] = max(m["quests_completed"], len(ready) + len(done))
+        # vendors: distinct vendor NPCs ever seen nearby
+        for e in (info.get("nearby") or []):
+            if (e.get("kind") == "npc" or e.get("type") == "npc") and \
+               (e.get("vendor") or e.get("vendorItems") or e.get("isVendor")):
+                m["unique_npcs"].add("vendor:" + str(e.get("id") or e.get("name")))
+        m["vendors_found"] = len([u for u in m["unique_npcs"] if str(u).startswith("vendor:")])
+        # --- event counters from this step's action/verdict ---
+        verdict = rec["verdict"]
+        prev_inv = (rec["ws_before"] or {}).get("inv_slots", 0)
+        cur_inv = ws.get("inv_slots", 0)
+        if a == "accept_quest" and verdict in ("SUCCESS", "INCONCLUSIVE"):
+            # accept counted via quests_accepted growth; track turn-in outcomes below
+            pass
+        if a == "turn_in_quest":
+            if verdict == "SUCCESS":
+                m["quests_turned_in"] += 1
+                m["navigation_success"] += 1
+            elif verdict in ("FAILURE", "INCONCLUSIVE"):
+                m["quest_turnin_failures"] += 1
+                if verdict == "INCONCLUSIVE":
+                    m["navigation_stuck"] += 1
+                m["_last_turnin_partial"] = (verdict == "INCONCLUSIVE")
+            # attribute to remembered giver (WorldMemory) vs fallback
+            qid = (rec.get("ws_after", {}) or {}).get("quest_status")
+            if world_mem.giver_pos(str((active + ready + done and (active + ready + done)[0].get("id", "")) or "")):
+                m["giver_memory_hits"] += 1
+            else:
+                m["giver_memory_misses"] += 1
+        if a == "return_to_giver":
+            if verdict == "SUCCESS":
+                m["navigation_success"] += 1
+                if m["_last_turnin_partial"]:
+                    m["navigation_recovery"] += 1
+            elif verdict == "PARTIAL":
+                m["navigation_stuck"] += 1
+            if world_mem.giver_pos(str((active + ready + done and (active + ready + done)[0].get("id", "")) or "")):
+                m["giver_memory_hits"] += 1
+            else:
+                m["giver_memory_misses"] += 1
+        if a == "sell_junk":
+            if verdict == "SUCCESS":
+                m["items_sold"] += 1
+                m["vendor_navigation_success"] += 1
+            elif verdict in ("FAILURE", "INCONCLUSIVE"):
+                m["sell_failures"] += 1
+        # goal switch: policy changed high-level intent vs previous step
+        goal_cat = a
+        if m["prev_goal"] is not None and goal_cat != m["prev_goal"]:
+            m["goal_switches"] += 1
+        m["prev_goal"] = goal_cat
+        # goal completed: a quest reached DONE this step
+        if len(done) > m.get("_done_prev", 0):
+            m["goal_completed"] += (len(done) - m.get("_done_prev", 0))
+        m["_done_prev"] = len(done)
+        # running reward mean
+        m["reward_mean"] = (m["reward_mean"] * (m["steps"] - 1) + rec["reward"]) / m["steps"]
         # exploration
         cell = cell_of(info.get("player_pos"))
         m["explored_cells"].add(cell)
@@ -288,15 +396,25 @@ def main():
 
 def _summary(m, i, start, logf, final=False):
     el = time.time() - start
+    # главный показатель долгосрочной автономности
+    qtr = (m["quests_turned_in"] / m["quests_completed"]) if m["quests_completed"] else 0.0
+    gm_hit = m["giver_memory_hits"]
+    gm_miss = m["giver_memory_misses"]
+    gm_rate = (gm_hit / (gm_hit + gm_miss)) if (gm_hit + gm_miss) else 0.0
     msg = (f"\n=== {'FINAL' if final else f'step {i}'} autonomous summary "
            f"(t={el:.0f}s, {m['steps']} steps) ===\n"
            f"  kills={m['kills']} quests_accepted={m['quests_accepted']} "
-           f"quests_done={m['quests_done']} deaths={m['deaths']}\n"
+           f"quests_completed={m['quests_completed']} quests_turned_in={m['quests_turned_in']}\n"
+           f"  QUEST_TURNIN_RATE={qtr:.2%}  goal_completed={m['goal_completed']} deaths={m['deaths']} respawns={m['respawns']}\n"
            f"  xp={m['xp']} copper={m['copper']} explored_cells={len(m['explored_cells'])} "
            f"unique_npcs={len(m['unique_npcs'])} env_errors={m['env_errors']}\n"
-           f"  actions={dict(m['action_counts'])}\n"
+           f"  giver_memory: hits={gm_hit} misses={gm_miss} rate={gm_rate:.0%}\n"
+           f"  vendors_found={m['vendors_found']} items_sold={m['items_sold']} sell_failures={m['sell_failures']}\n"
+           f"  nav_success={m['navigation_success']} nav_stuck={m['navigation_stuck']} nav_recovery={m['navigation_recovery']}\n"
+           f"  quest_turnin_failures={m['quest_turnin_failures']} programming_errors={m['programming_errors']} bridge_errors={m['bridge_errors']} episodes={m['episodes']}\n"
            f"  neg_lessons={m['neg_lessons']} repeated_mistakes={m['repeated_mistakes']} "
-           f"recovery_after_neg={m['recovery_after_neg']}\n")
+           f"recovery_after_neg={m['recovery_after_neg']} goal_switches={m['goal_switches']}\n"
+           f"  reward_mean={m['reward_mean']:+.3f} actions={dict(m['action_counts'])}\n")
     print(msg)
     if logf is not None:
         logf.write(msg + "\n")
