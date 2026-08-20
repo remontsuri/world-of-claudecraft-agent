@@ -73,15 +73,31 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // ---- safe page.evaluate with auto-reconnect ----
 async function safeEval(fn, ...args) {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       if (!page) throw new Error('no page');
       try { await page.bringToFront(); } catch (_) {}
       return await page.evaluate(fn, ...args);
     } catch (e) {
       console.error('[bridge] eval error (attempt ' + attempt + '):', e.message);
-      await reconnect();
+      // The game tab may have SPA-reloaded (respawn / character switch), leaving
+      // the cached `page` pointing at a destroyed execution context. Re-acquire a
+      // FRESH page handle from the browser instead of reusing the stale one.
+      try { page = await freshPage(); } catch (_) {}
+      if (!page) { try { await reconnect(); } catch (_) {} }
     }
+  }
+  return null;
+}
+
+// Re-acquire the live game tab handle from the browser (never reuse a cached one
+// that may point at a destroyed execution context after a reload/character swap).
+async function freshPage() {
+  if (!browser) browser = await connect({ browserURL: CDP });
+  const pages = await browser.pages();
+  for (const p of pages) {
+    const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+    if (u.includes('worldofclaudecraft')) return p;
   }
   return null;
 }
