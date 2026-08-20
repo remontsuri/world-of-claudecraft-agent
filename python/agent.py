@@ -63,7 +63,7 @@ class Agent:
         try:
             if action == "return_to_giver":
                 # atomic: navigate back to the turn-in NPC (short nav, env-safe)
-                res = quest_skill.return_to_giver(self.env, ctx)
+                res = quest_skill.return_to_giver(self.env, ctx, self.world_mem)
                 after = self.env._last_info
                 verdict = "SUCCESS" if res == "SUCCESS" else "INCONCLUSIVE"
                 return after, verdict, "OK"

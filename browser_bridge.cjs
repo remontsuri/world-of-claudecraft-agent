@@ -48,7 +48,7 @@ async function releaseInputsAndExit(code) {
 process.on('SIGTERM', () => { releaseInputsAndExit(0); });
 process.on('SIGINT', () => { releaseInputsAndExit(0); });
 
-console.error('[bridge] starting on port', PORT);
+console.error('[bridge] starting on port', 8791);
 
 const CDP = 'http://127.0.0.1:9222';
 const PORT = 8791;
@@ -656,7 +656,11 @@ const server = http.createServer((req, res) => {
       let resp = { ok: false };
       try {
         const cmd = JSON.parse(body || '{}');
-      if (cmd.action === 'step') {
+      if (cmd.action === 'snapshot') {
+        // Agent primes its first observation with POST {action:'snapshot'}
+        // (browser_env.py __init__). Return the live game snapshot.
+        resp = { ok: true, info: await snapshot() };
+      } else if (cmd.action === 'step') {
         await applyAction(cmd.idx || 0, cmd);
         resp = { ok: true, info: await snapshot() };
         // Surface the giver the agent just accepted from (if this step was accept_quest)

@@ -81,7 +81,7 @@ RETURN_STEP_BUDGET = 80  # one leg per call -> each call is measurable, but larg
 
 
 
-def return_to_giver(env, ctx: dict) -> str:
+def return_to_giver(env, ctx: dict, world_mem=None) -> str:
     """ONE SHORT leg toward the turn-in NPC. Atomic, measurable, non-terminal.
 
     Deliberately NOT "walk all the way back". Per user 2026-08-17: the agent
@@ -102,22 +102,37 @@ def return_to_giver(env, ctx: dict) -> str:
     q = ctx.get("quest") or cap.find_active_quest()
     if q is None:
         return "FAILURE"
-    tNpc = q.get("turnInNpc") or {}
-    if tNpc.get("x") is None:
+    qid = q.get("id") or q.get("questId")
+
+    # Giver position priority (per audit 2026-08-20):
+    #   1. Persistent WorldMemory (learned at accept time) — PRIMARY source.
+    #      The live game does NOT expose giverId/turnInNpc reliably in sim.questLog,
+    #      so we must NOT depend on the snapshot for the turn-in location.
+    #   2. Live snapshot turnInNpc — fallback when memory has no entry yet.
+    #   FARSHORE static tables live in browser_bridge.cjs and are only consulted
+    #   there when the NPC is not loaded into sim.entities; they are NOT read here.
+    giver_pos = None
+    if world_mem is not None and qid:
+        giver_pos = world_mem.giver_pos(qid)
+    if giver_pos is None:
+        tNpc = q.get("turnInNpc") or {}
+        if tNpc.get("x") is not None:
+            giver_pos = {"x": tNpc["x"], "z": tNpc["z"]}
+    if giver_pos is None or giver_pos.get("x") is None:
         return "FAILURE"
 
     px, pz = env._last_info.get("player_pos", [0, 0])
-    d0 = ((tNpc["x"] - px) ** 2 + (tNpc["z"] - pz) ** 2) ** 0.5
+    d0 = ((giver_pos["x"] - px) ** 2 + (giver_pos["z"] - pz) ** 2) ** 0.5
 
     # Navigate DIRECTLY toward the turn-in NPC (giver). We deliberately ignore the
     # server's navPath waypoints: in this environment those waypoints can point
     # sideways/away from the giver, so following them made return_to_giver INCREASE
     # distance (measured M3 Δdist = +61 for budget=80). Going straight at the giver
     # is the honest "walk back" the Policy is supposed to learn is useful.
-    arrived = env._navigate_to_coord(tNpc["x"], tNpc["z"], max_steps=RETURN_STEP_BUDGET)
+    arrived = env._navigate_to_coord(giver_pos["x"], giver_pos["z"], max_steps=RETURN_STEP_BUDGET)
 
     px2, pz2 = env._last_info.get("player_pos", [0, 0])
-    d1 = ((tNpc["x"] - px2) ** 2 + (tNpc["z"] - pz2) ** 2) ** 0.5
+    d1 = ((giver_pos["x"] - px2) ** 2 + (giver_pos["z"] - pz2) ** 2) ** 0.5
     if d1 < 6:
         return "SUCCESS"
     # Mid-chain: the leg ran but the giver is not reached yet. reward.py scores
