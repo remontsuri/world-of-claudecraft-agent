@@ -264,9 +264,13 @@ def main():
                 pass
             sys.exit(1)
 
-        # respawn glue: if the character died, release spirit + revive so the
-        # loop keeps collecting honest signal (does NOT mutate the model)
-        if rec["ws_after"].get("hp_frac", 1.0) <= 0.0 or rec.get("ws_after", {}).get("deaths", 0) > m["deaths"]:
+        # respawn glue: if the character died (hp depleted OR stuck as a ghost
+        # with dead:true but full hp), release spirit + revive so the loop keeps
+        # collecting honest signal (does NOT mutate the model). The game reports
+        # dead:true with hp refilled after death, so hp_frac<=0 alone misses it.
+        _ws = rec.get("ws_after", {}) or {}
+        _dead = _ws.get("dead") or (env._last_info.get("player", {}) or {}).get("dead")
+        if _ws.get("hp_frac", 1.0) <= 0.0 or _dead or _ws.get("deaths", 0) > m["deaths"]:
             env.respawn()
             m["respawns"] += 1
             rec["ws_after"] = snap(env._last_info)
