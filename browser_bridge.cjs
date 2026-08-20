@@ -15,6 +15,40 @@
 
 const { connect } = require('puppeteer-core');
 const http = require('http');
+const fs = require('fs');
+
+process.on('uncaughtException', (e) => {
+  try { fs.writeFileSync('bridge_crash.txt', 'uncaughtException: ' + (e && e.stack || e) + '\n'); } catch (_) {}
+});
+process.on('unhandledRejection', (e) => {
+  try { fs.writeFileSync('bridge_crash.txt', 'unhandledRejection: ' + (e && e.stack || e) + '\n'); } catch (_) {}
+});
+process.on('exit', (code) => {
+  try { fs.writeFileSync('bridge_crash.txt', 'exit code=' + code + ' at ' + new Date().toISOString() + '\n'); } catch (_) {}
+});
+
+// CRITICAL: on shutdown (SIGTERM/SIGINT) release ALL held inputs in the game so
+// the character does NOT keep moving/spinning after the bridge dies. The game
+// does not auto-clear controller state on client disconnect, so a dead bridge
+// would leave the character running in circles -> looks like a bot -> ban risk.
+// SIGTERM is what the supervisor sends; we stop the character, then exit.
+// (SIGKILL cannot be trapped — but the supervisor uses SIGTERM, see exit code 1.)
+async function releaseInputsAndExit(code) {
+  try {
+    if (!browser) browser = await connect({ browserURL: CDP });
+    const pages = await browser.pages();
+    for (const p of pages) {
+      const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+      if (!u.includes('worldofclaudecraft')) continue;
+      try { await p.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} }); } catch (_) {}
+    }
+  } catch (_) {}
+  process.exit(code);
+}
+process.on('SIGTERM', () => { releaseInputsAndExit(0); });
+process.on('SIGINT', () => { releaseInputsAndExit(0); });
+
+console.error('[bridge] starting on port', PORT);
 
 const CDP = 'http://127.0.0.1:9222';
 const PORT = 8791;
@@ -46,7 +80,6 @@ const FARSHORE_QUEST_TURNIN = {
 };
 const TICK_MS = 220;
 
-const fs = require('fs');
 const path = require('path');
 // WorldMemory JSON written by python/memory.py WorldMemory.remember_giver(). It is
 // the persistent source for "quest X -> turn-in NPC at (x,z)" — the agent learns
@@ -92,12 +125,30 @@ async function safeEval(fn, ...args) {
 
 // Re-acquire the live game tab handle from the browser (never reuse a cached one
 // that may point at a destroyed execution context after a reload/character swap).
+// Picks the FIRST tab whose execution context actually has a live player — this
+// avoids grabbing a stale/closed tab whose window.__game is empty or holds an old
+// character. (A simple url match is not enough: after a character switch there can
+// be two worldofclaudecraft tabs, one dead.)
 async function freshPage() {
   if (!browser) browser = await connect({ browserURL: CDP });
-  const pages = await browser.pages();
+  let pages;
+  try {
+    pages = await browser.pages();
+  } catch (_) {
+    // stale CDP connection (browser was restarted / tab reloaded) -> reconnect
+    browser = null;
+    browser = await connect({ browserURL: CDP });
+    pages = await browser.pages();
+  }
   for (const p of pages) {
     const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
-    if (u.includes('worldofclaudecraft')) return p;
+    if (!u.includes('worldofclaudecraft')) continue;
+    try {
+      const live = await p.evaluate(() =>
+        !!(window.__game && window.__game.sim && window.__game.sim.player &&
+           typeof window.__game.sim.player.level === 'number'));
+      if (live) return p;
+    } catch (_) { /* context dead, try next */ }
   }
   return null;
 }
@@ -418,15 +469,30 @@ async function exploreWalk(steps) {
 }
 
 async function snapshot() {
-  // Always re-resolve the live game tab before reading — the SPA can navigate
-  // and the cached `page` can go stale (window.__game undefined -> empty nearby).
-  // reconnect() is cheap and only reassigns `page` if needed.
-  try { if (!page || !(await safeEval(() => !!(window.__game && window.__game.sim && window.__game.sim.player)))) await reconnect(); } catch (_) {}
-  // Ensure the game tab is focused — without this, page.evaluate can run in a
-  // stale context where window.__game.sim entities lack questIds (observed:
-  // direct eval with bringToFront sees full questIds, bridge without it sees []).
-  try { if (page) await page.bringToFront(); } catch (_) {}
-  const r = await safeEval(() => {
+  // UNCONDITIONAL fresh page handle. The SPA can navigate / the character can
+  // switch, which destroys the cached execution context and leaves a STALE
+  // `window.__game` (wrong/old character). Re-resolving the live tab every call
+  // is the only correct fix — checking "player empty or not" would miss the case
+  // where the stale page shows a DIFFERENT valid-looking character. browser.pages()
+  // is a cheap CDP target-list call (ms), not a hot-path bottleneck at 4Hz.
+  const cur = await freshPage();
+  if (!cur) return { ok: false, error: 'no game tab', _dbg: { freshFound: false } };
+  let curUrl = '?';
+  try { curUrl = (typeof cur.url === 'function') ? cur.url() : (cur.url || '?'); } catch (_) {}
+  try { await cur.bringToFront(); } catch (_) {}
+  async function ev(fn, ...a) {
+    // single handle for the whole snapshot call -> no cross-evaluate desync
+    try { return await cur.evaluate(fn, ...a); } catch (e) {
+      console.error('[bridge] snapshot eval error:', e.message);
+      return null;
+    }
+  }
+  const alive = await ev(() => !!(window.__game && window.__game.sim && window.__game.sim.player));
+  if (!alive) {
+    const hasGame = await ev(() => (typeof window.__game));
+    return { ok: false, error: 'game not ready', _dbg: { freshFound: true, curUrl, alive: false, typeofGame: hasGame } };
+  }
+  const r = await ev(() => {
     const g = (window).__game, sim = g.sim, p = sim.player;
     const nearby = [];
     for (const e of sim.entities.values()) {
@@ -545,7 +611,7 @@ async function snapshot() {
       }
     }
   }
-  return r || {};
+  return { ok: true, info: r || {}, _dbg: { rIsNull: r === null, rType: typeof r, playerKeys: r && r.player ? Object.keys(r.player) : null, nearbyLen: r && r.nearby ? r.nearby.length : null } };
 }
 
 // ---- HTTP server ----
