@@ -733,6 +733,14 @@ async function snapshot() {
   return { ok: true, info: r || {}, _dbg: { rIsNull: r === null, rType: typeof r, playerKeys: r && r.player ? Object.keys(r.player) : null, nearbyLen: r && r.nearby ? r.nearby.length : null } };
 }
 
+// Return ONLY the inner info object from snapshot() (no {ok,info,_dbg} wrapper),
+// so command handlers can do `info: await snapshotInfo()` and the Python client
+// receives the flat world state (player/nearby/quests) directly in resp.info.
+async function snapshotInfo() {
+  const s = await snapshot();
+  return (s && s.info) || {};
+}
+
 // ---- HTTP server ----
 // Command serialization: all mutations to the single live game tab run through
 // ONE promise chain. A farm() holds the tab for ~17s; without this, a concurrent
@@ -778,10 +786,10 @@ const server = http.createServer(async (req, res) => {
       if (cmd.action === 'snapshot') {
         // Agent primes its first observation with POST {action:'snapshot'}
         // (browser_env.py __init__). Return the live game snapshot.
-        resp = { ok: true, info: await snapshot() };
+        resp = { ok: true, info: await snapshotInfo() };
       } else if (cmd.action === 'step') {
         await applyAction(cmd.idx || 0, cmd);
-        resp = { ok: true, info: await snapshot() };
+        resp = { ok: true, info: await snapshotInfo() };
         // Surface the giver the agent just accepted from (if this step was accept_quest)
         if (lastAccept && (cmd.idx === 2 || cmd.questId)) {
           resp.giver = lastAccept;
@@ -789,7 +797,7 @@ const server = http.createServer(async (req, res) => {
         }
       } else if (cmd.action === 'navigate') {
         const arrived = await navigateToCoord(cmd.x, cmd.z, cmd.max_steps || 80);
-        resp = { ok: true, arrived, info: await snapshot() };
+        resp = { ok: true, arrived, info: await snapshotInfo() };
       } else if (cmd.action === 'raw_move') {
         await safeEval((kind) => {
           try { window.__game.controller.stop(); } catch (_) {}
@@ -799,7 +807,7 @@ const server = http.createServer(async (req, res) => {
           else if (kind === 'turnRight') window.__game.controller.move({ turnRight: true });
         }, cmd.kind);
         await sleep(TICK_MS);
-        resp = { ok: true, info: await snapshot() };
+        resp = { ok: true, info: await snapshotInfo() };
       } else if (cmd.action === 'respawn') {
         // Death is a two-stage server operation:
         //   1) release the spirit;
@@ -819,18 +827,22 @@ const server = http.createServer(async (req, res) => {
         // Give the server a tick to switch the character into ghost state.
         await sleep(TICK_MS);
         const healer = await findSpiritHealer();
-        if (!healer) {
-          throw new Error('respawn failed: no spirit healer found in game entities');
+        if (healer) {
+          // Ghost navigation uses the same safe coordinate navigator, but does not
+          // require a living player. The controller remains usable after release.
+          const arrived = await navigateToCoord(healer.x, healer.z, 160);
+          if (!arrived) {
+            throw new Error(`respawn failed: could not reach spirit healer ${healer.name || healer.id || ''}`);
+          }
+        } else {
+          // No healer entity loaded (e.g. ghost far from any graveyard). The
+          // server still allows resurrectAtSpiritHealer() directly — fall back to
+          // it instead of permanently stranding the character as a ghost.
+          console.error('[bridge] no spirit healer entity found; calling resurrectAtSpiritHealer() directly');
         }
 
-        // Ghost navigation uses the same safe coordinate navigator, but does not
-        // require a living player. The controller remains usable after release.
-        const arrived = await navigateToCoord(healer.x, healer.z, 160);
-        if (!arrived) {
-          throw new Error(`respawn failed: could not reach spirit healer ${healer.name || healer.id || ''}`);
-        }
-
-        // Try the server operation after we are physically in healer range.
+        // Try the server operation after we are physically in healer range
+        // (if a healer was found) or directly (fallback when none was loaded).
         await simCall('resurrectAtSpiritHealer', []);
         let revived = false;
         for (let i = 0; i < 50 && !revived; i++) {
@@ -844,12 +856,29 @@ const server = http.createServer(async (req, res) => {
         if (!revived) {
           throw new Error('respawn failed: spirit healer did not revive player after reaching healer');
         }
-        resp = { ok: true, info: await snapshot(), healer };
+        resp = { ok: true, info: await snapshotInfo(), healer };
       } else if (cmd.action === 'explore') {
         // sustained walk: head toward nearest mob/NPC (or just forward if none),
         // so the agent actually covers ground instead of 1-step jitter.
         const arrived = await exploreWalk(cmd.steps || 10);
-        resp = { ok: true, arrived, info: await snapshot() };
+        resp = { ok: true, arrived, info: await snapshotInfo() };
+      } else if (cmd.action === 'accept_quest') {
+        // Agent requests a specific quest (by id) — call the real sim API.
+        // The game server validates proximity to the giver; we just forward it.
+        const qid = cmd.questId || (cmd.quest && cmd.quest.id);
+        if (!qid) { resp = { ok: false, error: 'accept_quest requires questId' }; }
+        else {
+          const r = await simCall('acceptQuest', [String(qid)]);
+          resp = { ok: true, api: r, info: await snapshotInfo() };
+        }
+      } else if (cmd.action === 'turn_in_quest') {
+        // Turn in a completed quest by id — call the real sim API.
+        const qid = cmd.questId || (cmd.quest && cmd.quest.id);
+        if (!qid) { resp = { ok: false, error: 'turn_in_quest requires questId' }; }
+        else {
+          const r = await simCall('turnInQuest', [String(qid)]);
+          resp = { ok: true, api: r, info: await snapshotInfo() };
+        }
       } else {
         resp = { ok: false, error: 'unknown action' };
       }
