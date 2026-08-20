@@ -72,8 +72,17 @@ class BrowserEnv:
         Transfer-Encoding: chunked, so we decode chunks ourselves.
         """
         import socket as _sock
+        import time as _t
+        import select as _select
         CRLF_S = chr(13) + chr(10)
         CRLF_B = bytes([13, 10])
+        def _plog(m):
+            try:
+                open("D:/world-of-claudecraft/python/_post.log", "a", encoding="utf-8").write(
+                    "%.2f %s\n" % (_t.time(), m))
+            except Exception:
+                pass
+        _plog("POST START action=%s" % payload.get("action"))
         parsed = urlparse(BRIDGE_URL)
         host = parsed.hostname or "127.0.0.1"
         port = parsed.port or 8791
@@ -86,42 +95,60 @@ class BrowserEnv:
             "Connection: close" + CRLF_S +
             CRLF_S
         ).encode("utf-8") + data
+        import threading as _thread
+        import queue as _queue
         sock = None
         try:
             sock = _sock.create_connection((host, port), timeout=5.0)
-            sock.settimeout(float(timeout))
+            _plog("POST CONNECTED action=%s" % payload.get("action"))
             sock.sendall(req)
-            buf = b""
-            # Read headers first (until the blank line).
-            while CRLF_B + CRLF_B not in buf:
+            _plog("POST SENT action=%s" % payload.get("action"))
+
+            # Read the FULL HTTP response in a worker thread. On Windows,
+            # socket.recv()/select() can IGNORE the timeout and hang forever
+            # (bpo-22870 class of bug) once the socket is in a certain state.
+            # A hung thread cannot block the main process: we join() with a
+            # timeout and treat a timeout as a bridge error (no false lesson).
+            result_q = _queue.Queue()
+
+            def _reader():
                 try:
-                    chunk = sock.recv(65536)
-                except _sock.timeout:
-                    raise BrowserBridgeError(
-                        f"bridge POST {payload.get('action')} timed out reading headers")
-                if not chunk:
-                    break
-                buf += chunk
+                    buf = b""
+                    sock.settimeout(5.0)
+                    while True:
+                        try:
+                            chunk = sock.recv(65536)
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        buf += chunk
+                        if len(buf) > 5_000_000:
+                            break
+                    result_q.put(("ok", buf))
+                except Exception as e:
+                    result_q.put(("err", e))
+
+            t = _thread.Thread(target=_reader, daemon=True)
+            t.start()
+            t.join(float(timeout))
+            if t.is_alive():
+                # worker still blocked on recv -> Windows socket hang.
+                # The daemon thread is abandoned; socket closed in finally.
+                raise BrowserBridgeError(
+                    f"bridge POST {payload.get('action')} timed out reading response (Windows socket hang)")
+            status, payload_buf = result_q.get()
+            if status == "err":
+                raise BrowserBridgeError(
+                    f"bridge POST {payload.get('action')} read failed: {type(payload_buf).__name__}: {payload_buf}")
+            buf = payload_buf
             head_end = buf.find(CRLF_B + CRLF_B)
             if head_end == -1:
                 raise BrowserBridgeError(
                     f"bridge POST {payload.get('action')} returned no HTTP headers")
             header_blob = buf[:head_end].decode("latin-1")
             body = buf[head_end + 4:]
-            # Decide how much body to read. The bridge uses Transfer-Encoding
-            # chunked and does NOT close the socket on Connection: close, so we
-            # must stop at the terminating chunk, not wait for EOF.
             if "transfer-encoding:" in header_blob.lower() and "chunked" in header_blob.lower():
-                # keep reading until we have the end-of-chunks marker
-                while b"0" + CRLF_B + CRLF_B not in body:
-                    try:
-                        chunk = sock.recv(65536)
-                    except _sock.timeout:
-                        raise BrowserBridgeError(
-                            f"bridge POST {payload.get('action')} timed out reading chunked body")
-                    if not chunk:
-                        break
-                    body += chunk
                 body = self._decode_chunked(body)
             else:
                 content_length = None
@@ -131,15 +158,9 @@ class BrowserEnv:
                             content_length = int(line.split(":", 1)[1].strip())
                         except ValueError:
                             content_length = None
-                while content_length is not None and len(body) < content_length:
-                    try:
-                        chunk = sock.recv(65536)
-                    except _sock.timeout:
-                        raise BrowserBridgeError(
-                            f"bridge POST {payload.get('action')} timed out reading body")
-                    if not chunk:
-                        break
-                    body += chunk
+                if content_length is not None and len(body) > content_length:
+                    body = body[:content_length]
+            _plog("POST DONE action=%s" % payload.get("action"))
             return json.loads(body.decode("utf-8"))
         except _sock.timeout:
             raise BrowserBridgeError(
@@ -149,6 +170,10 @@ class BrowserEnv:
                 f"bridge POST {payload.get('action')} failed: {type(e).__name__}: {e}") from e
         finally:
             if sock is not None:
+                try:
+                    sock.shutdown(_sock.SHUT_RDWR)
+                except Exception:
+                    pass
                 try:
                     sock.close()
                 except Exception:

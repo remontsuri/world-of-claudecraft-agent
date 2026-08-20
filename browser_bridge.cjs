@@ -107,23 +107,40 @@ process.on('unhandledRejection', (e) => { console.error('[bridge] unhandledRejec
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+// Reject if `promise` does not settle within `ms`. A hanging page.evaluate
+// (e.g. execution context destroyed during respawn/death SPA navigation)
+// must NOT block the command queue forever.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) =>
+    { timer = setTimeout(() => reject(new Error((label || 'op') + ' timed out after ' + ms + 'ms')), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+const EVAL_TIMEOUT_MS = 8000;
+const CMD_TIMEOUT_MS = 45000;
+
 // ---- safe page.evaluate with auto-reconnect ----
 async function safeEval(fn, ...args) {
+  let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       if (!page) throw new Error('no page');
       try { await page.bringToFront(); } catch (_) {}
-      return await page.evaluate(fn, ...args);
+      return await withTimeout(page.evaluate(fn, ...args), EVAL_TIMEOUT_MS, 'eval');
     } catch (e) {
-      console.error('[bridge] eval error (attempt ' + attempt + '):', e.message);
+      lastErr = e;
+      console.error('[bridge] eval error (attempt ' + attempt + '):', e && e.message);
       // The game tab may have SPA-reloaded (respawn / character switch), leaving
       // the cached `page` pointing at a destroyed execution context. Re-acquire a
       // FRESH page handle from the browser instead of reusing the stale one.
-      try { page = await freshPage(); } catch (_) {}
-      if (!page) { try { await reconnect(); } catch (_) {} }
+      try { page = await withTimeout(freshPage(), EVAL_TIMEOUT_MS, 'freshPage'); } catch (_) {}
+      if (!page) { try { await withTimeout(reconnect(), EVAL_TIMEOUT_MS, 'reconnect'); } catch (_) {} }
     }
   }
-  return null;
+  // Surface the failure instead of returning null silently, so the caller can
+  // mark this command as failed rather than hang.
+  throw lastErr || new Error('safeEval failed after retries');
 }
 
 
@@ -180,25 +197,18 @@ async function freshPage() {
 
 async function reconnect() {
   try {
-    // Reuse the existing browser connection; only (re)connect if we have none.
-    // Forcing browser.disconnect() on every call breaks re-acquisition when the
-    // game tab reloads (SPA navigation / respawn): connect() throws "already
-    // connected", reconnect returns false, and the bridge stays on a stale page
-    // forever -> empty snapshots. We only (re)connect when browser is null.
     if (!browser) {
-      browser = await connect({ browserURL: CDP });
+      browser = await withTimeout(connect({ browserURL: CDP }), EVAL_TIMEOUT_MS, 'connect');
     }
-    let pages = await browser.pages();
+    let pages = await withTimeout(browser.pages(), EVAL_TIMEOUT_MS, 'pages');
     let found = null;
     for (const p of pages) {
       const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
       if (u.includes('worldofclaudecraft')) { found = p; break; }
     }
-    // If no page matched, the tab may have reloaded under a different handle;
-    // retry once after a short wait.
     if (!found) {
       await sleep(1500);
-      pages = await browser.pages();
+      pages = await withTimeout(browser.pages(), EVAL_TIMEOUT_MS, 'pages');
       for (const p of pages) {
         const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
         if (u.includes('worldofclaudecraft')) { found = p; break; }
@@ -207,10 +217,16 @@ async function reconnect() {
     if (!found) { console.error('[bridge] reconnect: no game tab'); return false; }
     page = found;
     await page.bringToFront().catch(() => {});
-    await page.waitForFunction(
-      '!!window.__game && !!window.__game.sim && !!window.__game.sim.player',
-      { timeout: 60000 }
-    );
+    // Do NOT block startup on a 60s waitForFunction. The game may still be
+    // booting/respawning; poll readiness quickly (with timeout) and let main()
+    // start serving immediately. A background loop re-runs reconnect() until
+    // the game tab is live.
+    const ready = await safeEval(() =>
+      !!(window.__game && window.__game.sim && window.__game.sim.player));
+    if (!ready) {
+      console.error('[bridge] reconnect: game tab present but window.__game not ready yet');
+      return false;
+    }
     const dbg = await page.evaluate(() => ({
       url: location.href,
       ents: window.__game.sim.entities.size,
@@ -222,6 +238,26 @@ async function reconnect() {
     console.error('[bridge] reconnect failed:', e.message);
     page = null;
     return false;
+  }
+}
+
+// Background readiness pump: keeps trying reconnect() until the game tab is
+// live, so the bridge serves immediately and heals itself after a respawn /
+// SPA navigation instead of being stuck "not ready".
+let _readyPumpRunning = false;
+async function readyPump() {
+  if (_readyPumpRunning) return;
+  _readyPumpRunning = true;
+  while (true) {
+    if (!page) {
+      const ok = await reconnect().catch(() => false);
+      if (!ok) { await sleep(3000); continue; }
+    }
+    // still alive? probe quickly; if it dies, retry
+    const alive = await safeEval(() =>
+      !!(window.__game && window.__game.sim && window.__game.sim.player)).catch(() => false);
+    if (!alive) { page = null; await sleep(3000); continue; }
+    await sleep(5000);
   }
 }
 
@@ -722,12 +758,12 @@ const server = http.createServer(async (req, res) => {
             () => !!(window.__game && window.__game.sim && window.__game.sim.player)));
         } catch (_) { health.game = false; }
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
+      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(health)) });
       res.end(JSON.stringify(health));
       return;
     }
     // simple liveness probe (back-compat)
-    res.writeHead(200, { 'content-type': 'application/json' });
+    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify({ ok: true, alive: true })) });
     res.end(JSON.stringify({ ok: true, alive: true }));
     return;
   }
@@ -735,7 +771,7 @@ const server = http.createServer(async (req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    cmdQueue = cmdQueue.then(async () => {
+    const work = (async () => {
       let resp = { ok: false };
       try {
         const cmd = JSON.parse(body || '{}');
@@ -820,26 +856,33 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       resp = { ok: false, error: e.message };
     }
-    res.writeHead(200, { 'content-type': 'application/json' });
+    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(resp)) });
     res.end(JSON.stringify(resp));
-    }).catch((e) => {
-      try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: e.message })); } catch (_) {}
     });
+    // Run `work` on the sequential command queue, but NEVER let a single
+    // command block the queue forever. If it exceeds CMD_TIMEOUT_MS (e.g. a
+    // page.evaluate hung during a respawn/SPA navigation), answer with a
+    // timeout error AND reset the queue so subsequent commands still run.
+    cmdQueue = cmdQueue.then(() =>
+      withTimeout(work(), CMD_TIMEOUT_MS, 'cmd')
+        .catch((err) => ({ ok: false, error: (err && err.message) || 'cmd failed' }))
+        .finally(() => { cmdQueue = Promise.resolve(); })
+    );
   });
 });
 
 async function main() {
   try { fs.writeFileSync(BRIDGE_PID_PATH, String(process.pid), 'utf8'); } catch (_) {}
-  if (!await reconnect()) { console.error('[bridge] initial connect failed'); process.exit(1); }
-  console.log('[bridge] online game tab ready; serving on :' + PORT);
   server.on('error', (e) => {
-    // EADDRINUSE means a previous bridge instance is still holding :PORT.
-    // Exit loudly so the launcher's 10s loop can restart us cleanly once the
-    // stale instance is gone, instead of silently dying with no log clue.
     console.error('[bridge] server error:', e.code || e.message);
     process.exit(e.code === 'EADDRINUSE' ? 2 : 1);
   });
-  server.listen(PORT);
+  // Serve IMMEDIATELY. Do not block startup on reconnect(): the game tab may be
+  // booting/respawning. The readiness pump heals the connection in the background.
+  server.listen(PORT, () => {
+    console.log('[bridge] serving on :' + PORT + ' (game tab may still be connecting)');
+  });
+  readyPump();
 }
 
 main().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

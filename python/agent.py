@@ -223,13 +223,28 @@ class Agent:
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
+        try:
+            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
+                "%.2f SKILL_DONE action=%s\n" % (__import__("time").time(), action))
+        except Exception:
+            pass
 
         # Persist newly observed vendors/NPC facts after every real transition.
         self._remember_visible_world(after)
+        try:
+            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
+                "%.2f REMEMBER_DONE\n" % (__import__("time").time(),))
+        except Exception:
+            pass
 
         # 6. Reward from FACT (reward.py), not from our opinion
         ws_after = _world_state_dict(after)
         reward = outcome_reward(ws_before, ws_after, verdict, outcome_kind)
+        try:
+            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
+                "%.2f REWARD_DONE r=%.2f\n" % (__import__("time").time(), reward))
+        except Exception:
+            pass
 
         # 7. Memory learns — UNLESS infra error (ENV_ERROR -> no false lesson)
         #    or measurement mode (learn=False).
@@ -239,6 +254,11 @@ class Agent:
             next_cands = self.policy._candidates(after, ws_after)
             self.policy.learn(ws_before, action, reward, next_state=ws_after,
                               outcome_kind=outcome_kind, candidates=next_cands)
+        try:
+            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
+                "%.2f MEMORY_DONE\n" % (__import__("time").time(),))
+        except Exception:
+            pass
 
         return {
             "action": action,
