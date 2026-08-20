@@ -498,6 +498,13 @@ async function snapshot() {
 // raw_move/respawn from another caller would interleave and corrupt the world.
 let cmdQueue = Promise.resolve();
 const server = http.createServer((req, res) => {
+  // Health probe (start_ragent.bat does `HEAD /` expecting 200). Keep POST
+  // for real commands; answer liveness with 200 so the launcher starts the agent.
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, alive: true }));
+    return;
+  }
   if (req.method !== 'POST') { res.writeHead(405); res.end('use POST'); return; }
   let body = '';
   req.on('data', (c) => (body += c));
