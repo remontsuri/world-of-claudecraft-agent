@@ -110,6 +110,27 @@ def cell_of(pos, size=20.0):
 
 
 def main():
+    # --- crash telemetry: on ANY uncaught exception, write the FULL traceback to
+    # agent_crash.log (not just the live terminal, which the launcher hides in a
+    # /min window). This is what makes a silent agent death debuggable. ---
+    import traceback as _tb
+    _crash_path = os.path.join(os.path.dirname(__file__), "agent_crash.log")
+    def _excepthook(etype, evalue, etb):
+        try:
+            with open(_crash_path, "a", encoding="utf-8") as f:
+                f.write(f"\n=== AGENT CRASH {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                _tb.print_exception(etype, evalue, etb, file=f)
+        except OSError:
+            pass
+        # also echo to stderr so the launcher log captures it
+        _tb.print_exception(etype, evalue, etb)
+    sys.excepthook = _excepthook
+    try:
+        import faulthandler as _fh
+        _fh.dump_traceback_later(600, exit=True, file=open(_crash_path, "a", encoding="utf-8"))
+    except Exception:
+        pass
+
     _acquire_lock()  # refuse to run if another instance already drives the char
     # Release the single-instance lock on ANY exit (normal, exception, sys.exit),
     # so a dead agent (e.g. bridge down -> sys.exit(3)) never leaves a stale
