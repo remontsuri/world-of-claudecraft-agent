@@ -75,7 +75,7 @@ exit /b 0
   call :bridge_health
   if errorlevel 1 (
     set /a BRIDGE_BAD+=1
-    echo [%date% %time%] bridge not ready (health game=false) attempt=!BRIDGE_BAD! >> "%LOG%"
+    echo [%date% %time%] bridge not ready health game=false attempt=!BRIDGE_BAD! >> "%LOG%"
     if !BRIDGE_BAD! GEQ 3 (
       echo [%date% %time%] bridge unhealthy for 3 probes - restarting >> "%LOG%"
       call :kill_pidfile "%BRIDGE_PID%"
