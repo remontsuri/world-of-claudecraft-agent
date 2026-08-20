@@ -683,25 +683,23 @@ const server = http.createServer((req, res) => {
         await sleep(TICK_MS);
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'respawn') {
-        // Order per the game's IWorldCombat contract (src/world_api/combat.ts):
-        //   releaseSpirit() -> becomes a ghost AT THE NEAREST GRAVEYARD (no longer
-        //     near the corpse), so calling it first would strand us away from the
-        //     body and force a healer res.
-        //   resurrectAtCorpse() -> revives AT THE BODY (no penalty) IF in range.
-        //   resurrectAtSpiritHealer() -> revives at the angel, only if still dead.
-        // Therefore: try corpse first; only if still dead do we fall back to
-        // releaseSpirit()+resurrectAtSpiritHealer() (graveyard path).
+        // Per src/sim/obs.ts (game's own death-recovery path): releaseSpirit()
+        // FIRST, then resurrectAtSpiritHealer(). resurrectAtCorpse() only works
+        // if the player is still physically near the body (not a ghost), so it is
+        // useless once dead:true with full hp. The server processes the resurrect
+        // async — it does NOT flip player.dead synchronously — so we must POLL
+        // (with a timeout) instead of snapshotting immediately after the call.
         await safeEval(() => {
           const sim = window.__game.sim;
-          const dead = () => !!(sim.player && sim.player.dead);
-          let revived = false;
-          try { sim.resurrectAtCorpse(); revived = !dead(); } catch (_) {}
-          if (!revived && dead()) {
-            try { sim.releaseSpirit(); } catch (_) {}
-            try { sim.resurrectAtSpiritHealer(); } catch (_) {}
-          }
+          try { sim.releaseSpirit(); } catch (_) {}
+          try { sim.resurrectAtSpiritHealer(); } catch (_) {}
         });
-        await sleep(TICK_MS);
+        // Poll up to ~6s for the server to flip dead:false (TICK_MS * 30).
+        let revived = false;
+        for (let i = 0; i < 30 && !revived; i++) {
+          await sleep(TICK_MS);
+          revived = await safeEval(() => !!(window.__game.sim.player && !window.__game.sim.player.dead)).catch(() => false);
+        }
         resp = { ok: true, info: await snapshot() };
       } else if (cmd.action === 'explore') {
         // sustained walk: head toward nearest mob/NPC (or just forward if none),
