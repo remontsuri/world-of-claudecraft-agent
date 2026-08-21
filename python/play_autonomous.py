@@ -287,9 +287,21 @@ def main():
         _ws = rec.get("ws_after", {}) or {}
         _dead = _ws.get("dead") or (env._last_info.get("player", {}) or {}).get("dead")
         if _ws.get("hp_frac", 1.0) <= 0.0 or _dead or _ws.get("deaths", 0) > m["deaths"]:
-            env.respawn()
-            m["respawns"] += 1
-            rec["ws_after"] = snap(env._last_info)
+            try:
+                env.respawn()
+                m["respawns"] += 1
+                rec["ws_after"] = snap(env._last_info)
+            except BrowserBridgeError as e:
+                # respawn can fail if the bridge is mid-reconnect or the game
+                # tab is not ready. Do NOT crash the whole process — record a
+                # bridge_error and re-init the env on the next iteration so the
+                # launcher's restart loop is not triggered by a transient
+                # respawn failure.
+                m["bridge_errors"] += 1
+                print("respawn bridge_error: %s" % e, flush=True)
+                env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED + i)
+                env.reset(seed=SEED + i)
+                rec["ws_after"] = snap(env._last_info)
 
         ws = rec["ws_after"]
         info = env._last_info

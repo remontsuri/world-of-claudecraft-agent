@@ -222,7 +222,7 @@ class BrowserEnv:
             raise BrowserBridgeError(f"bridge reset failed: {resp.get('error')}")
         info = resp.get("info", {})
         if info.get("player", {}).get("dead"):
-            self._require({"action": "respawn"})
+            self._require({"action": "respawn"}, timeout=90.0)
             resp = self._require({"action": "snapshot"})
             if not resp.get("ok", False):
                 raise BrowserBridgeError(f"bridge respawn+snapshot failed: {resp.get('error')}")
@@ -295,7 +295,7 @@ class BrowserEnv:
     def respawn(self):
         """Release spirit + resurrect at healer (online-safe glue; does NOT mutate
         the model). Call when the character is dead so the loop can continue."""
-        resp = self._require({"action": "respawn"})
+        resp = self._require({"action": "respawn"}, timeout=90.0)
         info = resp.get("info", {})
         self._last_info = info
         return info
