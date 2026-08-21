@@ -154,11 +154,19 @@ class GoalManager:
         # (agent may learn to use it when drifted far). complete_objective is NOT
         # auto-chosen here — the Policy picks plain FARM for progress (same
         # primitive), keeping the decision explicit.
-        quest_ready = bool(ready or any(
-            all((o.get("current") or 0) >= (o.get("required") or 0)
-                for o in (q.get("objectives") or []))
+        # Quest is ready ONLY when the server authoritatively says so (state in
+        # ready/complete bucket) OR every objective is actually filled (current
+        # >= required for ALL, and there is at least one objective). An empty
+        # objective list must NOT count as "ready" — previously `all(...)` on an
+        # empty list returned True, so a freshly-accepted quest with no progress
+        # was treated as turn-in-ready and the agent ran straight to the giver
+        # without ever farming the objective mobs (qprog stayed at 1).
+        quest_ready = bool(ready) or any(
+            (q.get("objectives") or [])
+            and all((o.get("current") or 0) >= (o.get("required") or 0)
+                    for o in (q.get("objectives") or []))
             for q in active
-        ))
+        )
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg

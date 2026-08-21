@@ -56,14 +56,29 @@ class QuestCapability:
         return None
 
     def quest_status(self, q: dict) -> str:
-        """Observable fact for the policy — NOT a trigger."""
+        """Observable fact for the policy — NOT a trigger.
+
+        A quest is READY_TO_TURN_IN only when the server authoritatively says
+        so (state in ready/complete) OR every objective is actually filled
+        (current >= required for ALL, and there is at least one objective).
+
+        CRITICAL: empty/missing objectives must NOT be treated as "done".
+        Previously `incomplete_objective` returned None for an empty objective
+        list, so a freshly-accepted quest with no progress yet was reported as
+        READY_TO_TURN_IN — the agent ran straight to turn-in without ever
+        completing the objective (qprog stayed at 1, turn_in always failed).
+        """
         if q is None:
             return "NONE"
         st = q.get("state")
         if st in ("ready", "complete"):
             return "READY_TO_TURN_IN"
-        # active but objective filled?
+        objectives = self.get_objectives(q)
+        # No objectives reported yet, or none filled -> still ACTIVE (go do it).
+        if not objectives:
+            return "ACTIVE"
         if self.incomplete_objective(q) is None:
+            # All objectives present AND filled -> ready.
             return "READY_TO_TURN_IN"
         return "ACTIVE"
 
