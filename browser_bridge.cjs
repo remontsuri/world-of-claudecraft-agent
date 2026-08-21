@@ -616,6 +616,10 @@ async function findSpiritHealer() {
       if (text.includes('spirit healer')) s += 100;
       else if (text.includes('spirit-healer')) s += 100;
       else if (text.includes('healer')) s += 40;
+      // This build's spirit healer is named "The Pale Keeper" (no 'healer' token)
+      // and sits exactly on the ghost spawn. Match it so respawn can find it.
+      if (text.includes('pale keeper') || text.includes('keeper') || text.includes('pale')) s += 60;
+      if (text.includes('spirit')) s += 30;
       return s;
     };
     let best = null, bestScore = 0;
@@ -706,16 +710,28 @@ async function snapshot() {
       qlog.forEach((qp, qid) => {
         const st = qp.state || 'active';
         const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
+        // resolvedCounts holds the REQUIRED objective counts; counts = current progress.
+        // In this build questDefs is null, so resolvedCounts is the ONLY source of "required".
         const objs = (def && Array.isArray(def.objectives))
           ? def.objectives.map((o, i) => ({
               current: (qp.counts && qp.counts[i]) || 0,
               required: (o && (o.count != null ? o.count : o.required)) || 0,
             }))
-          : (qp.counts || []).map((c) => ({ current: c, required: c }));
+          : (qp.counts || []).map((c, i) => ({
+              current: c || 0,
+              required: (qp.resolvedCounts && qp.resolvedCounts[i] != null) ? qp.resolvedCounts[i] : c,
+            }));
         // turn-in location is resolved on the NODE side after evaluate returns
         // (FARSHORE_* constants live in Node scope, not in the browser context
         // where this fn runs -> referencing them here throws ReferenceError).
-        const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
+        const entry = {
+          id: qid,
+          name: qp.name || qid,
+          state: st,
+          objectives: objs,
+          giver: qp.giverId || qp.giver || null,
+          turnInNpc: null,
+        };
         if (st === 'active') active.push(entry);
         else if (st === 'ready') ready.push(entry);
         else if (st === 'done') done.push(entry);
@@ -738,6 +754,8 @@ async function snapshot() {
     const qd = (typeof (g.online && g.online.questsDone) === 'number') ? g.online.questsDone : doneArr.length;
     return {
       player: { hp: p.hp, maxHp: p.maxHp, level: p.level, dead: !!p.dead },
+      // Flat top-level aliases so legacy clients reading info.hp / info.dead work:
+      hp: p.hp, max_hp: p.maxHp, dead: !!p.dead, level: p.level,
       player_pos: [p.pos.x, p.pos.z],
       nearby,
       inventory: inv.map((it) => ({ quality: it.quality ?? 0, name: it.name })),

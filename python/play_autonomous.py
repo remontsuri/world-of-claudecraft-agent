@@ -381,6 +381,14 @@ def main():
         m["copper"] = ws.get("copper", m["copper"])
         m["deaths"] = ws.get("deaths", m["deaths"])
         m["kills"] = ws.get("kills", m["kills"])
+        # --- LIVE per-step stdout (real-time window output) ---
+        # Prints one compact line per step so the launcher window reflects what
+        # the agent is doing instead of only the ~20s periodic summary.
+        qstat = rec.get("ws_after", {}).get("quest_status") or (rec.get("ws_before", {}) or {}).get("quest_status") or "?"
+        qp = rec.get("qprog")
+        qps = f" qprog={qp}" if qp is not None else ""
+        v = rec.get("verdict")
+        print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={rec.get('dist')} hp={ws.get('hp')} kills={m['kills']}", flush=True)
         # quests
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []
@@ -506,6 +514,7 @@ def main():
             "deaths": ws.get("deaths"),
         }
         logf.write(json.dumps(row, ensure_ascii=False) + "\n")
+        logf.flush()  # ensure per-step progress lands on disk even if the process is killed
         if i % SAVE_EVERY == 0:
             mem.save()
             _summary(m, i, start, logf)
