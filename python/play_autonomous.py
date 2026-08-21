@@ -27,6 +27,7 @@ import os
 import sys
 import time
 import atexit
+import traceback
 from collections import Counter, defaultdict
 
 from browser_env import BrowserEnv, BrowserBridgeError

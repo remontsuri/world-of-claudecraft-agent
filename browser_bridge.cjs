@@ -826,23 +826,18 @@ const server = http.createServer(async (req, res) => {
 
         // Give the server a tick to switch the character into ghost state.
         await sleep(TICK_MS);
+        // Do NOT walk to the healer — resurrectAtSpiritHealer() teleports the
+        // ghost to the graveyard/spirit healer server-side. Walking 160 steps
+        // (~35s) made the client's respawn timeout fire first (BrowserBridgeError
+        // "no HTTP headers") and crashed the whole agent. Just resurrect.
         const healer = await findSpiritHealer();
         if (healer) {
-          // Ghost navigation uses the same safe coordinate navigator, but does not
-          // require a living player. The controller remains usable after release.
-          const arrived = await navigateToCoord(healer.x, healer.z, 160);
-          if (!arrived) {
-            throw new Error(`respawn failed: could not reach spirit healer ${healer.name || healer.id || ''}`);
-          }
+          console.error('[bridge] spirit healer entity present; resurrecting directly (no walk)');
         } else {
-          // No healer entity loaded (e.g. ghost far from any graveyard). The
-          // server still allows resurrectAtSpiritHealer() directly — fall back to
-          // it instead of permanently stranding the character as a ghost.
-          console.error('[bridge] no spirit healer entity found; calling resurrectAtSpiritHealer() directly');
+          console.error('[bridge] no spirit healer entity found; resurrecting directly');
         }
 
-        // Try the server operation after we are physically in healer range
-        // (if a healer was found) or directly (fallback when none was loaded).
+        // Resurrect at the spirit healer (server handles the teleport).
         await simCall('resurrectAtSpiritHealer', []);
         let revived = false;
         for (let i = 0; i < 50 && !revived; i++) {
@@ -854,7 +849,7 @@ const server = http.createServer(async (req, res) => {
           revived = !!(probe && !probe.dead);
         }
         if (!revived) {
-          throw new Error('respawn failed: spirit healer did not revive player after reaching healer');
+          throw new Error('respawn failed: spirit healer did not revive player');
         }
         resp = { ok: true, info: await snapshotInfo(), healer };
       } else if (cmd.action === 'explore') {
@@ -885,18 +880,31 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       resp = { ok: false, error: e.message };
     }
-    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(resp)) });
-    res.end(JSON.stringify(resp));
-    });
-    // Run `work` on the sequential command queue, but NEVER let a single
-    // command block the queue forever. If it exceeds CMD_TIMEOUT_MS (e.g. a
-    // page.evaluate hung during a respawn/SPA navigation), answer with a
-    // timeout error AND reset the queue so subsequent commands still run.
-    cmdQueue = cmdQueue.then(() =>
-      withTimeout(work(), CMD_TIMEOUT_MS, 'cmd')
-        .catch((err) => ({ ok: false, error: (err && err.message) || 'cmd failed' }))
-        .finally(() => { cmdQueue = Promise.resolve(); })
-    );
+    return resp;   // DO NOT write the HTTP response here — the response is sent
+                   // by the cmdQueue chain below, so a cmdTimeout can answer the
+                   // client instead of leaving the socket hanging ("no HTTP headers").
+  });
+  // Run `work` on the sequential command queue, but NEVER let a single command
+  // block the queue forever. If it exceeds CMD_TIMEOUT_MS (e.g. a page.evaluate
+  // hung during a respawn/SPA navigation), answer with a timeout error AND reset
+  // the queue so subsequent commands still run.
+  //
+  // The HTTP response is written HERE (not inside work()) so whichever settles
+  // first — the real result or the timeout — actually answers the client. The
+  // orphaned work() may still finish later; guard the write so it cannot touch
+  // an already-closed response.
+  cmdQueue = cmdQueue.then(() =>
+    withTimeout(work(), CMD_TIMEOUT_MS, 'cmd')
+      .then((r) => ({ ok: r && r.ok !== undefined ? r.ok : false, ...(r || {}), _timedOut: false }))
+      .catch((err) => ({ ok: false, error: (err && err.message) || 'cmd failed', _timedOut: true }))
+      .finally(() => { cmdQueue = Promise.resolve(); })
+  ).then((resp) => {
+    if (!res.writableEnded) {
+      const body = JSON.stringify(resp);
+      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+      res.end(body);
+    }
+  });
   });
 });
 
