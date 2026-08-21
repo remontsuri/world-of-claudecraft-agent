@@ -50,14 +50,30 @@ MEASURE_EVERY = int(os.environ.get("MEASURE_EVERY", "0"))  # 0 = disabled
 SEED = int(os.environ.get("AUTONOMOUS_SEED", "4242"))
 
 
-def _acquire_lock():
-    """Ensure only ONE play_autonomous drives the character at a time.
+def _is_live_agent(pid):
+    """True only if `pid` is a running process whose command line actually
+    mentions play_autonomous. A bare PID check is not enough: pidfiles go stale
+    and a new unrelated process can reuse the PID (which is how TWO agents once
+    ran at once — both driving the same character). psutil is used instead of
+    os.kill(pid,0), which on Windows is a SILENT PROCESS KILLER, not a probe."""
+    if pid == os.getpid():
+        return True
+    try:
+        import psutil
+        p = psutil.Process(pid)
+        if not p.is_running():
+            return False
+        cmd = " ".join(p.cmdline()).lower()
+        return "play_autonomous" in cmd
+    except Exception:
+        return False
 
-    The terminal(background) harness sometimes spawns two python processes for a
-    single launch; both would drive the SAME character through the same bridge and
-    corrupt the shared experience_autonomous.json / log. Refuse to start if a live
-    instance holds the lock; clear a stale lock whose PID is no longer running."""
-    import ctypes
+
+def _acquire_lock():
+    """Ensure only ONE live play_autonomous drives the character at a time.
+
+    Refuse to start if a live instance holds the lock; clear a stale lock whose
+    PID is no longer running (or is no longer a play_autonomous process)."""
     pid = os.getpid()
     if os.path.exists(LOCK_PATH):
         try:
@@ -65,26 +81,14 @@ def _acquire_lock():
                 old = int(f.read().strip())
         except (ValueError, OSError):
             old = None
-        if old is not None:
-            alive = False
-            try:
-                kernel32 = ctypes.windll.kernel32
-                # PROCESS_QUERY_INFORMATION = 0x400
-                handle = kernel32.OpenProcess(0x400, False, old)
-                if handle:
-                    # WAIT_OBJECT_0 (0) = exited, WAIT_TIMEOUT (258) = still alive
-                    alive = kernel32.WaitForSingleObject(handle, 0) == 258
-                    kernel32.CloseHandle(handle)
-            except Exception:
-                alive = False
-            if alive:
-                sys.stderr.write(
-                    f"[autonomous] refusing to start: another instance (PID {old}) is alive (lock {LOCK_PATH})\n")
-                sys.exit(2)
-            try:
-                os.remove(LOCK_PATH)
-            except OSError:
-                pass
+        if old is not None and _is_live_agent(old):
+            sys.stderr.write(
+                f"[autonomous] refusing to start: another instance (PID {old}) is alive (lock {LOCK_PATH})\n")
+            sys.exit(2)
+        try:
+            os.remove(LOCK_PATH)
+        except OSError:
+            pass
     with open(LOCK_PATH, "w") as f:
         f.write(str(pid))
     return pid
@@ -93,12 +97,16 @@ def _acquire_lock():
 def _release_lock():
     """Best-effort removal of the single-instance lock. Registered via atexit so
     it runs on ANY process exit (normal, uncaught exception, sys.exit). Without
-    this a dead agent (e.g. bridge down -> sys.exit(3)) leaves a stale lock whose
-    PID is no longer alive, and the launcher would see a 'live' PID and skip the
-    restart — the agent would never come back until someone deletes the lock."""
+    this a dead agent leaves a stale lock and the launcher would skip its
+    restart."""
     try:
         if os.path.exists(LOCK_PATH):
-            os.remove(LOCK_PATH)
+            # only remove if it still points at US (don't clobber a newer instance)
+            try:
+                if int(open(LOCK_PATH).read().strip()) == os.getpid():
+                    os.remove(LOCK_PATH)
+            except (ValueError, OSError):
+                os.remove(LOCK_PATH)
     except OSError:
         pass
 
@@ -128,7 +136,13 @@ def main():
     sys.excepthook = _excepthook
     try:
         import faulthandler as _fh
-        _fh.dump_traceback_later(15, exit=True, file=open(_crash_path, "a", encoding="utf-8"))
+        # DUMP ONLY: if the agent ever hangs (no step for 15s) we get a traceback
+        # in agent_crash.log so the deadlock is diagnosable. exit=False is
+        # CRITICAL — exit=True calls _exit(1) and kills this process 15s after
+        # every boot, which makes the .bat launcher restart it forever (the
+        # "farm -> python closes -> heal -> closes -> farm" loop). Death/respawn/
+        # bridge blips are now handled IN-PROCESS; nothing here should self-kill.
+        _fh.dump_traceback_later(900, exit=False, file=open(_crash_path, "a", encoding="utf-8"))
     except Exception:
         pass
 
@@ -146,6 +160,7 @@ def main():
             f.write(str(os.getpid()))
     except OSError:
         pass
+    print(f"[BOOT] pid={os.getpid()} autonomous run starting (single long-lived process)", flush=True)
     if os.path.exists(EXP_PATH):
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
@@ -247,21 +262,26 @@ def main():
                 rec["verdict"] = (rec.get("verdict") or "") + " [MEASURE]"
             else:
                 rec = agent.step()
-        except BrowserBridgeError:
-            # Infra failure (bridge/CDP/HTTP down). Same category as ENV_ERROR:
-            # recover by re-init'ing the env, keep learning. NOT a programming bug.
+        except BrowserBridgeError as e:
+            # Infra failure (bridge/CDP/HTTP down). RECOVER IN-PROCESS — do NOT
+            # re-create BrowserEnv/Agent. That re-init itself calls snapshot/
+            # respawn, which raises AGAIN while the bridge is down, escaping as
+            # an uncaught exception that kills the process and forces the .bat
+            # launcher to restart it with a NEW pid + NEW RNG seed + NEW
+            # in-memory policy. That severs the continuous learning episode
+            # (the "farm -> python closes -> heal -> closes -> farm" loop the
+            # user observed). The env/agent we already hold are stateless across
+            # calls (each _post opens a fresh socket), so just log and let the
+            # next iteration retry. Death/respawn/heal are ACTIONS inside this
+            # one process, never a process restart.
             m["env_errors"] += 1
             m["bridge_errors"] += 1
-            m["episodes"] += 1
-            try:
-                env.close()
-            except Exception:
-                pass
-            env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED + i)
-            env.reset(seed=SEED + i)
-            agent = Agent(env, mem, seed=SEED * 3 + 7 + i)
+            # NOTE: do NOT increment m["episodes"] here — a transient blip is not
+            # a new episode; the step counter must stay continuous.
+            print(f"[AGENT] pid={os.getpid()} bridge error at step {i}, retrying in-process: {type(e).__name__}: {e}", flush=True)
+            _last = snap(env._last_info)
             rec = {"action": "RESTART", "verdict": "ENV_ERROR", "outcome_kind": "ENV_ERROR",
-                   "reward": 0.0, "ws_before": prev, "ws_after": snap(env._last_info)}
+                   "reward": 0.0, "ws_before": _last, "ws_after": _last}
         except Exception:
             # PROGRAMMING BUG (NameError/KeyError/TypeError/AssertionError/...).
             # Must NOT be masked as a silent restart — crash loudly with traceback
@@ -279,6 +299,12 @@ def main():
             except OSError:
                 pass
             sys.exit(1)
+
+        if rec.get("outcome_kind") == "ENV_ERROR":
+            # Bridge/CDP down: don't busy-loop hammering a dead transport.
+            # The next iteration retries the step; recovery is automatic when
+            # the bridge returns. This keeps ONE process alive across infra blips.
+            time.sleep(2.0)
 
         # respawn glue: if the character died (hp depleted OR stuck as a ghost
         # with dead:true but full hp), release spirit + revive so the loop keeps
@@ -424,7 +450,7 @@ def main():
             m["win_repeat"] += 1
         # log one line
         row = {
-            "step": i, "t": round(time.time() - start, 1),
+            "step": i, "pid": os.getpid(), "t": round(time.time() - start, 1),
             "action": a, "verdict": rec["verdict"], "kind": rec["outcome_kind"],
             "reward": round(rec["reward"], 3),
             "bucket_before": bucket, "bucket_after": bucket_after,
