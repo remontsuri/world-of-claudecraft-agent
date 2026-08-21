@@ -31,9 +31,14 @@ import traceback
 from collections import Counter, defaultdict
 
 from browser_env import BrowserEnv, BrowserBridgeError
-from agent import Agent
-from memory import ExperienceStore, _bucket, WorldMemory
-from world_state import build_world_state
+
+# NOTE: agent / memory / world_state are imported lazily INSIDE main(), AFTER
+# _acquire_lock(). They pull in numpy/gymnasium (slow + heavy import) and the
+# ExperienceStore load can take ~90s. If we imported them at module top, a second
+# launcher-spawned process would not reach _acquire_lock() until after that
+# import finished, so the launcher could spawn 5+ agents in the window before the
+# first one acquires the lock -> multiple agents driving one character. Lazy
+# import makes the lock check happen in <1s, so duplicates exit(2) immediately.
 
 EXP_PATH = os.path.join(os.path.dirname(__file__), "experience_autonomous.json")
 LOG_PATH = os.path.join(os.path.dirname(__file__), "autonomous_log.jsonl")
@@ -50,63 +55,52 @@ MEASURE_EVERY = int(os.environ.get("MEASURE_EVERY", "0"))  # 0 = disabled
 SEED = int(os.environ.get("AUTONOMOUS_SEED", "4242"))
 
 
-def _is_live_agent(pid):
-    """True only if `pid` is a running process whose command line actually
-    mentions play_autonomous. A bare PID check is not enough: pidfiles go stale
-    and a new unrelated process can reuse the PID (which is how TWO agents once
-    ran at once — both driving the same character). psutil is used instead of
-    os.kill(pid,0), which on Windows is a SILENT PROCESS KILLER, not a probe."""
-    if pid == os.getpid():
-        return True
-    try:
-        import psutil
-        p = psutil.Process(pid)
-        if not p.is_running():
-            return False
-        cmd = " ".join(p.cmdline()).lower()
-        return "play_autonomous" in cmd
-    except Exception:
-        return False
-
-
 def _acquire_lock():
-    """Ensure only ONE live play_autonomous drives the character at a time.
+    """Guarantee exactly ONE live play_autonomous drives the character.
 
-    Refuse to start if a live instance holds the lock; clear a stale lock whose
-    PID is no longer running (or is no longer a play_autonomous process)."""
+    Uses an ATOMIC file creation (O_CREAT | O_EXCL) as a real mutual-exclusion
+    primitive. The OS serialises this: the first process wins, every later
+    process gets FileExistsError immediately — there is no read-then-write race
+    window (which is exactly how 5 agents once spawned at once: each read a
+    missing/stale lock and all wrote themselves). PID-files are NOT a mutex;
+    this is.
+
+    The lock file holds our PID as diagnostics only; the exclusivity comes from
+    the file EXISTING, not from its contents. Released via atexit/_release_lock
+    on any exit so a dead agent never blocks a restart.
+    """
     pid = os.getpid()
-    if os.path.exists(LOCK_PATH):
+    try:
+        # Atomic: fails if the file already exists. No TOCTOU race.
+        fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(pid))
+    except FileExistsError:
+        # Someone holds the lock. Distinguish "another live agent" from "stale
+        # lock left by a crashed process whose PID is now gone" — but DO NOT
+        # trust a PID check alone; just refuse. The launcher's job is to restart
+        # only after the holder is truly dead (it kills by PID / checks health).
         try:
             with open(LOCK_PATH) as f:
-                old = int(f.read().strip())
-        except (ValueError, OSError):
-            old = None
-        if old is not None and _is_live_agent(old):
-            sys.stderr.write(
-                f"[autonomous] refusing to start: another instance (PID {old}) is alive (lock {LOCK_PATH})\n")
-            sys.exit(2)
-        try:
-            os.remove(LOCK_PATH)
+                holder = f.read().strip()
         except OSError:
-            pass
-    with open(LOCK_PATH, "w") as f:
-        f.write(str(pid))
+            holder = "?"
+        sys.stderr.write(
+            f"[autonomous] refusing to start: lock held (holder PID {holder}) at {LOCK_PATH}\n")
+        sys.exit(2)
+    except OSError as e:
+        sys.stderr.write(f"[autonomous] lock error: {e}\n")
+        sys.exit(2)
     return pid
 
 
 def _release_lock():
     """Best-effort removal of the single-instance lock. Registered via atexit so
     it runs on ANY process exit (normal, uncaught exception, sys.exit). Without
-    this a dead agent leaves a stale lock and the launcher would skip its
-    restart."""
+    this a dead agent leaves the lock and the launcher would skip its restart."""
     try:
         if os.path.exists(LOCK_PATH):
-            # only remove if it still points at US (don't clobber a newer instance)
-            try:
-                if int(open(LOCK_PATH).read().strip()) == os.getpid():
-                    os.remove(LOCK_PATH)
-            except (ValueError, OSError):
-                os.remove(LOCK_PATH)
+            os.remove(LOCK_PATH)
     except OSError:
         pass
 
@@ -133,6 +127,11 @@ def main():
             pass
         # also echo to stderr so the launcher log captures it
         _tb.print_exception(etype, evalue, etb)
+        # lifecycle: record the crash as a STOP with the exception type
+        try:
+            _log_lifecycle("AGENT_STOP", reason=f"crash:{etype.__name__}")
+        except Exception:
+            pass
     sys.excepthook = _excepthook
     try:
         import faulthandler as _fh
@@ -147,6 +146,27 @@ def main():
         pass
 
     _acquire_lock()  # refuse to run if another instance already drives the char
+
+    # --- lifecycle logging: one line per START/STOP so a single log makes the
+    # continuous-episode invariant auditable (PID constant across deaths). ---
+    _ppid = os.getppid()
+    def _log_lifecycle(event, **kv):
+        parts = " ".join(f"{k}={v}" for k, v in kv.items())
+        line = f"{event} pid={os.getpid()} parent_pid={_ppid} {parts}\n"
+        try:
+            with open(os.path.join(os.path.dirname(__file__), "agent_lifecycle.log"), "a", encoding="utf-8") as f:
+                f.write(line)
+        except OSError:
+            pass
+    _log_lifecycle("AGENT_START")
+    atexit.register(_log_lifecycle, "AGENT_STOP", reason="normal_exit")
+
+    # LAZY heavy import: must come AFTER _acquire_lock() so duplicate launcher
+    # spawns hit the lock in <1s and exit(2) instead of piling up (see header
+    # note). These pull in numpy/gymnasium + load ExperienceStore (~90s).
+    from agent import Agent
+    from memory import ExperienceStore, _bucket, WorldMemory
+    from world_state import build_world_state
     # Release the single-instance lock on ANY exit (normal, exception, sys.exit),
     # so a dead agent (e.g. bridge down -> sys.exit(3)) never leaves a stale
     # lock with a dead PID that fools the launcher into thinking it is alive and
@@ -252,6 +272,22 @@ def main():
     start = time.time()
 
     for i in range(N_STEPS):
+        # Singleton self-check: if another instance now holds the lock (our lock
+        # file was removed/recreated by a newer instance, or we are an orphaned
+        # duplicate spawned before the lock existed), stand down silently. This
+        # cleans up multiboxing without an external kill (which is blocked across
+        # sessions on this host). Runs every step — cheap (one stat + one read).
+        if os.path.exists(LOCK_PATH):
+            try:
+                holder = int(open(LOCK_PATH).read().strip())
+            except (ValueError, OSError):
+                holder = None
+            if holder is not None and holder != os.getpid():
+                # another live instance is the real one; we are a duplicate
+                sys.stderr.write(
+                    f"[autonomous] duplicate detected (lock holder {holder} != us {os.getpid()}) -> exiting\n")
+                _log_lifecycle("AGENT_STOP", reason="duplicate_yield")
+                return
         try:
             if MEASURE_EVERY > 0 and i > 0 and i % MEASURE_EVERY == 0:
                 # FROZEN EVAL: measure current policy WITHOUT learning (exploration
