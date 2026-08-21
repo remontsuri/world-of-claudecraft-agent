@@ -293,15 +293,14 @@ def main():
                 rec["ws_after"] = snap(env._last_info)
             except BrowserBridgeError as e:
                 # respawn can fail if the bridge is mid-reconnect or the game
-                # tab is not ready. Do NOT crash the whole process — record a
-                # bridge_error and re-init the env on the next iteration so the
-                # launcher's restart loop is not triggered by a transient
-                # respawn failure.
+                # tab is not ready. Do NOT crash the whole process, and do NOT
+                # re-init the env here (BrowserEnv.__init__/reset also calls
+                # respawn and would just re-raise). Record a bridge_error and
+                # leave rec["ws_after"] as-is; the next loop iteration will
+                # retry respawn. This keeps the process alive across transient
+                # respawn failures instead of triggering the launcher restart.
                 m["bridge_errors"] += 1
-                print("respawn bridge_error: %s" % e, flush=True)
-                env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED + i)
-                env.reset(seed=SEED + i)
-                rec["ws_after"] = snap(env._last_info)
+                print("respawn bridge_error (will retry next step): %s" % e, flush=True)
 
         ws = rec["ws_after"]
         info = env._last_info
