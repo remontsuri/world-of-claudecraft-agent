@@ -10,12 +10,19 @@ set "REPO=%~dp0"
 set "REPO=%REPO:~0,-1%"
 
 set "LOG=%REPO%\ragent_launcher.log"
-set "PY=%REPO%\.venv\Scripts\python.exe"
-if not exist "%PY%" set "PY=D:\woc-llm\therock-test\Scripts\python.exe"
+rem Use the working Python 3.12 install (has numpy/gymnasium/requests/psutil).
+rem .venv (Py3.11) and woc-llm\therock-test are broken/bitten — do NOT use them.
+set "PY=C:\Users\vladc\AppData\Local\Programs\Python\Python312\python.exe"
+if not exist "%PY%" set "PY=D:\woc-llm\woc-llm\venv-dml\Scripts\python.exe"
 if not exist "%PY%" (
   echo [%date% %time%] FATAL: no usable Python interpreter >> "%LOG%"
   exit /b 2
 )
+rem CRITICAL: the Hermes agent injects PYTHONPATH pointing at its own Py3.11
+rem venv, whose numpy (cp311 .pyd) crashes every C-extension under Py3.12 with
+rem "module not found". Clear it so the agent uses only its own interpreter's
+rem site-packages.
+set "PYTHONPATH="
 set "BRIDGE_PID=%REPO%\bridge.pid"
 set "BRIDGE_LOG=%REPO%\bridge_smoke.log"
 set "AGENT_PID=%REPO%\python\play_autonomous.lock"
