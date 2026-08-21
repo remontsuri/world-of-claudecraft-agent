@@ -487,15 +487,22 @@ async function navigateToCoord(tx, tz, maxSteps) {
   let stagnant = 0;
   let detour = 0;        // remaining ticks of a side-step detour
   let detourDir = 1;     // +1 = strafe/veer right, -1 = left
+  // helper: re-read CURRENT distance after any move so the loop can see real progress
+  const freshDist = (p) => Math.hypot(tx - p.pos.x, tz - p.pos.z);
   for (let i = 0; i < maxSteps; i++) {
-    const st = await safeEval((tx, tz, detour, detourDir) => {
+    // Each eval issues the move AND waits one game tick, then returns the FRESH
+    // distance (measured AFTER the move). Previously the distance was computed
+    // BEFORE the move and returned unchanged, so the loop could never tell a
+    // detour was making progress -> it stalled at the wall and gave up.
+    const st = await safeEval(async (tx, tz, detour, detourDir) => {
       const g = window.__game, sim = g.sim, p = sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 5) {
         try { g.controller.stop(); } catch (_) {}
-        return { done: true, dist };
+        return { done: true, dist, phase: 'arrived' };
       }
+      const tick = () => new Promise((r) => setTimeout(r, 60));
       // While detouring around an obstacle, take a fixed side-step: turn toward
       // the detour direction and move forward. This walks AROUND walls instead
       // of grinding against them forever.
@@ -513,7 +520,9 @@ async function navigateToCoord(tx, tz, maxSteps) {
         } else {
           g.controller.move({ forward: true });
         }
-        return { done: false, dist, phase: 'detour', off };
+        await tick();
+        const p2 = sim.player;
+        return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'detour', off };
       }
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
@@ -526,13 +535,17 @@ async function navigateToCoord(tx, tz, maxSteps) {
         try { g.controller.stop(); } catch (_) {}
         if (off > 0) g.controller.move({ turnLeft: true });
         else g.controller.move({ turnRight: true });
-        return { done: false, dist, phase: 'turn', off };
+        await tick();
+        const p2 = sim.player;
+        return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'turn', off };
       }
 
       // Once aligned, take a short straight step. Recompute heading every tick.
       try { g.controller.stop(); } catch (_) {}
       g.controller.move({ forward: true });
-      return { done: false, dist, phase: 'forward', off };
+      await tick();
+      const p2 = sim.player;
+      return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'forward', off };
     }, tx, tz, detour, detourDir);
 
     if (!st) throw new Error('navigation evaluate failed');
