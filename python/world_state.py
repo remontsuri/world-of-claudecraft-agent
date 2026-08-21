@@ -43,10 +43,21 @@ def build_world_state(info: Dict) -> Dict:
     hp_frac = (hp / maxhp) if hp is not None else 1.0
 
     nearby = info.get("nearby") or []
-    has_mob = any(
-        (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable")
-        for e in nearby
-    )
+    pmax = maxhp  # player's own max HP, used to judge mob strength
+    # Mob strength: a mob is "strong" if its max HP exceeds the player's by a
+    # meaningful margin (can kill the player). This is an OBSERVATION the policy
+    # uses to avoid suicidal farm choices — not a hard rule forbidding farm.
+    STRONG_RATIO = 1.3
+    strong_mob_near = False
+    weak_mob_near = False
+    for e in nearby:
+        if (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable"):
+            mmax = e.get("maxHp") or 0
+            if mmax > pmax * STRONG_RATIO:
+                strong_mob_near = True
+            elif 0 < mmax <= pmax * STRONG_RATIO:
+                weak_mob_near = True
+    has_mob = strong_mob_near or weak_mob_near
     has_corpse = any(
         (e.get("type") == "corpse" or e.get("kind") == "corpse" or e.get("lootable"))
         and not e.get("looted")
@@ -99,8 +110,11 @@ def build_world_state(info: Dict) -> Dict:
     return {
         # bucket features (observations)
         "hp_frac": hp_frac,
+        "player_maxhp": maxhp,
         "quest_status": quest_status,
         "has_mob": has_mob,
+        "strong_mob_near": strong_mob_near,
+        "weak_mob_near": weak_mob_near,
         "has_corpse": has_corpse,
         "has_junk": has_junk,
         "vendor_nearby": vendor_nearby,

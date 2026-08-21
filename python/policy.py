@@ -135,7 +135,14 @@ class GoalManager:
         cands = []
         if ws["hp_frac"] < 1.0:
             cands.append(SKILL_HEAL)           # always available, agent may or may not pick it
-        if mobs or info.get("targetId") is not None:
+        # FARM only when a WEAK mob is near. Strong mobs (maxHp > player*1.3) would
+        # kill the agent — offering farm on them just teaches a suicidal habit.
+        # This is observation-driven (mob strength from world state), not a hard
+        # "never farm" rule; the agent can still learn to farm when safe.
+        if ws.get("weak_mob_near"):
+            cands.append(SKILL_FARM)
+        if ws.get("has_mob") and info.get("targetId") is not None:
+            # already in combat with something — allow finishing it even if strong
             cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
@@ -184,14 +191,15 @@ class GoalManager:
                and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
                for e in near):
             cands.append(SKILL_BUY)
-        # craft intentionally NOT a candidate: the live client exposes no recipe
-        # command (sim.craft undefined) — bridge reports it as unsupported, so
-        # offering it would only teach the agent a wasted action.
-        # explore: plain forward walk — ALWAYS available. This is what lets the
-        # agent leave the spawn area and discover NPCs/mobs on its own, instead of
-        # standing still when no mob is in `nearby`. It is a genuine capability the
-        # policy may learn to use (or not), not a scripted "go explore" rule.
-        cands.append(SKILL_EXPLORE)
+        # explore: plain forward walk. Genuine capability the policy may learn,
+        # but NOT always-available: when a quest is active/ready the agent must
+        # progress it (return_to_giver / turn_in), not drift to fences. Offer
+        # explore only when there is NO active/ready quest AND no quest NPC is
+        # nearby to interact with — i.e. early free-roam / discovery only.
+        quest_active = bool(active or ready)
+        quest_npc_near = bool(quest_npcs)
+        if not quest_active and not quest_npc_near:
+            cands.append(SKILL_EXPLORE)
         # de-dup, preserve order
         seen = set(); out = []
         for c in cands:
@@ -220,14 +228,59 @@ class GoalManager:
         # ctx: pass the active quest if relevant
         ctx = {}
         if action in (SKILL_TURN_IN, SKILL_RETURN, SKILL_ACCEPT):
-            for q in (info.get("quests", {}).get("active") or []):
-                if q.get("state") in ("active", "ready", "complete"):
-                    ctx["quest"] = q
-                    break
+            quests = info.get("quests", {}) or {}
+            active = quests.get("active") or []
+            ready = quests.get("ready") or []
+            # turn_in needs a READY (objectives done) quest, not just any active
+            if action == SKILL_TURN_IN and ready:
+                ctx["quest"] = ready[0]
+            else:
+                # Prefer a quest that HAS a turnInNpc — return_to_giver navigates
+                # to it. A quest without turnInNpc cannot be returned to, so skip
+                # it when another quest with turnInNpc is available (mirrors
+                # QuestCapability.find_active_quest). This fixes return_to_giver
+                # FAILURE when quests.active[0] lacks turnInNpc.
+                preferred = None
+                for q in active:
+                    if q.get("state") not in ("active", "ready", "complete"):
+                        continue
+                    if (q.get("turnInNpc") or {}).get("x") is not None:
+                        ctx["quest"] = q
+                        break
+                    if preferred is None:
+                        preferred = q
+                else:
+                    if preferred is not None:
+                        ctx["quest"] = preferred
+                if "quest" not in ctx and ready:
+                    ctx["quest"] = ready[0]
             if action == SKILL_ACCEPT:
                 for e in (info.get("nearby") or []):
                     if (e.get("kind") == "npc" or e.get("type") == "npc") and (e.get("questIds") or e.get("questId")):
                         ctx["npc"] = e
+                        # CRITICAL: the questId must come from THIS npc's own
+                        # questIds, NOT the first active quest (which may belong to
+                        # a different NPC -> game rejects "quest unavailable").
+                        qids = e.get("questIds") or e.get("questId") or []
+                        if qids:
+                            ctx["questId"] = qids[0] if isinstance(qids, (list, tuple)) else qids
+                        ctx["npcId"] = e.get("id")
+                        break
+            elif action == SKILL_TURN_IN:
+                # surface the ready quest's id so browser_env sends it
+                rq = ctx.get("quest") or {}
+                rid = rq.get("id") or rq.get("questId")
+                if rid:
+                    ctx["questId"] = rid
+                # giver npc id from the ready quest's turnInNpc
+                tNpcPlace = rq.get("turnInNpc") or {}
+                if tNpcPlace.get("id") is not None:
+                    ctx["npcId"] = str(tNpcPlace["id"])
+            elif action in (SKILL_RETURN,):
+                for q in active:
+                    tNpc = q.get("turnInNpc") or {}
+                    if tNpc.get("id") is not None:
+                        ctx["npcId"] = str(tNpc["id"])
                         break
         return action, ctx
 

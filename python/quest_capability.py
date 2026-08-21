@@ -20,12 +20,22 @@ class QuestCapability:
         # Include BOTH active and ready quests. A 'ready' quest (objectives done,
         # awaiting turn-in) lives in quests.ready, not quests.active — ignoring it
         # meant turn_in_quest could never find a quest to turn in.
+        # PREFER a quest that actually has a turnInNpc (return_to_giver navigates
+        # to it). A quest without turnInNpc cannot be returned to, so skip it when
+        # another quest with turnInNpc is available (fixes return_to_giver FAILURE
+        # when quests.active[0] lacks turnInNpc).
         quests = self.env._last_info.get("quests", {}) or {}
-        for q in (quests.get("active", []) or []) + (quests.get("ready", []) or []):
+        all_q = (quests.get("active", []) or []) + (quests.get("ready", []) or [])
+        preferred = None
+        for q in all_q:
             st = q.get("state")
-            if st in ("active", "ready", "complete"):
-                return q
-        return None
+            if st not in ("active", "ready", "complete"):
+                continue
+            if (q.get("turnInNpc") or {}).get("x") is not None:
+                return q  # first quest with a reachable giver wins
+            if preferred is None:
+                preferred = q
+        return preferred
 
     def find_available_quest_npc(self) -> Optional[dict]:
         """An NPC near the player that offers a quest (has non-empty questIds)."""

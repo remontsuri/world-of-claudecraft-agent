@@ -485,14 +485,35 @@ async function navigateToCoord(tx, tz, maxSteps) {
   // separates TURN and FORWARD into different ticks.
   let lastDist = Infinity;
   let stagnant = 0;
+  let detour = 0;        // remaining ticks of a side-step detour
+  let detourDir = 1;     // +1 = strafe/veer right, -1 = left
   for (let i = 0; i < maxSteps; i++) {
-    const st = await safeEval((tx, tz) => {
+    const st = await safeEval((tx, tz, detour, detourDir) => {
       const g = window.__game, sim = g.sim, p = sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
       if (dist < 5) {
         try { g.controller.stop(); } catch (_) {}
         return { done: true, dist };
+      }
+      // While detouring around an obstacle, take a fixed side-step: turn toward
+      // the detour direction and move forward. This walks AROUND walls instead
+      // of grinding against them forever.
+      if (detour > 0) {
+        const desired = Math.atan2(dx, dz);
+        let off = desired - p.facing;
+        off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+        // bias heading: aim 60deg to the side of the goal so we circle the wall
+        const side = off + detourDir * (Math.PI / 3);
+        const abs = Math.abs(side);
+        try { g.controller.stop(); } catch (_) {}
+        if (abs > 0.35) {
+          if (side > 0) g.controller.move({ turnLeft: true });
+          else g.controller.move({ turnRight: true });
+        } else {
+          g.controller.move({ forward: true });
+        }
+        return { done: false, dist, phase: 'detour', off };
       }
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
@@ -512,17 +533,28 @@ async function navigateToCoord(tx, tz, maxSteps) {
       try { g.controller.stop(); } catch (_) {}
       g.controller.move({ forward: true });
       return { done: false, dist, phase: 'forward', off };
-    }, tx, tz);
+    }, tx, tz, detour, detourDir);
 
     if (!st) throw new Error('navigation evaluate failed');
     if (st.done) return true;
 
-    // If distance is not improving for too long, stop rather than walking a
-    // deterministic circle forever. The next policy step can re-plan.
+    // If distance is not improving for too long, we are blocked by a wall.
+    // Start a detour (side-step) instead of giving up, so the agent walks
+    // AROUND the obstacle rather than grinding against it forever.
     if (st.dist >= lastDist - 0.25) stagnant += 1;
     else stagnant = 0;
     lastDist = st.dist;
-    if (stagnant >= 18) break;
+    if (stagnant >= 6 && detour === 0) {
+      // begin a detour burst: veer to whichever side, for ~14 ticks
+      detour = 14;
+      stagnant = 0;
+      // alternate detour direction each time so we don't loop one way
+      detourDir = -detourDir;
+    } else if (detour > 0) {
+      detour -= 1;
+      if (detour === 0) stagnant = 0; // re-evaluate straight path after detour
+    }
+    if (stagnant >= 30) break; // genuine unreachable (or far) — give up cleanly
     await sleep(TICK_MS);
   }
   await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });

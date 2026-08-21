@@ -75,9 +75,23 @@ class Agent:
         try:
             if action == "return_to_giver":
                 # atomic: navigate back to the turn-in NPC (short nav, env-safe)
+                #   SUCCESS  -> arrived at giver (within interact range)
+                #   PARTIAL  -> leg ran but not arrived yet (mid-chain; reward
+                #               scores the MEASURED distance delta) -> INCONCLUSIVE
+                #   FAILURE  -> no known giver position (world_mem miss AND no
+                #               turnInNpc) -> can NEVER navigate. Surface as
+                #               FAILURE so the policy learns not to pick it.
+                #               Previously ALL non-SUCCESS were mapped to
+                #               INCONCLUSIVE, hiding a permanently-stuck return
+                #               as if it were a mid-chain partial.
                 res = quest_skill.return_to_giver(self.env, ctx, self.world_mem)
                 after = self.env._last_info
-                verdict = "SUCCESS" if res == "SUCCESS" else "INCONCLUSIVE"
+                if res == "SUCCESS":
+                    verdict = "SUCCESS"
+                elif res == "FAILURE":
+                    verdict = "FAILURE"
+                else:
+                    verdict = "INCONCLUSIVE"
                 return after, verdict, "OK"
             if action == "explore":
                 # sustained walk toward nearest mob/NPC (or forward) so the agent

@@ -247,18 +247,18 @@ class BrowserEnv:
         """
         payload = {"action": "step", "idx": int(idx)}
         if ctx:
+            # For accept_quest the questId MUST be the NPC's own questId (set by
+            # policy.decide as ctx["questId"]), NOT ctx["quest"]["id"] (which is
+            # the first active quest and may belong to a different NPC). Give
+            # ctx["questId"] priority, falling back to the quest object's id.
             q = ctx.get("quest") or {}
-            qid = q.get("id") or ctx.get("questId")
-            if not qid and ctx.get("npc"):
-                nq = ctx["npc"].get("questIds") or ctx["npc"].get("questId")
-                if nq:
-                    qid = (nq[0] if isinstance(nq, (list, tuple)) else nq)
+            qid = ctx.get("questId") or q.get("id")
             if qid:
                 payload["questId"] = qid
             # giver id (NPC entity id) — the bridge returns its live position so
             # Python can persist it in WorldMemory as the turn-in location.
             npc = ctx.get("npc") or {}
-            nid = npc.get("id") or ctx.get("npcId")
+            nid = ctx.get("npcId") or npc.get("id")
             if nid:
                 payload["npcId"] = str(nid)
         resp = self._post(payload)

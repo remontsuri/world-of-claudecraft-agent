@@ -198,11 +198,16 @@ def main():
             f"[autonomous] FATAL: cannot init BrowserEnv (bridge up? game tab ready?): {type(e).__name__}: {e}\n"
         )
         sys.exit(3)
-    agent = Agent(env, mem, seed=SEED * 3 + 7)
-
     # WorldMemory (persistent quest-giver / vendor knowledge) — used to attribute
     # return/turn-in navigation to a remembered giver vs a fallback.
     world_mem = WorldMemory()
+
+    # CRITICAL: pass world_mem INTO the Agent so quest_skill.return_to_giver can
+    # read remembered giver positions. Previously the Agent was created WITHOUT
+    # world_mem (defaulting to an empty WorldMemory inside), while this local
+    # world_mem was never wired in — so return_to_giver always fell back to the
+    # snapshot's turnInNpc and never used persisted giver_pos.
+    agent = Agent(env, mem, seed=SEED * 3 + 7, world_mem=world_mem)
 
     # metrics — extended per user audit (2026-08-20). These separate real
     # long-horizon autonomy from short-loop survival, and are the acceptance
