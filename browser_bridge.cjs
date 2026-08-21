@@ -362,7 +362,7 @@ async function applyAction(idx, cmd) {
       break;
     }
     case 3: { // turn_in_quest: turn in the specific ready quest
-      const qid = (cmd && cmd.questId) || null;
+      const qid = (cmd && (cmd.questId || cmd.quest_id)) || (cmd && cmd.quest && cmd.quest.id) || null;
       if (qid) {
         await simCall('turnInQuest', [String(qid)]);
       } else {
@@ -900,7 +900,10 @@ const server = http.createServer(async (req, res) => {
       } else if (cmd.action === 'accept_quest') {
         // Agent requests a specific quest (by id) — call the real sim API.
         // The game server validates proximity to the giver; we just forward it.
-        const qid = cmd.questId || (cmd.quest && cmd.quest.id);
+        // Accept BOTH wire keys: Python wow_env sends `quest_id`, older/other
+        // callers send `questId`. Mismatch here silently dropped the id and
+        // made accept_quest inconclusive / turn_in_quest fail with "requires questId".
+        const qid = cmd.questId || cmd.quest_id || (cmd.quest && cmd.quest.id);
         if (!qid) { resp = { ok: false, error: 'accept_quest requires questId' }; }
         else {
           const r = await simCall('acceptQuest', [String(qid)]);
@@ -908,7 +911,8 @@ const server = http.createServer(async (req, res) => {
         }
       } else if (cmd.action === 'turn_in_quest') {
         // Turn in a completed quest by id — call the real sim API.
-        const qid = cmd.questId || (cmd.quest && cmd.quest.id);
+        // Accept BOTH wire keys (see accept_quest note): Python wow_env sends `quest_id`.
+        const qid = cmd.questId || cmd.quest_id || (cmd.quest && cmd.quest.id);
         if (!qid) { resp = { ok: false, error: 'turn_in_quest requires questId' }; }
         else {
           const r = await simCall('turnInQuest', [String(qid)]);
