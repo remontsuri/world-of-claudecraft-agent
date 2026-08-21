@@ -118,7 +118,7 @@ function withTimeout(promise, ms, label) {
 }
 
 const EVAL_TIMEOUT_MS = 8000;
-const CMD_TIMEOUT_MS = 45000;
+const CMD_TIMEOUT_MS = 90000;
 
 // ---- safe page.evaluate with auto-reconnect ----
 async function safeEval(fn, ...args) {
@@ -811,12 +811,12 @@ const server = http.createServer(async (req, res) => {
             () => !!(window.__game && window.__game.sim && window.__game.sim.player)));
         } catch (_) { health.game = false; }
       }
-      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(health)) });
+      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(health)), 'Connection': 'close' });
       res.end(JSON.stringify(health));
       return;
     }
     // simple liveness probe (back-compat)
-    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify({ ok: true, alive: true })) });
+    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify({ ok: true, alive: true })), 'Connection': 'close' });
     res.end(JSON.stringify({ ok: true, alive: true }));
     return;
   }
@@ -871,18 +871,13 @@ const server = http.createServer(async (req, res) => {
 
         // Give the server a tick to switch the character into ghost state.
         await sleep(TICK_MS);
-        // Do NOT walk to the healer — resurrectAtSpiritHealer() teleports the
-        // ghost to the graveyard/spirit healer server-side. Walking 160 steps
-        // (~35s) made the client's respawn timeout fire first (BrowserBridgeError
-        // "no HTTP headers") and crashed the whole agent. Just resurrect.
+        // The authoritative server requires the ghost to be near the Spirit
+        // Healer. Find a real healer and walk there as the ghost, then resurrect.
         const healer = await findSpiritHealer();
-        if (healer) {
-          console.error('[bridge] spirit healer entity present; resurrecting directly (no walk)');
-        } else {
-          console.error('[bridge] no spirit healer entity found; resurrecting directly');
-        }
-
-        // Resurrect at the spirit healer (server handles the teleport).
+        if (!healer) throw new Error('respawn failed: spirit healer not found');
+        console.error('[bridge] spirit healer target', JSON.stringify(healer));
+        const arrived = await navigateToCoord(healer.x, healer.z, 160);
+        if (!arrived) throw new Error('respawn failed: could not reach spirit healer');
         await simCall('resurrectAtSpiritHealer', []);
         let revived = false;
         for (let i = 0; i < 50 && !revived; i++) {
@@ -946,7 +941,7 @@ const server = http.createServer(async (req, res) => {
   ).then((resp) => {
     if (!res.writableEnded) {
       const body = JSON.stringify(resp);
-      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Connection': 'close' });
       res.end(body);
     }
   });

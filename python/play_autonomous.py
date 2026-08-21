@@ -95,13 +95,14 @@ def _acquire_lock():
 
 
 def _release_lock():
-    """Best-effort removal of the single-instance lock. Registered via atexit so
-    it runs on ANY process exit (normal, uncaught exception, sys.exit). Without
-    this a dead agent leaves the lock and the launcher would skip its restart."""
+    """Remove the singleton lock only if this process still owns it."""
     try:
-        if os.path.exists(LOCK_PATH):
-            os.remove(LOCK_PATH)
-    except OSError:
+        with open(LOCK_PATH, "r", encoding="utf-8") as f:
+            holder = f.read().strip()
+        if holder != str(os.getpid()):
+            return
+        os.remove(LOCK_PATH)
+    except (OSError, ValueError):
         pass
 
 
@@ -146,6 +147,8 @@ def main():
         pass
 
     _acquire_lock()  # refuse to run if another instance already drives the char
+    # Register immediately so a heavy-import failure cannot strand our lock.
+    atexit.register(_release_lock)
 
     # --- lifecycle logging: one line per START/STOP so a single log makes the
     # continuous-episode invariant auditable (PID constant across deaths). ---
@@ -167,11 +170,6 @@ def main():
     from agent import Agent
     from memory import ExperienceStore, _bucket, WorldMemory
     from world_state import build_world_state
-    # Release the single-instance lock on ANY exit (normal, exception, sys.exit),
-    # so a dead agent (e.g. bridge down -> sys.exit(3)) never leaves a stale
-    # lock with a dead PID that fools the launcher into thinking it is alive and
-    # skipping the restart. atexit fires even on sys.exit().
-    atexit.register(_release_lock)
     # Record our live PID so the launcher's singleton check (agent.pid) tracks
     # the real long-lived process. (Previously the launcher wrote this via a
     # python -c wrapper; now the module records it directly and reliably.)
@@ -273,6 +271,13 @@ def main():
         # respawn failure at init is infra, not a programming bug; log and continue
         sys.stderr.write(f"[autonomous] init respawn failed (continuing): {type(e).__name__}: {e}\n")
 
+    def _bridge_recovered() -> bool:
+        try:
+            h = env.health(timeout=3.0)
+            return bool(h.get("ok") and h.get("bridge") and h.get("page") and h.get("game"))
+        except BrowserBridgeError:
+            return False
+
     prev = snap(env._last_info)
     start = time.time()
 
@@ -334,18 +339,15 @@ def main():
                 f"(memory saved at {EXP_PATH})\n"
             )
             mem.save()
-            try:
-                if os.path.exists(LOCK_PATH):
-                    os.remove(LOCK_PATH)
-            except OSError:
-                pass
             sys.exit(1)
 
         if rec.get("outcome_kind") == "ENV_ERROR":
-            # Bridge/CDP down: don't busy-loop hammering a dead transport.
-            # The next iteration retries the step; recovery is automatic when
-            # the bridge returns. This keeps ONE process alive across infra blips.
-            time.sleep(2.0)
+            # Never use stale world state as proof of transport recovery. Poll the
+            # real bridge /health endpoint while keeping the SAME Python PID alive.
+            waited = 0
+            while waited < 120 and not _bridge_recovered():
+                time.sleep(2.0)
+                waited += 2
 
         # respawn glue: if the character died (hp depleted OR stuck as a ghost
         # with dead:true but full hp), release spirit + revive so the loop keeps
@@ -353,7 +355,8 @@ def main():
         # dead:true with hp refilled after death, so hp_frac<=0 alone misses it.
         _ws = rec.get("ws_after", {}) or {}
         _dead = _ws.get("dead") or (env._last_info.get("player", {}) or {}).get("dead")
-        if _ws.get("hp_frac", 1.0) <= 0.0 or _dead or _ws.get("deaths", 0) > m["deaths"]:
+        if (rec.get("outcome_kind") != "ENV_ERROR" and
+            (_ws.get("hp_frac", 1.0) <= 0.0 or _dead or _ws.get("deaths", 0) > m["deaths"])):
             try:
                 env.respawn()
                 m["respawns"] += 1

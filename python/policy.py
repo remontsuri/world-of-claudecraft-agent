@@ -146,7 +146,7 @@ class GoalManager:
             cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
-        if quest_npcs:
+        if quest_npcs and not active and not ready:
             cands.append(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
         # a single "do quest" button. turn_in only when ready (objectives done);
@@ -154,11 +154,15 @@ class GoalManager:
         # (agent may learn to use it when drifted far). complete_objective is NOT
         # auto-chosen here — the Policy picks plain FARM for progress (same
         # primitive), keeping the decision explicit.
-        if ready or any(all((o.get("current") or 0) >= (o.get("required") or 0)
-                            for o in (q.get("objectives") or [])) for q in active):
-            cands.append(SKILL_TURN_IN)        # atomic: walk + turn_in
-        if active or ready:
-            cands.append(SKILL_RETURN)         # atomic: navigate back to giver
+        quest_ready = bool(ready or any(
+            all((o.get("current") or 0) >= (o.get("required") or 0)
+                for o in (q.get("objectives") or []))
+            for q in active
+        ))
+        if quest_ready:
+            cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
+            cands.append(SKILL_RETURN)         # navigation-only recovery leg
+        # Do not send an incomplete quest back to its giver prematurely.
         if junk:
             # Only offer sell_junk when a vendor is actually nearby. Without
             # this the agent picks sell_junk while the vendor is far away, gets

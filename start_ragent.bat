@@ -18,7 +18,7 @@ if not exist "%PY%" (
   exit /b 2
 )
 REM Clear PYTHONPATH: Hermes injects a Py3.11 venv whose numpy crashes Py3.12.
-set "PYTHONPATH="
+set "PYTHONPATH=%REPO%\python"
 
 set "BRIDGE_PID=%REPO%\bridge.pid"
 set "BRIDGE_LOG=%REPO%\bridge_smoke.log"
@@ -54,7 +54,7 @@ echo launcher > "%LAUNCHER_PID%"
   if not exist "%AGENT_LOCK%" (
     echo [%date% %time%] starting play_autonomous >> "%LOG%"
     call :rotate_log "%AGENT_LOG%"
-    start "woc-agent" "%PY%" -X faulthandler -m play_autonomous >> "%AGENT_LOG%" 2>&1
+    start "woc-agent" /D "%REPO%\python" cmd /d /c ""%PY%" -X faulthandler -m play_autonomous >> "%AGENT_LOG%" 2>&1"
   ) else (
     REM lock exists: either a live agent holds it, or a stale one. The agent
     REM itself releases the lock on exit via atexit, so a live agent keeps it;
@@ -95,8 +95,11 @@ if not exist "%~1" exit /b 1
 set "LPID="
 for /f "usebackq tokens=*" %%a in ("%~1") do set "LPID=%%a"
 if "%LPID%"=="" exit /b 1
-tasklist /FI "PID eq %LPID%" 2>nul | findstr /C:%LPID% >nul
-if errorlevel 1 (exit /b 0) else (exit /b 1)
+REM Conservative stale-lock check: only clear when the holder PID is absent or
+REM clearly not our play_autonomous Python process. Ambiguity means KEEP lock to
+REM prevent duplicate agents.
+powershell -NoProfile -Command "$p=Get-CimInstance Win32_Process -Filter 'ProcessId=%LPID%' -ErrorAction SilentlyContinue; if($null -eq $p){exit 0}; if($p.Name -match '^python(\.exe)?$' -and $p.CommandLine -match 'play_autonomous'){exit 1}; exit 0" >nul 2>&1
+exit /b %errorlevel%
 
 :rotate_log
 if not exist "%~1" exit /b 0
