@@ -159,7 +159,29 @@ async function applyAction(idx, cmd, gameClient) {
         }
         return false;
       });
-      if (!used) console.warn('[actions] heal requested but no potion in bag -> no-op');
+      if (used) break;
+      // No potion: fall back to FOOD (baked_bread / conjured_bread / roasted_*).
+      // Eating sits to regen HP in this game (classic food regen); the agent
+      // always carries rations, so heal-without-potions is NOT a dead end.
+      // Previously this case was a bare no-op -> the death loop at crit HP
+      // (30 deaths in run 20152) even though the bag had 13+ food items.
+      const ate = await gameClient.evaluate(() => {
+        const sim = window.__game.sim;
+        const inv = sim.inventory;
+        const list = inv instanceof Map ? Array.from(inv.values()) : (Array.isArray(inv) ? inv : []);
+        for (const slot of list) {
+          if (!slot) continue;
+          const def = slot.def || slot.itemDef || {};
+          const name = (def.name || '').toLowerCase();
+          const id = slot.itemId || def.id;
+          if (!id) continue;
+          if (/bread|water|roasted|jerky|ration|meal/i.test(name)) {
+            try { sim.useItem(id); return true; } catch (_) { return false; }
+          }
+        }
+        return false;
+      });
+      if (!ate) console.warn('[actions] heal: no potion and no food in bag -> honest no-op');
       break;
     }
     case 8: { // equip: equip the first unequipped gear item (if any)
@@ -267,13 +289,48 @@ async function applyAction(idx, cmd, gameClient) {
 // player.facing=0 -> +Z; turnLeft INCREASES facing, turnRight DECREASES it;
 // forward moves along (sin(facing), cos(facing)) -> desired = atan2(dx, dz).
 // ALWAYS stops the controller on arrive AND on timeout (no inertia running).
+//
+// STUCK DETECTION (user: "персонаж просто идёт в стену"): if the player has not
+// moved for several ticks while we keep pushing forward, the straight line to
+// the target is blocked. Turn ~120° and keep walking — a simple wall-slide that
+// un-wedges corners/fences without any pathfinding. Progress is measured from
+// the position at stuck-check start; two consecutive unstick turns failing to
+// produce movement ends the leg honestly (arrived=false, no infinite spin).
 async function navigateToCoord(gameClient, x, z, maxSteps) {
   let arrived = false;
+  const STUCK_TICKS = 4;        // ~4*220ms of no movement = blocked
+  let lastPos = null;
+  let stillTicks = 0;
+  let unstickAttempts = 0;
+  const MAX_UNSTICKS = 6;       // after this, give up this leg
   for (let i = 0; i < (maxSteps || 80); i++) {
     const st = await gameClient.evaluate((tx, tz) => {
       const g = window.__game, p = g.sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z, d = Math.hypot(dx, dz);
-      if (d < 5) { try { g.controller.stop(); } catch (_) {} return { arrived: true, d }; }
+      if (d < 5) { try { g.controller.stop(); } catch (_) {} return { arrived: true, d, x: p.pos.x, z: p.pos.z }; }
+      // FLEE: in combat at low HP, run AWAY from the nearest hostile instead of
+      // toward the target. Leash mechanics drop aggro when far enough; walking
+      // on through the mob pack was a death loop (30 deaths in run 20152).
+      if (p.inCombat && (p.hp / Math.max(p.maxHp, 1)) < 0.5) {
+        let nearest = null, nd = Infinity;
+        for (const e of g.sim.entities.values()) {
+          if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0 || e.hostile === false) continue;
+          const ex = e.pos.x - p.pos.x, ez = e.pos.z - p.pos.z;
+          const ed = Math.hypot(ex, ez);
+          if (ed < nd) { nd = ed; nearest = e; }
+        }
+        if (nearest && nd < 25) {
+          // run the OPPOSITE direction from the mob
+          const flee = Math.atan2(p.pos.x - nearest.pos.x, p.pos.z - nearest.pos.z);
+          let off = flee - p.facing;
+          off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          if (Math.abs(off) > 0.2) {
+            if (off > 0) g.controller.move({ turnLeft: true, forward: true });
+            else g.controller.move({ turnRight: true, forward: true });
+          } else { g.controller.move({ forward: true }); }
+          return { arrived: false, d, x: p.pos.x, z: p.pos.z, fleeing: true };
+        }
+      }
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
@@ -281,9 +338,48 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
         if (off > 0) g.controller.move({ turnLeft: true, forward: true });
         else g.controller.move({ turnRight: true, forward: true });
       } else { g.controller.move({ forward: true }); }
-      return { arrived: false, d };
+      return { arrived: false, d, x: p.pos.x, z: p.pos.z };
     }, x, z);
     if (st && st.arrived) { arrived = true; break; }
+    // stuck check
+    if (lastPos && st) {
+      const moved = Math.hypot(st.x - lastPos.x, st.z - lastPos.z);
+      if (moved < 0.15) {
+        stillTicks++;
+        if (stillTicks >= STUCK_TICKS && unstickAttempts < MAX_UNSTICKS) {
+          unstickAttempts++;
+          // turn off-axis and push through: alternate left/right so repeated
+          // wedges zigzag out instead of grinding one wall
+          const dirSign = (unstickAttempts % 2 === 1) ? 1 : -1;
+          const deg120 = dirSign * (Math.PI * 2 / 3);
+          await gameClient.evaluate((delta) => {
+            const g = window.__game, p = g.sim.player;
+            try { g.controller.stop(); } catch (_) {}
+            let remaining = delta;
+            // face() rotates instantly when available; otherwise tick-turns
+            if (typeof g.controller.face === 'function') {
+              try { g.controller.face(p.facing + remaining); } catch (_) {}
+              remaining = 0;
+            }
+            if (remaining !== 0) {
+              let t = 0;
+              const iv = setInterval(() => {
+                try { g.controller.move({ turnLeft: remaining > 0 }); } catch (_) {}
+                if (++t >= 4) { clearInterval(iv); try { g.controller.move({ forward: true }); } catch (_) {} }
+              }, 60);
+            }
+          }, deg120);
+          await sleep(gameClient.tickMs);
+          stillTicks = 0;
+          lastPos = null;
+          continue;
+        }
+        if (unstickAttempts >= MAX_UNSTICKS) break; // honest give-up
+      } else {
+        stillTicks = 0;
+      }
+    }
+    if (st) lastPos = { x: st.x, z: st.z };
     await sleep(gameClient.tickMs);
   }
   if (!arrived) {
