@@ -39,6 +39,8 @@ SKILL_GATHER = "gather"
 SKILL_EQUIP = "equip"      # unequipped gear item in bag -> bridge equipItem
 SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
 SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
+SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
+SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
 REWARD = {
@@ -63,7 +65,8 @@ PHASE_ALLOWED = {
     "NO_QUEST":        [SKILL_ACCEPT, SKILL_EXPLORE],
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
-    "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER],
+    "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
+                        SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
     "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
@@ -167,6 +170,14 @@ class GoalManager:
         # "never farm" rule; the agent can still learn to farm when safe.
         if ws.get("weak_mob_near"):
             cands.append(SKILL_FARM)
+        # Mage kit: ranged nukes. Offered only when a hostile mob is within
+        # spell range (30yd, classes.ts) AND the spell is ready AND mana covers
+        # the cost (world_state already folds both into abilities[].ready).
+        # This is how the agent discovers it is a mage: the candidate exists,
+        # the Q-table learns the rest (ranged kill before melee reach).
+        if ws.get("has_ready_damage_spell"):
+            cands.append(SKILL_CAST_FROSTBOLT)   # slow -> kiting possible
+            cands.append(SKILL_CAST_FIREBALL)    # bigger hit + DoT
         if ws.get("has_mob") and info.get("targetId") is not None:
             # already in combat with something — allow finishing it even if strong
             cands.append(SKILL_FARM)

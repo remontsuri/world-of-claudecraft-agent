@@ -203,4 +203,26 @@ VERIFIERS = {
 
 def verify_skill(name, ctx):
     v = VERIFIERS.get(name)
-    return v(ctx) if v else 'inconclusive'
+    if v:
+        return v(ctx)
+    # Mage cast skills (cast_frostbolt / cast_fireball): SUCCESS on any honest
+    # combat consequence — mob hp dropped, mob died, or xp rose. Without this
+    # every cast returned 'inconclusive' (reward 0) and the Q-table could never
+    # prefer a ranged nuke over melee farm.
+    if name in ('cast_frostbolt', 'cast_fireball'):
+        b, a = ctx['before'], ctx['after']
+        if (a.get('player') or {}).get('xp', 0) > (b.get('player') or {}).get('xp', 0):
+            return 'success'
+        if _player_kills(a) > _player_kills(b):
+            return 'success'
+        before_mobs = {(e.get('id')): e for e in (b.get('nearby') or [])
+                       if (e.get('kind') == 'mob' or e.get('type') == 'mob')}
+        after_mobs = {(e.get('id')): e for e in (a.get('nearby') or [])
+                      if (e.get('kind') == 'mob' or e.get('type') == 'mob')}
+        for mid, me in before_mobs.items():
+            if not me.get('dead') and (me.get('hp') or 0) > 0:
+                ae = after_mobs.get(mid)
+                if ae is None or ae.get('dead') or (ae.get('hp') or 0) < (me.get('hp') or 0):
+                    return 'success'
+        return 'inconclusive'
+    return 'inconclusive'

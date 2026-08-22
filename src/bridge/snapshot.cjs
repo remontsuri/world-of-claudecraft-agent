@@ -84,8 +84,28 @@ function readGameState() {
     });
   }
   const inv = (p.inventory || sim.inventory || []);
+  // Mage/caster kit (official classes.ts): resource is p.resource/maxResource
+  // ('mana' for mage), abilities come from sim.known[] (ResolvedAbility[]).
+  // The agent must SEE its spells and mana or it never uses the class kit.
+  const known = (typeof sim.known !== 'undefined') ? (sim.known || []) : [];
+  const abilities = [];
+  for (let i = 0; i < known.length; i++) {
+    const k = known[i];
+    if (!k || !k.def || k.def.passive) continue;
+    const cd = (p.cooldowns && p.cooldowns.get && p.cooldowns.get(k.def.id)) || 0;
+    abilities.push({
+      id: k.def.id, name: k.def.name,
+      cost: k.cost != null ? k.cost : (k.def.cost || 0),
+      castTime: k.castTime != null ? k.castTime : (k.def.castTime || 0),
+      cooldown: k.cooldown != null ? k.cooldown : (k.def.cooldown || 0),
+      range: k.def.range || 0,
+      ready: cd <= 0,
+    });
+  }
   return {
     player: { hp: p.hp, maxHp: p.maxHp, level: p.level, dead: !!p.dead },
+    mana: p.resource, maxMana: p.maxResource,
+    abilities,
     player_pos: [p.pos.x, p.pos.z],
     nearby,
     inventory: inv.map((it) => ({ quality: it.quality ?? 0, name: it.name })),

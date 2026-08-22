@@ -78,6 +78,35 @@ def build_world_state(info: Dict) -> Dict:
         for e in nearby
     )
 
+    # Mage/caster facts (official classes.ts: mage = mana resource, ranged kit).
+    # The agent must SEE its mana and its castable abilities as NUMBERS, or it
+    # melee-tanks like a warrior and never uses the kit it actually has.
+    # mana_frac sentinel -1.0 = "no mana info" (non-caster / older bridge):
+    # policy treats it as "cannot cast" without crashing.
+    mana = info.get("mana")
+    max_mana = info.get("maxMana")
+    if isinstance(mana, (int, float)) and isinstance(max_mana, (int, float)) and max_mana > 0:
+        mana_frac = round(max(0.0, min(1.0, mana / max_mana)), 4)
+    else:
+        mana_frac = -1.0
+    abilities = []
+    for a in (info.get("abilities") or []):
+        if not isinstance(a, dict) or not a.get("id"):
+            continue
+        affordable = (mana if isinstance(mana, (int, float)) else 0) >= (a.get("cost") or 0)
+        abilities.append({
+            "id": a["id"],
+            "name": a.get("name") or a["id"],
+            "cost": a.get("cost") or 0,
+            "range": a.get("range") or 0,
+            "ready": bool(a.get("ready")) and affordable,
+        })
+    has_ready_damage_spell = any(
+        a["ready"] and a["id"] in ("fireball", "frostbolt", "arcane_missiles",
+                                   "fire_blast", "scorch", "ice_lance")
+        for a in abilities
+    )
+
     # quest facts: progress, status, and MEASURED distance to the turn-in NPC
     quest_progress = 0
     distance_to_giver = 999.0
@@ -195,4 +224,8 @@ def build_world_state(info: Dict) -> Dict:
         "quest_progress": quest_progress,
         # structured quest view (numbers, not bits) — see task 2
         "quest": quest_struct,
+        # caster view: mana + castable abilities (mage kit), see classes.ts
+        "mana_frac": mana_frac,
+        "abilities": abilities,
+        "has_ready_damage_spell": has_ready_damage_spell,
     }

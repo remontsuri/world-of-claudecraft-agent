@@ -32,7 +32,8 @@ from wow_env import WoWClassicEnv, make_env
 #   5 gather  6 craft  7 heal  8 equip  9 buy
 # Order is load-bearing: Phase D high-level PPO trains against these indices.
 SKILLS = ["farm", "loot", "accept_quest", "turn_in_quest", "sell_junk",
-          "gather", "craft", "heal", "equip", "buy"]
+          "gather", "craft", "heal", "equip", "buy",
+          "cast_frostbolt", "cast_fireball"]
 N_SKILLS = len(SKILLS)
 
 # Low-level action indices from src/sim/obs.ts ACTIONS
@@ -270,6 +271,16 @@ class HierarchicalWoWEnv(gym.Env):
             elif name == "heal":
                 # eat/drink to recover HP (noop if already full — sim ignores)
                 obs, r, term, trunc, info = self.base.step(ACT_EAT_DRINK)
+            elif name in ("cast_frostbolt", "cast_fireball"):
+                # mage ranged nuke: bridge case 10/11 -> targetEntity + castAbility.
+                # The online bridge handles it; headless base has no caster path
+                # (honest noop there).
+                if hasattr(self.base, "_post"):
+                    resp = self.base._post({"action": "step",
+                                            "idx": 10 if name == "cast_frostbolt" else 11})
+                    info = resp.get("info") or self._last_info
+                else:
+                    obs, r, term, trunc, info = self.base.step(ACT_NOOP)
             elif name in ("equip", "buy"):
                 # unsupported in headless: no inventory-equip / vendor-buy action in
                 # obs.ts ACTIONS and no client worldApi surface. Honest noop.
@@ -343,6 +354,12 @@ class HierarchicalWoWEnv(gym.Env):
         mask[7] = True                                             # heal (unconditional)
         mask[8] = False                                            # equip (no cmd)
         mask[9] = False                                            # buy (no cmd)
+        # mage kit: ready damage spell (mana + cooldown folded in by bridge)
+        spell_ready = bool(info.get("abilities")) and any(
+            a.get("ready") and a.get("id") in ("fireball", "frostbolt")
+            for a in info["abilities"])
+        mask[10] = spell_ready                                     # cast_frostbolt
+        mask[11] = spell_ready                                     # cast_fireball
         return mask
 
 

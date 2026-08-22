@@ -196,6 +196,43 @@ async function applyAction(idx, cmd, gameClient) {
       if (v == null) console.warn('[actions] buy requested but no vendor in range -> no-op');
       break;
     }
+    case 10: // cast_frostbolt: ranged dmg + 40% slow (mage kit, classes.ts:1585)
+    case 11: { // cast_fireball: ranged dmg + DoT (mage kit, classes.ts:1465)
+      const abilityId = (idx === 10) ? 'frostbolt' : 'fireball';
+      const castRes = await gameClient.evaluate((aid) => {
+        const sim = window.__game.sim;
+        if (typeof sim.castAbility !== 'function') {
+          try { sim.castAbilityBySlot && sim.castAbilityBySlot(-1); } catch (_) {}
+          return { ok: false, why: 'no castAbility API' };
+        }
+        // ensure a hostile target so the cast lands (auto-acquire fallback:
+        // nearest attacking mob, casting_lifecycle.ts:771, but pick any nearest
+        // hostile when not yet in combat — ranged opening hit)
+        try {
+          if (sim.player.targetId == null) {
+            let best = null, bd = Infinity;
+            for (const e of sim.entities.values()) {
+              if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
+              if (e.hostile === false) continue;
+              const dx = e.pos.x - sim.player.pos.x, dz = e.pos.z - sim.player.pos.z;
+              const d = Math.hypot(dx, dz);
+              if (d <= 30 && d < bd) { bd = d; best = e; }
+            }
+            if (best) sim.targetEntity(best.id);
+          }
+          sim.castAbility(aid);
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, why: e && e.message };
+        }
+      }, abilityId);
+      if (castRes && castRes.ok === false) {
+        console.warn('[actions] cast ' + abilityId + ' failed: ' + (castRes.why || '?'));
+      }
+      // cast time 1.5s: hold the tab so the next command doesn't cancel the cast
+      await sleep(1500);
+      break;
+    }
     default:
       await gameClient.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} });
   }
