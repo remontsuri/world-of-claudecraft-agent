@@ -209,6 +209,11 @@ def main():
     replay = ReplayBuffer(cap=20000)
     # StrategyMemory: which strategies worked (per quest/goal keys).
     strat_mem = StrategyMemory()
+    # SelfReflection: the 'делал выводы' loop — reviews recent steps every
+    # SAVE_EVERY, draws conclusions (death clusters, action saturation, quest
+    # stalls), persists them to self_reflection.json.
+    from self_reflection import SelfReflection
+    refl = SelfReflection()
 
     # CRITICAL: pass world_mem INTO the Agent so quest_skill.return_to_giver can
     # read remembered giver positions. Previously the Agent was created WITHOUT
@@ -588,6 +593,16 @@ def main():
         if i % SAVE_EVERY == 0:
             replay.save()
             strat_mem.save()
+            # SELF-REFLECTION (the 'делал выводы' step): review the recent window,
+            # draw conclusions, persist them to the journal. Conclusions carry
+            # machine hints consumed via reflector.hints() by the policy layer.
+            try:
+                refl.observe(rec)
+                conclusions = refl.reflect()
+                for c in conclusions:
+                    print(f"[reflect] {c['kind']}: {c['detail']}", flush=True)
+            except Exception:
+                traceback.print_exc()
             # Rare-event training pass: replay stored transitions (accept/turn_in/
             # progress/death weighted higher) so 1000 explore steps cannot drown
             # one useful turn_in. This is the actual "learn from buffer, not just
