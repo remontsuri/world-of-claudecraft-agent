@@ -33,7 +33,11 @@ from wow_env import WoWClassicEnv, make_env
 # Order is load-bearing: Phase D high-level PPO trains against these indices.
 SKILLS = ["farm", "loot", "accept_quest", "turn_in_quest", "sell_junk",
           "gather", "craft", "heal", "equip", "buy",
-          "cast_frostbolt", "cast_fireball"]
+          "cast_frostbolt", "cast_fireball",
+          # economy loop (spec 2026-08-22): craft_item uses ctx.recipeId
+          # (a KNOWN recipe with satisfied reagents); the old flat "craft"
+          # (idx 6) stays an honest no-op for backward compat.
+          "craft_item"]
 N_SKILLS = len(SKILLS)
 
 # Low-level action indices from src/sim/obs.ts ACTIONS
@@ -281,6 +285,11 @@ class HierarchicalWoWEnv(gym.Env):
                     info = resp.get("info") or self._last_info
                 else:
                     obs, r, term, trunc, info = self.base.step(ACT_NOOP)
+            elif name == "craft_item":
+                # economy loop: bridge case 12 -> sim.craftItem(recipeId).
+                # Executed by the ONLINE path (agent.py -> browser_env.step with
+                # ctx.recipeId); headless base has no crafting surface -> noop.
+                obs, r, term, trunc, info = self.base.step(ACT_NOOP)
             elif name in ("equip", "buy"):
                 # unsupported in headless: no inventory-equip / vendor-buy action in
                 # obs.ts ACTIONS and no client worldApi surface. Honest noop.
@@ -360,6 +369,8 @@ class HierarchicalWoWEnv(gym.Env):
             for a in info["abilities"])
         mask[10] = spell_ready                                     # cast_frostbolt
         mask[11] = spell_ready                                     # cast_fireball
+        # economy: something craftable right now (reagents + station folded in)
+        mask[12] = bool(info.get("craftable_now"))
         return mask
 
 

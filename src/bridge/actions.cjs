@@ -179,21 +179,41 @@ async function applyAction(idx, cmd, gameClient) {
       if (!equipped) console.warn('[actions] equip requested but nothing equippable -> no-op');
       break;
     }
-    case 9: { // buy: buy a health potion from a nearby vendor (guarded)
+    case 9: { // buy: buy cmd.buyItemId (default minor_healing_potion) from a nearby vendor
       const DEFAULT_BUY = 'minor_healing_potion';
-      const v = await gameClient.evaluate((itemId) => {
+      const itemId = (cmd && (cmd.buyItemId || cmd.itemId)) || DEFAULT_BUY;
+      const v = await gameClient.evaluate((wanted) => {
         const sim = window.__game.sim, p = sim.player;
         for (const e of sim.entities.values()) {
           if ((e.kind === 'npc' || e.type === 'npc') && (e.vendor || e.isVendor || e.vendorItems)) {
             const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
             if (Math.hypot(dx, dz) <= 12) {
-              try { sim.buyItem(e.id, itemId); return e.id; } catch (_) { return null; }
+              try { sim.buyItem(e.id, wanted); return e.id; } catch (_) { return null; }
             }
           }
         }
         return null;
-      }, DEFAULT_BUY);
-      if (v == null) console.warn('[actions] buy requested but no vendor in range -> no-op');
+      }, itemId);
+      if (v == null) console.warn('[actions] buy ' + itemId + ': no vendor in range -> no-op');
+      break;
+    }
+    case 12: { // craft_item: sim.craftItem(recipeId); Craft Cast System runs a cast
+      const recipeId = (cmd && cmd.recipeId) || null;
+      if (!recipeId) {
+        console.warn('[actions] craft_item without recipeId -> no-op');
+      } else {
+        const res = await gameClient.evaluate((rid) => {
+          try { window.__game.sim.craftItem(rid); return { ok: true }; }
+          catch (e) { return { ok: false, why: e && e.message }; }
+        }, recipeId);
+        if (!res || res.ok === false) {
+          console.warn('[actions] craft ' + recipeId + ' rejected: ' + (res && res.why));
+        } else {
+          // Craft Cast System: the craft is an async cast — hold the tab so the
+          // cast completes before the next command (result lands in inventory).
+          await sleep(2000);
+        }
+      }
       break;
     }
     case 10: // cast_frostbolt: ranged dmg + 40% slow (mage kit, classes.ts:1585)

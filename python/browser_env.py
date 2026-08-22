@@ -256,6 +256,9 @@ class BrowserEnv:
             nid = ctx.get("npcId") or npc.get("id")
             if nid:
                 payload["npcId"] = str(nid)
+            # economy loop: craft_item carries the chosen recipe id
+            if ctx.get("recipeId"):
+                payload["recipeId"] = ctx["recipeId"]
         resp = self._post(payload)
         if not resp.get("ok", False):
             raise BrowserBridgeError(f"bridge step failed: {resp.get('error')}")

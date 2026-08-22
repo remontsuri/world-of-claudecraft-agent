@@ -84,6 +84,44 @@ function readGameState() {
     });
   }
   const inv = (p.inventory || sim.inventory || []);
+  // Economy loop (spec 2026-08-22): real inventory ids+counts, known recipes
+  // with reagents, craft stations. Known recipes live on
+  // g.online.craftingIdentity.knownRecipes (verified live); recipes with full
+  // reagent data on sim.recipeList.
+  const invFull = inv.map((slot) => ({
+    id: slot.itemId || (slot.def && slot.def.id) || null,
+    name: slot.name || (slot.def && slot.def.name) || null,
+    quality: slot.quality ?? (slot.def ? slot.def.quality : undefined) ?? 0,
+    count: slot.count || 1,
+  }));
+  let knownIds = [];
+  try {
+    const kr = g.online && g.online.craftingIdentity && g.online.craftingIdentity.knownRecipes;
+    if (Array.isArray(kr)) knownIds = kr;
+    else if (kr && typeof kr.forEach === 'function') kr.forEach((v) => knownIds.push(v));
+  } catch (_) {}
+  let recipesKnown = [];
+  try {
+    const list = sim.recipeList || [];
+    const want = new Set(knownIds.map(String));
+    for (const r of list) {
+      if (want.size && !want.has(String(r.id))) continue;
+      recipesKnown.push({
+        id: r.id,
+        resultItemId: r.resultItemId,
+        resultCount: r.resultCount || 1,
+        reagents: (r.reagents || []).map((rg) => ({ itemId: rg.itemId, count: rg.count })),
+        stationType: r.stationType || null,
+      });
+    }
+  } catch (_) {}
+  let stations = [];
+  try {
+    stations = (sim.stationPlacements || []).map((s) => ({
+      id: s.id || s.stationType, stationType: s.stationType || s.type,
+      x: s.pos ? s.pos.x : s.x, z: s.pos ? s.pos.z : s.z,
+    }));
+  } catch (_) {}
   // Mage/caster kit (official classes.ts): resource is p.resource/maxResource
   // ('mana' for mage), abilities come from sim.known[] (ResolvedAbility[]).
   // The agent must SEE its spells and mana or it never uses the class kit.
@@ -108,7 +146,10 @@ function readGameState() {
     abilities,
     player_pos: [p.pos.x, p.pos.z],
     nearby,
-    inventory: inv.map((it) => ({ quality: it.quality ?? 0, name: it.name })),
+    inventory: invFull,
+    inventory_by_id: invFull.reduce((m, s) => { if (s.id) m[s.id] = (m[s.id] || 0) + (s.count || 1); return m; }, {}),
+    recipes_known: recipesKnown,
+    stations,
     quests: { active, ready, done },
     kills: (sim.deedStats && sim.deedStats.counters && sim.deedStats.counters.kills) || p.kills || 0,
     xp: g.online ? g.online.xp : (p.xp || 0),

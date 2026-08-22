@@ -41,6 +41,7 @@ SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
 SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
 SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
 SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
+SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
 REWARD = {
@@ -66,12 +67,15 @@ PHASE_ALLOWED = {
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
     "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
-                        SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL],
+                        SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
     "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
     "HEAL":            [SKILL_HEAL],
 }
+# craft_item is also valid in SELL_REPAIR (town visit: sell junk + craft at the
+# forge/loom next door) — appended after the dict so DO_OBJECTIVE stays readable.
+PHASE_ALLOWED["SELL_REPAIR"] = PHASE_ALLOWED["SELL_REPAIR"] + [SKILL_CRAFT]
 
 
 def _softmax_sample(weights: Dict[str, float], temperature: float = 1.0,
@@ -178,6 +182,11 @@ class GoalManager:
         if ws.get("has_ready_damage_spell"):
             cands.append(SKILL_CAST_FROSTBOLT)   # slow -> kiting possible
             cands.append(SKILL_CAST_FIREBALL)    # bigger hit + DoT
+        # Economy: craft a recipe whose reagents are satisfied (and the required
+        # station is in range for station-bound recipes). world_state already
+        # computed ws["craftable_now"]; ctx carries the chosen recipeId.
+        if ws.get("craftable_now"):
+            cands.append(SKILL_CRAFT)
         if ws.get("has_mob") and info.get("targetId") is not None:
             # already in combat with something — allow finishing it even if strong
             cands.append(SKILL_FARM)
@@ -293,6 +302,10 @@ class GoalManager:
                                  bucket=bucket, exploration_weight=exploration_weight)
         # ctx: pass the active quest if relevant
         ctx = {}
+        if action == SKILL_CRAFT:
+            craftable = ws.get("craftable_now") or []
+            if craftable:
+                ctx["recipeId"] = craftable[0]["id"]
         if action in (SKILL_TURN_IN, SKILL_RETURN, SKILL_ACCEPT):
             quests = info.get("quests", {}) or {}
             active = quests.get("active") or []

@@ -107,6 +107,35 @@ def build_world_state(info: Dict) -> Dict:
         for a in abilities
     )
 
+    # Economy loop (spec 2026-08-22): inventory by item id, craftable recipes.
+    inv_by_id = {}
+    for it in inv:
+        iid = it.get("itemId") or (it.get("def") or {}).get("id")
+        if not iid:
+            continue
+        inv_by_id[iid] = inv_by_id.get(iid, 0) + (it.get("count") or 1)
+    STATION_RANGE = 8.0
+    px, pz = info.get("player_pos") or [0, 0]
+    stations = info.get("stations") or []
+    station_types_near = {
+        s.get("stationType") for s in stations
+        if s.get("stationType") and ((s.get("x", 9999) - px) ** 2 + (s.get("z", 9999) - pz) ** 2) ** 0.5 <= STATION_RANGE
+    }
+    craftable_now = []
+    for rec in (info.get("recipes_known") or []):
+        if not isinstance(rec, dict) or not rec.get("id"):
+            continue
+        ok_reagents = all(
+            inv_by_id.get(rg.get("itemId"), 0) >= (rg.get("count") or 0)
+            for rg in (rec.get("reagents") or [])
+        )
+        if not ok_reagents:
+            continue
+        st = rec.get("stationType")
+        if st and st not in station_types_near:
+            continue
+        craftable_now.append({"id": rec["id"], "resultItemId": rec.get("resultItemId")})
+
     # quest facts: progress, status, and MEASURED distance to the turn-in NPC
     quest_progress = 0
     distance_to_giver = 999.0
@@ -228,4 +257,7 @@ def build_world_state(info: Dict) -> Dict:
         "mana_frac": mana_frac,
         "abilities": abilities,
         "has_ready_damage_spell": has_ready_damage_spell,
+        # economy view: inventory by id, recipes craftable right now
+        "inv_by_id": inv_by_id,
+        "craftable_now": craftable_now,
     }
