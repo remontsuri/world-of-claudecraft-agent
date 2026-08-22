@@ -214,7 +214,14 @@ class GoalManager:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg
         # Do not send an incomplete quest back to its giver prematurely.
-        if junk:
+        # Bag pressure: a nearly-full bag blocks quest turn-ins (bagsFullError)
+        # even with zero junk-quality items (materials are common). Offer
+        # sell_junk near a vendor when the bag is >=13 slots so the bridge's
+        # material-surplus sale can free room. This is how "сумки полные ->
+        # продай что-нибудь" becomes learnable instead of a silent wall.
+        bag_slots = len([s for s in inv if s])
+        bag_pressure = bag_slots >= 13 or bool(junk)
+        if bag_pressure:
             # Only offer sell_junk when a vendor is actually nearby. Without
             # this the agent picks sell_junk while the vendor is far away, gets
             # an inconclusive (bridge no-ops "no merchant nearby"), and can
