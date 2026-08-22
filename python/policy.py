@@ -21,6 +21,7 @@ SUCCESS/PARTIAL/FAILURE; the policy reacts to that next step.
 """
 
 import math
+import os
 import random
 from typing import Dict, List, Optional, Tuple
 
@@ -123,10 +124,39 @@ def _softmax_sample(weights: Dict[str, float], temperature: float = 1.0,
     return actions[-1]
 
 
+def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
+    """Load machine hints from self_reflection.json (the SelfReflection journal).
+
+    Returns {key: {kind, detail, hint}} — e.g. {'spin:turn_in_quest': {...},
+    'death:2_-3': {...}}. Empty dict when the file is absent/corrupt: hints are
+    optional steering, never a hard dependency.
+    """
+    import json
+    base = dirpath or os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "self_reflection.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        out = {}
+        for c in data.get("journal", [])[-40:]:
+            out[c.get("key")] = {"kind": c.get("kind"),
+                                 "detail": c.get("detail"),
+                                 "hint": c.get("hint")}
+        return out
+    except Exception:
+        return {}
+
+
 class GoalManager:
-    def __init__(self, memory: ExperienceStore, temperature: float = 1.2, seed: int = None):
+    def __init__(self, memory: ExperienceStore, temperature: float = 1.2, seed: int = None,
+                 reflection_hints: Optional[dict] = None):
         self.mem = memory
         self.temperature = temperature
+        # Self-learning loop (user 2026-08-22): hints from the agent's own
+        # self-reflection journal steer candidate selection:
+        #   spin:<action>  -> that action's weight is suppressed (x0.3)
+        #   death:<cell>   -> farm suppressed in that cell while hp < 0.6
+        self.hints = dict(reflection_hints or {})
         if seed is not None:
             random.seed(seed)
 
@@ -276,6 +306,25 @@ class GoalManager:
             # for accept) -> fall back to the full list so the agent can act.
         if ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands:
             cands.append(SKILL_HEAL)
+        # SELF-LEARNING LOOP (closes the reflection cycle): the agent's own
+        # conclusions change tomorrow's behavior.
+        #   spin:<action> -> suppress that action (weight x0.3 at decide time,
+        #     removed from candidates entirely when the journal is fresh)
+        #   death:<cell>  -> while hp<0.6, no farm in a cell that killed us
+        for key, h in (self.hints or {}).items():
+            if not isinstance(h, dict):
+                continue
+            kind = (h.get("kind") or "").upper()
+            if "ACTION_SATURATION" in kind and key.startswith("spin:"):
+                bad = key.split(":", 1)[1]
+                if bad in cands:
+                    cands.remove(bad)
+            if ("DEATH" in kind and key.startswith("death:")
+                    and ws.get("hp_frac", 1.0) < 0.6
+                    and str(info.get("cell")) == key.split(":", 1)[1]):
+                for risky in (SKILL_FARM,):
+                    if risky in cands:
+                        cands.remove(risky)
         # Retreat option: at low HP / in combat with an active quest, walking
         # back toward the giver is the only SURVIVABLE move (farm would re-engage
         # the mob that is killing us; heal may be a no-op without potions).
