@@ -223,6 +223,36 @@ class ExperienceStore:
         bucket = _bucket(state)
         return {a: self.value(bucket, a) for a in actions}
 
+    def train_from_replay(self, replay, batch: int = 32):
+        """Draw a rare-event-prioritized batch from the ReplayBuffer and apply
+        TD(0) updates. This is the fix for '1000 explore steps drown one turn_in':
+        the instantaneous per-step update only sees the last transition; this pass
+        replays stored RARE events (accept/turn_in/progress/death) so their
+        lessons are actually reinforced. Replay items store bucket keys as strings,
+        which _bucket() accepts directly.
+        """
+        if replay is None or len(replay) == 0:
+            return 0
+        batch_items = replay.sample(batch)
+        n = 0
+        for it in batch_items:
+            try:
+                # Replay items store the RAW WorldState dict as `state`/
+                # `next_state` (see play_autonomous.py ~line 562). ExperienceStore
+                # .update() expects a dict and bucketizes it internally via
+                # _bucket(), so pass it through unchanged. (If a writer ever
+                # stored a pre-bucketed string, that's a contract bug — let it
+                # surface rather than silently mis-bucket.)
+                self.update(it["state"], it["action"], it["reward"],
+                            it.get("next_state"), outcome_kind="OK")
+                n += 1
+            except Exception:
+                traceback.print_exc()
+        # single atomic persist (update() saves on every call; collapse to one)
+        if n:
+            self.save()
+        return n
+
     def snapshot(self) -> dict:
         """Human-readable view of what the agent has learned (for logging/debug)."""
         out = {}

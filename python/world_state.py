@@ -85,6 +85,22 @@ def build_world_state(info: Dict) -> Dict:
     active = info.get("quests", {}).get("active") or []
     ready = info.get("quests", {}).get("ready") or []
     all_q = active + ready
+
+    # Structured quest block (user 2026-08-20): the agent must SEE the real
+    # phase, progress and turn-in distance as NUMBERS, not as 8-bit buckets.
+    # `complete = progress >= required` (never `required == current`, which is
+    # false when the bridge reports 0/0 on a freshly-accepted quest).
+    quest_struct = {
+        "id": None,
+        "phase": "NONE",          # NONE | ACTIVE | READY
+        "accepted": False,
+        "progress": 0,
+        "required": 0,
+        "complete": False,
+        "giver_id": None,
+        "giver_known": False,
+        "giver_distance": 999.0,
+    }
     if all_q:
         any_incomplete = False
         for q in all_q:
@@ -102,6 +118,45 @@ def build_world_state(info: Dict) -> Dict:
                 if d < distance_to_giver:
                     distance_to_giver = d
         quest_status = "ACTIVE" if any_incomplete else "READY_TO_TURN_IN"
+
+        # Prefer a quest that has a reachable giver (mirrors QuestCapability).
+        q = None
+        for cand in all_q:
+            if cand.get("state") not in ("active", "ready", "complete"):
+                continue
+            if (cand.get("turnInNpc") or {}).get("x") is not None:
+                q = cand
+                break
+            q = q or cand
+        if q is not None:
+            # aggregate objective progress across all objectives of this quest
+            prog = 0
+            req = 0
+            incomplete = False
+            for o in (q.get("objectives") or []):
+                cur = o.get("current") or 0
+                r = o.get("required") or 0
+                prog += min(cur, r)
+                req += r
+                if cur < r:
+                    incomplete = True
+            qphase = "READY" if not incomplete else "ACTIVE"
+            # CRITICAL: complete only when progress actually reached required.
+            # A quest with NO objectives reported yet is NOT complete (the agent
+            # must still go do it). Empty objectives -> phase ACTIVE, complete False.
+            qcomplete = bool(q.get("objectives")) and (not incomplete)
+            tNpc = q.get("turnInNpc") or {}
+            quest_struct = {
+                "id": q.get("id") or q.get("questId"),
+                "phase": qphase,
+                "accepted": True,
+                "progress": prog,
+                "required": req,
+                "complete": qcomplete,
+                "giver_id": str(tNpc.get("id")) if tNpc.get("id") is not None else None,
+                "giver_known": tNpc.get("x") is not None,
+                "giver_distance": distance_to_giver,
+            }
 
     in_combat = bool(info.get("in_combat"))
     dead = bool(p.get("dead"))
@@ -130,4 +185,6 @@ def build_world_state(info: Dict) -> Dict:
         "deaths": info.get("deaths", 0),
         "inv_slots": len(inv),
         "quest_progress": quest_progress,
+        # structured quest view (numbers, not bits) — see task 2
+        "quest": quest_struct,
     }

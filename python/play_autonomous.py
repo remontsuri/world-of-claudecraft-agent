@@ -170,6 +170,9 @@ def main():
     from agent import Agent
     from memory import ExperienceStore, _bucket, WorldMemory
     from world_state import build_world_state
+    from goal_fsm import GoalFSM
+    from replay_buffer import ReplayBuffer
+    from strategy_memory import StrategyMemory
     # Record our live PID so the launcher's singleton check (agent.pid) tracks
     # the real long-lived process. (Previously the launcher wrote this via a
     # python -c wrapper; now the module records it directly and reliably.)
@@ -199,13 +202,21 @@ def main():
     # WorldMemory (persistent quest-giver / vendor knowledge) — used to attribute
     # return/turn-in navigation to a remembered giver vs a fallback.
     world_mem = WorldMemory()
+    # GoalFSM: explicit current_goal, persisted to goal_state.json so an
+    # infrastructure restart does NOT wipe an in-progress quest.
+    goal_fsm = GoalFSM()
+    # ReplayBuffer: store transitions with rare-event priority (10k-50k).
+    replay = ReplayBuffer(cap=20000)
+    # StrategyMemory: which strategies worked (per quest/goal keys).
+    strat_mem = StrategyMemory()
 
     # CRITICAL: pass world_mem INTO the Agent so quest_skill.return_to_giver can
     # read remembered giver positions. Previously the Agent was created WITHOUT
     # world_mem (defaulting to an empty WorldMemory inside), while this local
     # world_mem was never wired in — so return_to_giver always fell back to the
     # snapshot's turnInNpc and never used persisted giver_pos.
-    agent = Agent(env, mem, seed=SEED * 3 + 7, world_mem=world_mem)
+    agent = Agent(env, mem, seed=SEED * 3 + 7, world_mem=world_mem,
+                  fsm=goal_fsm, replay=replay, strat_mem=strat_mem)
 
     # metrics — extended per user audit (2026-08-20). These separate real
     # long-horizon autonomy from short-loop survival, and are the acceptance
@@ -280,6 +291,10 @@ def main():
 
     prev = snap(env._last_info)
     start = time.time()
+
+    # FSM: sync the explicit goal with the observed world at the top of each
+    # step (death handling is done separately below via enter_dead/resume).
+    goal_fsm.update_from_world(prev)
 
     for i in range(N_STEPS):
         # Singleton self-check: if another instance now holds the lock (our lock
@@ -358,8 +373,24 @@ def main():
         if (rec.get("outcome_kind") != "ENV_ERROR" and
             (_ws.get("hp_frac", 1.0) <= 0.0 or _dead or _ws.get("deaths", 0) > m["deaths"])):
             try:
+                # GoalFSM: record the pre-death goal so respawn resumes the SAME
+                # quest (death does NOT destroy the goal). enter_dead() preserves
+                # self.pre_death_goal; resume_after_respawn() restores it.
+                if goal_fsm is not None:
+                    goal_fsm.enter_dead()
                 env.respawn()
                 m["respawns"] += 1
+                # after respawn, return to the goal we had before death
+                if goal_fsm is not None:
+                    goal_fsm.resume_after_respawn()
+                    # tag RESPAWN_SUCCESS in the replay buffer (rare event)
+                    if replay is not None:
+                        replay.add({
+                            "state": "respawn", "action": "respawn",
+                            "reward": 0.0, "next_state": "alive",
+                            "done": False, "goal": goal_fsm.goal,
+                            "skill": "respawn", "event": "RESPAWN_SUCCESS",
+                        })
                 rec["ws_after"] = snap(env._last_info)
             except BrowserBridgeError as e:
                 # respawn can fail if the bridge is mid-reconnect or the game
@@ -374,6 +405,15 @@ def main():
 
         ws = rec["ws_after"]
         info = env._last_info
+        # FSM sync each step: the explicit current_goal must reflect the LATEST
+        # observed world, not just the boot-time snapshot. (agent._cycle already
+        # calls fsm.update_from_world on ws_before; this keeps goal_state.json
+        # current for infra-restart resume.)
+        if goal_fsm is not None:
+            try:
+                goal_fsm.update_from_world(ws)
+            except Exception:
+                pass
         a = rec["action"]
         m["steps"] += 1
         m["action_counts"][a] += 1
@@ -500,6 +540,53 @@ def main():
             m["deaths_prev"] = dnew
         if was_repeat:
             m["win_repeat"] += 1
+        # --- replay buffer + strategy memory (user 2026-08-20) ---
+        # Build a transition record and store it. Rare events get sampling boost.
+        _q = ws.get("quest") or {}
+        _event = None
+        if a == "accept_quest" and verdict == "SUCCESS":
+            _event = "QUEST_ACCEPT_SUCCESS"
+        elif a == "turn_in_quest" and verdict == "SUCCESS":
+            _event = "QUEST_TURNIN_SUCCESS"
+        elif a == "return_to_giver" and verdict == "SUCCESS":
+            _event = "OBJECTIVE_PROGRESS"  # arrived at giver = navigation progress
+        elif a == "sell_junk" and verdict == "SUCCESS":
+            _event = "VENDOR_SUCCESS"
+        elif rec["outcome_kind"] != "ENV_ERROR" and ws.get("deaths", 0) > m["deaths_prev"]:
+            _event = "DEATH"
+        # navigation success on return/turn_in already counted; tag as progress
+        if a in ("return_to_giver", "turn_in_quest") and verdict == "SUCCESS":
+            _event = "OBJECTIVE_PROGRESS" if _event is None else _event
+        if a == "turn_in_quest" and verdict == "FAILURE":
+            _event = "QUEST_FAIL"
+        replay.add({
+            "state": rec.get("ws_before"),
+            "action": a,
+            "reward": rec["reward"],
+            "next_state": rec.get("ws_after"),
+            "done": (rec.get("outcome_kind") == "ENV_ERROR"),
+            "goal": goal_fsm.goal,
+            "skill": a,
+            "event": _event,
+        })
+        # strategy memory: record per-quest outcomes
+        if _q.get("id"):
+            strat_mem.record_outcome(f"quest:{_q['id']}", a, verdict == "SUCCESS")
+        # periodic replay buffer flush (cheap, atomic) + training pass
+        if i % SAVE_EVERY == 0:
+            replay.save()
+            strat_mem.save()
+            # Rare-event training pass: replay stored transitions (accept/turn_in/
+            # progress/death weighted higher) so 1000 explore steps cannot drown
+            # one useful turn_in. This is the actual "learn from buffer, not just
+            # the last transition" fix.
+            try:
+                trained = mem.train_from_replay(replay, batch=64)
+                if trained:
+                    print(f"[replay] trained {trained} transitions (buf={len(replay)})",
+                          flush=True)
+            except Exception:
+                traceback.print_exc()
         # log one line
         row = {
             "step": i, "pid": os.getpid(), "t": round(time.time() - start, 1),

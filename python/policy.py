@@ -52,6 +52,24 @@ REWARD = {
     "drift_far": -0.5,        # wandered far from quest giver (learned bad habit)
 }
 
+# Phase gate: when the GoalFSM has an explicit goal, the Policy may only pick
+# skills valid for that phase. This is what stops the agent from choosing a
+# global action (e.g. explore) when it should be, say, returning the quest.
+# DEAD/RESPAWN are handled outside decide() (in-process respawn glue).
+# Use the SAME string literals as goal_fsm.py (NO_QUEST/FIND_GIVER/ACCEPT/
+# DO_OBJECTIVE/RETURN_TO_GIVER/TURN_IN/SELL_REPAIR/HEAL) — they live in
+# goal_fsm.py and are not imported here to avoid a circular dependency.
+PHASE_ALLOWED = {
+    "NO_QUEST":        [SKILL_ACCEPT, SKILL_EXPLORE],
+    "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
+    "ACCEPT":          [SKILL_ACCEPT],
+    "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER],
+    "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
+    "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN],
+    "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
+    "HEAL":            [SKILL_HEAL],
+}
+
 
 def _softmax_sample(weights: Dict[str, float], temperature: float = 1.0,
                     counts: Optional[Dict] = None, bucket: Optional[str] = None,
@@ -118,7 +136,7 @@ class GoalManager:
         return build_world_state(info)
 
     # ---- candidate skills from current world ----
-    def _candidates(self, info: dict, ws: dict) -> List[str]:
+    def _candidates(self, info: dict, ws: dict, goal: Optional[str] = None) -> List[str]:
         near = info.get("nearby") or []
         quest_npcs = [e for e in near
                       if (e.get("kind") == "npc" or e.get("type") == "npc")
@@ -212,6 +230,19 @@ class GoalManager:
         quest_npc_near = bool(quest_npcs)
         if not quest_active and not quest_npc_near:
             cands.append(SKILL_EXPLORE)
+        # phase gate: if the GoalFSM has an explicit goal, restrict candidates
+        # to skills valid for that phase. This stops the policy from picking a
+        # global action (e.g. explore) when it should be, say, returning the
+        # quest. Healing is always allowed when hurt (survival > phase).
+        if goal in PHASE_ALLOWED:
+            allowed = PHASE_ALLOWED[goal]
+            gated = [c for c in cands if c in allowed]
+            if gated:
+                cands = gated
+            # else: no candidate matched the phase (e.g. giver not yet in range
+            # for accept) -> fall back to the full list so the agent can act.
+        if ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands:
+            cands.append(SKILL_HEAL)
         # de-dup, preserve order
         seen = set(); out = []
         for c in cands:
@@ -220,7 +251,8 @@ class GoalManager:
         return out
 
     # ---- main decision ----
-    def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0) -> Tuple[str, dict]:
+    def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
+                goal: Optional[str] = None) -> Tuple[str, dict]:
         """Choose one skill. `ws` may be passed in by the caller so the decision
         and the later learn() call are guaranteed to use the SAME WorldState
         instance (and therefore the same bucket key). `exploration_weight` scales
@@ -228,7 +260,7 @@ class GoalManager:
         (removes the exploration/visit-count confound)."""
         if ws is None:
             ws = self._world_state(info)
-        cands = self._candidates(info, ws)
+        cands = self._candidates(info, ws, goal=goal)
         if not cands:
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)

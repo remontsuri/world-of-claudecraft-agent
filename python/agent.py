@@ -51,12 +51,20 @@ def _world_state_dict(info: dict) -> dict:
 
 class Agent:
     def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None,
-                 world_mem: "WorldMemory" = None):
+                 world_mem: "WorldMemory" = None, fsm=None, replay=None,
+                 strat_mem=None):
         self.env = env
         self.mem = memory
         self.world_mem = world_mem or WorldMemory()
         self.policy = GoalManager(memory, temperature=1.2, seed=seed)
         self.cap = QuestCapability(env)
+        # GoalFSM: explicit current_goal, persisted to goal_state.json so an
+        # infra restart resumes the in-progress quest instead of NO_QUEST.
+        self.fsm = fsm
+        # ReplayBuffer: rare-event-prioritized transitions (not just last).
+        self.replay = replay
+        # StrategyMemory: per-(quest,skill) success/fail generalizations.
+        self.strat_mem = strat_mem
 
     def _remember_visible_world(self, info: dict):
         """Persist NPC facts observed by the live browser without steering policy."""
@@ -228,12 +236,26 @@ class Agent:
         self._remember_visible_world(info_before)
         ws_before = _world_state_dict(info_before)
 
-        # 1. Policy decides (learned + exploration).
+        # 0b. GoalFSM sync: drive the explicit current_goal from OBSERVED facts
+        # each step. update_from_world() only sets the phase; it does not pick a
+        # skill. Death is handled by the respawn-glue below (enter_dead /
+        # resume_after_respawn), which preserves pre_death_goal.
+        if self.fsm is not None:
+            try:
+                self.fsm.update_from_world(ws_before)
+            except Exception:
+                traceback.print_exc()
+
+        # 1. Policy decides (learned + exploration), CONSTRAINED to the current
+        # FSM phase. This stops the flat softmax from choosing a global action
+        # (e.g. explore) when the agent should be returning the quest.
         # Pass ws_before explicitly so decide() and learn() use the IDENTICAL
         # WorldState -> identical bucket key (see world_state.py for the bug this
         # prevents).
+        fsm_goal = self.fsm.goal if self.fsm is not None else None
         action, ctx = self.policy.decide(info_before, ws=ws_before,
-                                          exploration_weight=exploration_weight)
+                                          exploration_weight=exploration_weight,
+                                          goal=fsm_goal)
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
@@ -265,9 +287,15 @@ class Agent:
         if learn and outcome_kind != "ENV_ERROR":
             # candidate set of the NEXT state, so the TD bootstrap maxes only over
             # reachable actions (not over globally-unreachable ones).
-            next_cands = self.policy._candidates(after, ws_after)
+            next_cands = self.policy._candidates(after, ws_after,
+                                                 goal=fsm_goal)
             self.policy.learn(ws_before, action, reward, next_state=ws_after,
                               outcome_kind=outcome_kind, candidates=next_cands)
+            # 7b. ReplayBuffer + StrategyMemory are fed by play_autonomous.py
+            # (which has the full per-step world view and classifies rare events
+            # there). Do NOT double-push here — that would store incompatible
+            # bucket-string transitions alongside its dict transitions and break
+            # train_from_replay(). See play_autonomous.py ~line 562.
         try:
             open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
                 "%.2f MEMORY_DONE\n" % (__import__("time").time(),))
