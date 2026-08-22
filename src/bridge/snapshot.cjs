@@ -103,6 +103,11 @@ function readGameState() {
       hostile: !!e.hostile, dead: !!e.dead, lootable: !!e.lootable, looted: !!e.looted,
       dist,
       questIds: e.questIds || e.questId || null,
+      // vendor marker for the Python sell/buy gate: a merchant is an NPC with a
+      // non-empty vendorItems stock (verified live: trader_wilkes vi=13, plain
+      // NPCs vi=0). Without this flag sell_junk/buy never become candidates.
+      vendor: (e.kind === 'npc' && Array.isArray(e.vendorItems) && e.vendorItems.length > 0),
+      vendorItemsCount: (Array.isArray(e.vendorItems) ? e.vendorItems.length : 0),
     });
   }
   // Real active quests live in sim.questLog (Map<questId, QuestProgress>).
