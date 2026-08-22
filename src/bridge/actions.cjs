@@ -103,23 +103,38 @@ async function applyAction(idx, cmd, gameClient) {
       }
       break;
     }
-    case 4: { // sell_junk: only works next to a vendor NPC (guarded)
-      const hasVendor = await gameClient.evaluate(() => {
-        const g = window.__game, sim = g.sim, p = sim.player;
-        for (const e of sim.entities.values()) {
-          const isVendor = e.vendor || e.vendorItems || e.isVendor;
-          if (!isVendor) continue;
-          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
-          if (Math.hypot(dx, dz) <= 12) return true;
+    case 4: { // sell: sellAllJunk + surplus materials when bags are crowded
+      const sold = await gameClient.evaluate(() => {
+        const sim = window.__game.sim;
+        let copper0 = 0;
+        try { sim.interact(); } catch (_) {}
+        try { sim.sellAllJunk && sim.sellAllJunk(); } catch (_) {}
+        // Free bag pressure: materials (hides/silk/glands) are common-quality so
+        // sellAllJunk skips them; but a FULL bag blocks quest turn-ins
+        // (bagsFullError in turnInQuest) and crafting. Sell surplus stacks down
+        // to a reserve when the bag is nearly full. Keep food/water/tools.
+        const KEEP = { baked_bread: 1, spring_water: 1, conjured_bread: 1, conjured_water: 1, copper_mining_pick: 1 };
+        const slots = sim.inventory || [];
+        const used = slots.filter(Boolean).length;
+        if (used >= 13) {
+          const counts = {};
+          for (const s of slots) {
+            if (!s) continue;
+            const id = s.itemId || (s.def && s.def.id);
+            counts[id] = (counts[id] || 0) + (s.count || 1);
+          }
+          for (const id of Object.keys(counts)) {
+            if (KEEP[id]) continue;
+            if (!/hide|fang|silk|gland|leg|scrap|cloth|weave/i.test(id)) continue; // materials only
+            const excess = counts[id] - 5;               // keep a small reserve
+            if (excess >= 5) {
+              try { sim.sellItem(id, excess); } catch (_) {}
+            }
+          }
         }
-        return false;
+        return true;
       });
-      if (hasVendor) {
-        await gameClient.evaluate(() => {
-          try { window.__game.sim.interact(); } catch (_) {}
-          try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
-        });
-      }
+      void sold;
       break;
     }
     case 5: { // gather: harvest the nearest harvestable node within range
