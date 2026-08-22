@@ -51,6 +51,10 @@ def _bucket(state: dict) -> str:
         f"hp={hp_band}",
         f"qs={qs}",
         f"mob={1 if state.get('has_mob') else 0}",
+        # strong vs weak mob MUST be part of the key: otherwise Q(farm) aliases
+        # "farm the weak wolf" with "farm the elite that kills you" and the
+        # averaged value stays positive -> the agent re-engages lethal mobs.
+        f"strong={1 if state.get('strong_mob_near') else 0}",
         f"corpse={1 if state.get('has_corpse') else 0}",
         f"junk={1 if state.get('has_junk') else 0}",
         f"danger={1 if state.get('danger') else 0}",

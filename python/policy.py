@@ -150,6 +150,14 @@ class GoalManager:
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []
 
+        # Quest truth comes from the structured WorldState (ws["quest"]), NOT from
+        # the raw info["quests"]["active"/"ready"] lists. The bridge sometimes omits
+        # an active quest from those lists, so gating on them let the agent re-accept
+        # an already-accepted quest (NPC: "already taken") -> FAILURE. The structured
+        # view is computed from sim.questLog and is the authoritative source.
+        qstruct = ws.get("quest") or {}
+        quest_accepted = bool(qstruct.get("accepted"))
+        quest_complete = bool(qstruct.get("complete"))
         cands = []
         if ws["hp_frac"] < 1.0:
             cands.append(SKILL_HEAL)           # always available, agent may or may not pick it
@@ -164,7 +172,7 @@ class GoalManager:
             cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
-        if quest_npcs and not active and not ready:
+        if quest_npcs and not quest_accepted:
             cands.append(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
         # a single "do quest" button. turn_in only when ready (objectives done);
@@ -172,19 +180,12 @@ class GoalManager:
         # (agent may learn to use it when drifted far). complete_objective is NOT
         # auto-chosen here — the Policy picks plain FARM for progress (same
         # primitive), keeping the decision explicit.
-        # Quest is ready ONLY when the server authoritatively says so (state in
-        # ready/complete bucket) OR every objective is actually filled (current
-        # >= required for ALL, and there is at least one objective). An empty
-        # objective list must NOT count as "ready" — previously `all(...)` on an
-        # empty list returned True, so a freshly-accepted quest with no progress
-        # was treated as turn-in-ready and the agent ran straight to the giver
-        # without ever farming the objective mobs (qprog stayed at 1).
-        quest_ready = bool(ready) or any(
-            (q.get("objectives") or [])
-            and all((o.get("current") or 0) >= (o.get("required") or 0)
-                    for o in (q.get("objectives") or []))
-            for q in active
-        )
+        # Quest is ready ONLY when the structured view authoritatively says so
+        # (complete=True: objectives present AND every current >= required). An
+        # empty objective list must NOT count as "ready" — previously a freshly-
+        # accepted quest with no progress was treated as turn-in-ready and the
+        # agent ran straight to the giver without ever farming the objective mobs.
+        quest_ready = quest_complete
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg
@@ -226,7 +227,8 @@ class GoalManager:
         # progress it (return_to_giver / turn_in), not drift to fences. Offer
         # explore only when there is NO active/ready quest AND no quest NPC is
         # nearby to interact with — i.e. early free-roam / discovery only.
-        quest_active = bool(active or ready)
+        # Gate on the structured truth (quest_accepted), not the raw info lists.
+        quest_active = quest_accepted or quest_complete
         quest_npc_near = bool(quest_npcs)
         if not quest_active and not quest_npc_near:
             cands.append(SKILL_EXPLORE)
@@ -243,6 +245,15 @@ class GoalManager:
             # for accept) -> fall back to the full list so the agent can act.
         if ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands:
             cands.append(SKILL_HEAL)
+        # Retreat option: at low HP / in combat with an active quest, walking
+        # back toward the giver is the only SURVIVABLE move (farm would re-engage
+        # the mob that is killing us; heal may be a no-op without potions).
+        # Without this the gated candidate set at crit HP is {farm, loot, heal}
+        # and the agent is locked in a death loop (observed: 7 deaths in one run,
+        # hp=0.2, still farming). Survival beats phase discipline — added AFTER
+        # the phase gate so it survives DO_OBJECTIVE filtering.
+        if quest_accepted and ws.get("danger") and SKILL_RETURN not in cands:
+            cands.append(SKILL_RETURN)
         # de-dup, preserve order
         seen = set(); out = []
         for c in cands:

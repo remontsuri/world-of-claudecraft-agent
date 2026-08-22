@@ -150,11 +150,28 @@ def verify_craft(c):
         return 'success'
     return 'inconclusive'
 
+_POTION_RE = None  # compiled lazily below
+
 def verify_heal(c):
     h0 = _player_hp(c['before']); h1 = _player_hp(c['after'])
     if h1 > h0 or h1 >= _player_hp_max(c['after']):
         return 'success'
-    return 'inconclusive'
+    # hp did not rise: was a potion actually consumed? If not, this heal attempt
+    # was a no-op (no supplies) and MUST be 'failure' — 'inconclusive' gave ~zero
+    # negative signal, so the agent kept re-trying heal at crit HP instead of
+    # retreating (observed death loop, run 14844).
+    import re
+    global _POTION_RE
+    if _POTION_RE is None:
+        _POTION_RE = re.compile(r'potion|draught|tonic|elixir|heal', re.IGNORECASE)
+    def _potions(inv):
+        return sum(1 for it in (inv or [])
+                   if isinstance(it, dict) and _POTION_RE.search((it.get('name') or '')))
+    p0 = _potions(c['before'].get('inventory'))
+    p1 = _potions(c['after'].get('inventory'))
+    if p1 < p0:
+        return 'inconclusive'   # potion spent but hp did not rise (resisted?) — rare, don't punish
+    return 'failure'
 
 def verify_equip(c):
     h = c.get('handle') or {}
