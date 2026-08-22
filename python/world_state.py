@@ -117,7 +117,8 @@ def build_world_state(info: Dict) -> Dict:
                 # keep the CLOSEST turn-in NPC, not the last one iterated
                 if d < distance_to_giver:
                     distance_to_giver = d
-        quest_status = "ACTIVE" if any_incomplete else "READY_TO_TURN_IN"
+        # quest_status is finalized below (after the chosen quest q / qcomplete
+        # are computed) so it reflects the TRUTH, not a raw incomplete-scan.
 
         # Prefer a quest that has a reachable giver (mirrors QuestCapability).
         q = None
@@ -140,11 +141,18 @@ def build_world_state(info: Dict) -> Dict:
                 req += r
                 if cur < r:
                     incomplete = True
-            qphase = "READY" if not incomplete else "ACTIVE"
-            # CRITICAL: complete only when progress actually reached required.
-            # A quest with NO objectives reported yet is NOT complete (the agent
-            # must still go do it). Empty objectives -> phase ACTIVE, complete False.
-            qcomplete = bool(q.get("objectives")) and (not incomplete)
+            # CRITICAL: complete only when progress actually reached required,
+            # AND required > 0. A quest reporting 0/0 (required==0) is NOT complete
+            # — that is either a not-yet-loaded objective or a degenerate quest;
+            # treating 0/0 as READY made the agent run to the giver without doing
+            # anything (user: "required == current == 0 must not mean READY").
+            qcomplete = bool(q.get("objectives")) and (not incomplete) and req > 0
+            qphase = "READY" if qcomplete else "ACTIVE"
+            # quest_status reflects the TRUTH: READY_TO_TURN_IN only when the
+            # chosen quest actually reports complete (objectives present AND every
+            # current >= required). A freshly-accepted quest with empty/0-0
+            # objectives stays ACTIVE, never a false READY_TO_TURN_IN.
+            quest_status = "READY_TO_TURN_IN" if qcomplete else "ACTIVE"
             tNpc = q.get("turnInNpc") or {}
             quest_struct = {
                 "id": q.get("id") or q.get("questId"),
