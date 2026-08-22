@@ -25,7 +25,6 @@ process.on('unhandledRejection', (e) => {
 });
 process.on('exit', (code) => {
   try { fs.writeFileSync('bridge_crash.txt', 'exit code=' + code + ' at ' + new Date().toISOString() + '\n'); } catch (_) {}
-  try { if (BRIDGE_PID_PATH && fs.existsSync(BRIDGE_PID_PATH)) fs.unlinkSync(BRIDGE_PID_PATH); } catch (_) {}
 });
 
 // CRITICAL: on shutdown (SIGTERM/SIGINT) release ALL held inputs in the game so
@@ -44,7 +43,6 @@ async function releaseInputsAndExit(code) {
       try { await p.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} }); } catch (_) {}
     }
   } catch (_) {}
-  try { if (fs.existsSync(BRIDGE_PID_PATH)) fs.unlinkSync(BRIDGE_PID_PATH); } catch (_) {}
   process.exit(code);
 }
 process.on('SIGTERM', () => { releaseInputsAndExit(0); });
@@ -83,7 +81,6 @@ const FARSHORE_QUEST_TURNIN = {
 const TICK_MS = 220;
 
 const path = require('path');
-const BRIDGE_PID_PATH = path.join(__dirname, 'bridge.pid');
 // WorldMemory JSON written by python/memory.py WorldMemory.remember_giver(). It is
 // the persistent source for "quest X -> turn-in NPC at (x,z)" — the agent learns
 // the giver at accept time (the live game does NOT expose giverId in sim.questLog).
@@ -107,62 +104,23 @@ process.on('unhandledRejection', (e) => { console.error('[bridge] unhandledRejec
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-// Reject if `promise` does not settle within `ms`. A hanging page.evaluate
-// (e.g. execution context destroyed during respawn/death SPA navigation)
-// must NOT block the command queue forever.
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) =>
-    { timer = setTimeout(() => reject(new Error((label || 'op') + ' timed out after ' + ms + 'ms')), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-const EVAL_TIMEOUT_MS = 8000;
-const CMD_TIMEOUT_MS = 90000;
-
 // ---- safe page.evaluate with auto-reconnect ----
 async function safeEval(fn, ...args) {
-  let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       if (!page) throw new Error('no page');
       try { await page.bringToFront(); } catch (_) {}
-      return await withTimeout(page.evaluate(fn, ...args), EVAL_TIMEOUT_MS, 'eval');
+      return await page.evaluate(fn, ...args);
     } catch (e) {
-      lastErr = e;
-      console.error('[bridge] eval error (attempt ' + attempt + '):', e && e.message);
+      console.error('[bridge] eval error (attempt ' + attempt + '):', e.message);
       // The game tab may have SPA-reloaded (respawn / character switch), leaving
       // the cached `page` pointing at a destroyed execution context. Re-acquire a
       // FRESH page handle from the browser instead of reusing the stale one.
-      try { page = await withTimeout(freshPage(), EVAL_TIMEOUT_MS, 'freshPage'); } catch (_) {}
-      if (!page) { try { await withTimeout(reconnect(), EVAL_TIMEOUT_MS, 'reconnect'); } catch (_) {} }
+      try { page = await freshPage(); } catch (_) {}
+      if (!page) { try { await reconnect(); } catch (_) {} }
     }
   }
-  // Surface the failure instead of returning null silently, so the caller can
-  // mark this command as failed rather than hang.
-  throw lastErr || new Error('safeEval failed after retries');
-}
-
-
-// Execute a concrete game API call and preserve API-level errors. Transport/
-// page failures still go through safeEval and become null; an actual Sim API
-// rejection becomes a structured error instead of being swallowed by `catch {}`.
-async function simCall(method, args = []) {
-  const result = await safeEval((name, argv) => {
-    const sim = window.__game && window.__game.sim;
-    if (!sim) throw new Error('game sim unavailable');
-    const fn = sim[name];
-    if (typeof fn !== 'function') throw new Error(`sim.${name} is not available`);
-    try {
-      fn.apply(sim, argv || []);
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: String(e && (e.message || e) || 'unknown Sim API error') };
-    }
-  }, method, args);
-  if (!result) throw new Error(`sim.${method} failed: no browser result`);
-  if (!result.ok) throw new Error(`sim.${method}: ${result.error}`);
-  return result;
+  return null;
 }
 
 // Re-acquire the live game tab handle from the browser (never reuse a cached one
@@ -197,18 +155,25 @@ async function freshPage() {
 
 async function reconnect() {
   try {
+    // Reuse the existing browser connection; only (re)connect if we have none.
+    // Forcing browser.disconnect() on every call breaks re-acquisition when the
+    // game tab reloads (SPA navigation / respawn): connect() throws "already
+    // connected", reconnect returns false, and the bridge stays on a stale page
+    // forever -> empty snapshots. We only (re)connect when browser is null.
     if (!browser) {
-      browser = await withTimeout(connect({ browserURL: CDP }), EVAL_TIMEOUT_MS, 'connect');
+      browser = await connect({ browserURL: CDP });
     }
-    let pages = await withTimeout(browser.pages(), EVAL_TIMEOUT_MS, 'pages');
+    let pages = await browser.pages();
     let found = null;
     for (const p of pages) {
       const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
       if (u.includes('worldofclaudecraft')) { found = p; break; }
     }
+    // If no page matched, the tab may have reloaded under a different handle;
+    // retry once after a short wait.
     if (!found) {
       await sleep(1500);
-      pages = await withTimeout(browser.pages(), EVAL_TIMEOUT_MS, 'pages');
+      pages = await browser.pages();
       for (const p of pages) {
         const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
         if (u.includes('worldofclaudecraft')) { found = p; break; }
@@ -217,16 +182,10 @@ async function reconnect() {
     if (!found) { console.error('[bridge] reconnect: no game tab'); return false; }
     page = found;
     await page.bringToFront().catch(() => {});
-    // Do NOT block startup on a 60s waitForFunction. The game may still be
-    // booting/respawning; poll readiness quickly (with timeout) and let main()
-    // start serving immediately. A background loop re-runs reconnect() until
-    // the game tab is live.
-    const ready = await safeEval(() =>
-      !!(window.__game && window.__game.sim && window.__game.sim.player));
-    if (!ready) {
-      console.error('[bridge] reconnect: game tab present but window.__game not ready yet');
-      return false;
-    }
+    await page.waitForFunction(
+      '!!window.__game && !!window.__game.sim && !!window.__game.sim.player',
+      { timeout: 60000 }
+    );
     const dbg = await page.evaluate(() => ({
       url: location.href,
       ents: window.__game.sim.entities.size,
@@ -238,26 +197,6 @@ async function reconnect() {
     console.error('[bridge] reconnect failed:', e.message);
     page = null;
     return false;
-  }
-}
-
-// Background readiness pump: keeps trying reconnect() until the game tab is
-// live, so the bridge serves immediately and heals itself after a respawn /
-// SPA navigation instead of being stuck "not ready".
-let _readyPumpRunning = false;
-async function readyPump() {
-  if (_readyPumpRunning) return;
-  _readyPumpRunning = true;
-  while (true) {
-    if (!page) {
-      const ok = await reconnect().catch(() => false);
-      if (!ok) { await sleep(3000); continue; }
-    }
-    // still alive? probe quickly; if it dies, retry
-    const alive = await safeEval(() =>
-      !!(window.__game && window.__game.sim && window.__game.sim.player)).catch(() => false);
-    if (!alive) { page = null; await sleep(3000); continue; }
-    await sleep(5000);
   }
 }
 
@@ -354,7 +293,7 @@ async function applyAction(idx, cmd) {
       }
       lastAccept = { questId: qid, giverId: npcId, giverPos };
       if (qid) {
-        await simCall('acceptQuest', [String(qid)]);
+        await safeEval((id) => { try { window.__game.sim.acceptQuest(String(id)); } catch (_) {} }, qid);
       } else {
         // fallback: interact with the nearest quest NPC (legacy path)
         await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
@@ -362,9 +301,9 @@ async function applyAction(idx, cmd) {
       break;
     }
     case 3: { // turn_in_quest: turn in the specific ready quest
-      const qid = (cmd && (cmd.questId || cmd.quest_id)) || (cmd && cmd.quest && cmd.quest.id) || null;
+      const qid = (cmd && cmd.questId) || null;
       if (qid) {
-        await simCall('turnInQuest', [String(qid)]);
+        await safeEval((id) => { try { window.__game.sim.turnInQuest(String(id)); } catch (_) {} }, qid);
       } else {
         await safeEval(() => { try { window.__game.sim.interact(); } catch (_) {} });
       }
@@ -386,8 +325,10 @@ async function applyAction(idx, cmd) {
         return false;
       });
       if (hasVendor) {
-        await simCall('interact', []);
-        await simCall('sellAllJunk', []);
+        await safeEval(() => {
+          try { window.__game.sim.interact(); } catch (_) {}
+          try { window.__game.sim.sellAllJunk && window.__game.sim.sellAllJunk(); } catch (_) {}
+        });
       }
       break;
     }
@@ -479,161 +420,52 @@ async function applyAction(idx, cmd) {
 }
 
 async function navigateToCoord(tx, tz, maxSteps) {
-  // IMPORTANT: controller.move({turnLeft:true, forward:true}) is a steering
-  // action, not a rotation-in-place action. Using it every tick while chasing a
-  // point makes the character orbit/spiral around the target. Navigation therefore
-  // separates TURN and FORWARD into different ticks.
-  let lastDist = Infinity;
-  let stagnant = 0;
-  let detour = 0;        // remaining ticks of a side-step detour
-  let detourDir = 1;     // +1 = strafe/veer right, -1 = left
-  // helper: re-read CURRENT distance after any move so the loop can see real progress
-  const freshDist = (p) => Math.hypot(tx - p.pos.x, tz - p.pos.z);
   for (let i = 0; i < maxSteps; i++) {
-    // Each eval issues the move AND waits one game tick, then returns the FRESH
-    // distance (measured AFTER the move). Previously the distance was computed
-    // BEFORE the move and returned unchanged, so the loop could never tell a
-    // detour was making progress -> it stalled at the wall and gave up.
-    const st = await safeEval(async (tx, tz, detour, detourDir) => {
+    const done = await safeEval((tx, tz) => {
       const g = window.__game, sim = g.sim, p = sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z;
       const dist = Math.hypot(dx, dz);
-      if (dist < 5) {
-        try { g.controller.stop(); } catch (_) {}
-        return { done: true, dist, phase: 'arrived' };
-      }
-      const tick = () => new Promise((r) => setTimeout(r, 60));
-      // While detouring around an obstacle, take a fixed side-step: turn toward
-      // the detour direction and move forward. This walks AROUND walls instead
-      // of grinding against them forever.
-      if (detour > 0) {
-        const desired = Math.atan2(dx, dz);
-        let off = desired - p.facing;
-        off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-        // bias heading: aim 60deg to the side of the goal so we circle the wall
-        const side = off + detourDir * (Math.PI / 3);
-        const abs = Math.abs(side);
-        try { g.controller.stop(); } catch (_) {}
-        if (abs > 0.35) {
-          if (side > 0) g.controller.move({ turnLeft: true });
-          else g.controller.move({ turnRight: true });
-        } else {
-          g.controller.move({ forward: true });
-        }
-        await tick();
-        const p2 = sim.player;
-        return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'detour', off };
-      }
+      if (dist < 5) { try { g.controller.stop(); } catch (_) {} return true; }
+      // Geometry (measured live, Test 1b/1c): player.facing=0 -> +Z;
+      // turnLeft INCREASES facing, turnRight DECREASES it. So forward moves
+      // along (sin(facing), cos(facing)) in (x,z), i.e. desired = atan2(dx, dz).
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      const abs = Math.abs(off);
-
-      // Large heading error: rotate in place. Direct controller.move() accepts
-      // turnLeft/turnRight without forward, unlike the high-level applyAction path.
-      if (abs > 0.35) {
-        try { g.controller.stop(); } catch (_) {}
-        if (off > 0) g.controller.move({ turnLeft: true });
-        else g.controller.move({ turnRight: true });
-        await tick();
-        const p2 = sim.player;
-        return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'turn', off };
+      if (Math.abs(off) > 0.2) {
+        if (off > 0) g.controller.move({ turnLeft: true, forward: true });
+        else g.controller.move({ turnRight: true, forward: true });
+      } else {
+        g.controller.move({ forward: true });
       }
-
-      // Once aligned, take a short straight step. Recompute heading every tick.
-      try { g.controller.stop(); } catch (_) {}
-      g.controller.move({ forward: true });
-      await tick();
-      const p2 = sim.player;
-      return { done: false, dist: Math.hypot(tx - p2.pos.x, tz - p2.pos.z), phase: 'forward', off };
-    }, tx, tz, detour, detourDir);
-
-    if (!st) throw new Error('navigation evaluate failed');
-    if (st.done) return true;
-
-    // If distance is not improving for too long, we are blocked by a wall.
-    // Start a detour (side-step) instead of giving up, so the agent walks
-    // AROUND the obstacle rather than grinding against it forever.
-    if (st.dist >= lastDist - 0.25) stagnant += 1;
-    else stagnant = 0;
-    lastDist = st.dist;
-    if (stagnant >= 6 && detour === 0) {
-      // begin a detour burst: veer to whichever side, for ~14 ticks
-      detour = 14;
-      stagnant = 0;
-      // alternate detour direction each time so we don't loop one way
-      detourDir = -detourDir;
-    } else if (detour > 0) {
-      detour -= 1;
-      if (detour === 0) stagnant = 0; // re-evaluate straight path after detour
-    }
-    if (stagnant >= 30) break; // genuine unreachable (or far) — give up cleanly
+      return false;
+    }, tx, tz);
+    if (done) return true;
     await sleep(TICK_MS);
   }
+  // always stop movement when navigation ends (target reached OR timeout)
   await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   return false;
 }
 
 async function exploreWalk(steps) {
-  // Exploration must not contain a fixed "turn every N ticks" rule: that creates
-  // a literal circle and prevents discovering distant NPCs. Walk straight for the
-  // bounded burst; the learned policy can choose another explore burst later.
+  // Simple sustained walk: forward + occasional turn (mirrors the working
+  // raw_move path). Ignoring nearby-target seeking because it made the agent
+  // jitter in place; plain forward actually covers ground (verified: raw_move
+  // moves ~13yd / 5 calls).
   for (let i = 0; i < steps; i++) {
-    await safeEval(() => {
+    const turn = (i % 7 === 6); // turn every 7th step to cover new ground
+    await safeEval((t) => {
       try { window.__game.controller.stop(); } catch (_) {}
-      window.__game.controller.move({ forward: true });
-    });
+      if (t) {
+        try { window.__game.controller.move({ turnLeft: true, forward: true }); } catch (_) {}
+      } else {
+        try { window.__game.controller.move({ forward: true }); } catch (_) {}
+      }
+    }, turn);
     await sleep(TICK_MS);
   }
-  await safeEval(() => { try { window.__game.controller.stop(); } catch (_) {} });
   return false;
-}
-
-async function findSpiritHealer() {
-  // The server checks proximity to a spirit healer; calling
-  // resurrectAtSpiritHealer() immediately after releaseSpirit() is therefore
-  // guaranteed to fail when the corpse is elsewhere. Search the full entity
-  // collection (not just nearby) for a healer and return its world position.
-  const r = await safeEval(() => {
-    const sim = window.__game && window.__game.sim;
-    if (!sim) return null;
-    const values = [];
-    try { for (const e of sim.entities.values()) values.push(e); } catch (_) {}
-    const npcDefs = sim.npcDefs || null;
-    if (npcDefs) {
-      try {
-        if (typeof npcDefs.forEach === 'function') npcDefs.forEach((e) => values.push(e));
-        else for (const k of Object.keys(npcDefs)) values.push(npcDefs[k]);
-      } catch (_) {}
-    }
-    const score = (e) => {
-      if (!e) return -1;
-      const text = [
-        e.name, e.title, e.role, e.type, e.kind, e.npcType, e.subtype
-      ].filter(Boolean).join(' ').toLowerCase();
-      let s = 0;
-      if (e.isSpiritHealer || e.spiritHealer || e.isHealer) s += 100;
-      if (text.includes('spirit healer')) s += 100;
-      else if (text.includes('spirit-healer')) s += 100;
-      else if (text.includes('healer')) s += 40;
-      // This build's spirit healer is named "The Pale Keeper" (no 'healer' token)
-      // and sits exactly on the ghost spawn. Match it so respawn can find it.
-      if (text.includes('pale keeper') || text.includes('keeper') || text.includes('pale')) s += 60;
-      if (text.includes('spirit')) s += 30;
-      return s;
-    };
-    let best = null, bestScore = 0;
-    for (const e of values) {
-      const p = e && e.pos;
-      const sc = score(e);
-      if (p && Number.isFinite(p.x) && Number.isFinite(p.z) && sc > bestScore) {
-        best = { id: e.id, name: e.name || e.title || '', x: p.x, z: p.z, score: sc };
-        bestScore = sc;
-      }
-    }
-    return best;
-  });
-  return r;
 }
 
 async function snapshot() {
@@ -644,7 +476,10 @@ async function snapshot() {
   // where the stale page shows a DIFFERENT valid-looking character. browser.pages()
   // is a cheap CDP target-list call (ms), not a hot-path bottleneck at 4Hz.
   const cur = await freshPage();
-  if (!cur) return { ok: false, error: 'no game tab', _dbg: { freshFound: false } };
+  if (!cur) {
+    console.error('[bridge] snapshot: no game tab (freshFound=false)');
+    return { __error: 'no game tab' };
+  }
   let curUrl = '?';
   try { curUrl = (typeof cur.url === 'function') ? cur.url() : (cur.url || '?'); } catch (_) {}
   try { await cur.bringToFront(); } catch (_) {}
@@ -658,7 +493,8 @@ async function snapshot() {
   const alive = await ev(() => !!(window.__game && window.__game.sim && window.__game.sim.player));
   if (!alive) {
     const hasGame = await ev(() => (typeof window.__game));
-    return { ok: false, error: 'game not ready', _dbg: { freshFound: true, curUrl, alive: false, typeofGame: hasGame } };
+    console.error('[bridge] snapshot: game not ready', JSON.stringify({ curUrl, alive: false, typeofGame: hasGame }));
+    return { __error: 'game not ready' };
   }
   const r = await ev(() => {
     const g = (window).__game, sim = g.sim, p = sim.player;
@@ -710,28 +546,16 @@ async function snapshot() {
       qlog.forEach((qp, qid) => {
         const st = qp.state || 'active';
         const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
-        // resolvedCounts holds the REQUIRED objective counts; counts = current progress.
-        // In this build questDefs is null, so resolvedCounts is the ONLY source of "required".
         const objs = (def && Array.isArray(def.objectives))
           ? def.objectives.map((o, i) => ({
               current: (qp.counts && qp.counts[i]) || 0,
               required: (o && (o.count != null ? o.count : o.required)) || 0,
             }))
-          : (qp.counts || []).map((c, i) => ({
-              current: c || 0,
-              required: (qp.resolvedCounts && qp.resolvedCounts[i] != null) ? qp.resolvedCounts[i] : c,
-            }));
+          : (qp.counts || []).map((c) => ({ current: c, required: c }));
         // turn-in location is resolved on the NODE side after evaluate returns
         // (FARSHORE_* constants live in Node scope, not in the browser context
         // where this fn runs -> referencing them here throws ReferenceError).
-        const entry = {
-          id: qid,
-          name: qp.name || qid,
-          state: st,
-          objectives: objs,
-          giver: qp.giverId || qp.giver || null,
-          turnInNpc: null,
-        };
+        const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
         if (st === 'active') active.push(entry);
         else if (st === 'ready') ready.push(entry);
         else if (st === 'done') done.push(entry);
@@ -754,8 +578,6 @@ async function snapshot() {
     const qd = (typeof (g.online && g.online.questsDone) === 'number') ? g.online.questsDone : doneArr.length;
     return {
       player: { hp: p.hp, maxHp: p.maxHp, level: p.level, dead: !!p.dead },
-      // Flat top-level aliases so legacy clients reading info.hp / info.dead work:
-      hp: p.hp, max_hp: p.maxHp, dead: !!p.dead, level: p.level,
       player_pos: [p.pos.x, p.pos.z],
       nearby,
       inventory: inv.map((it) => ({ quality: it.quality ?? 0, name: it.name })),
@@ -793,15 +615,26 @@ async function snapshot() {
       }
     }
   }
-  return { ok: true, info: r || {}, _dbg: { rIsNull: r === null, rType: typeof r, playerKeys: r && r.player ? Object.keys(r.player) : null, nearbyLen: r && r.nearby ? r.nearby.length : null } };
+  // Return the FLAT snapshot object `r` (with player/nearby/quests/...), or an
+  // {__error: msg} marker when the game tab is missing / not ready / evaluate
+  // returned null. The server wraps this via snap() and propagates ok:false so
+  // Python's BrowserEnv sees a real failure (not a live-alive empty character).
+  // Previously returning {} here made a broken page look alive -> recovery never fired.
+  if (r === null) {
+    console.error('[bridge] snapshot: evaluate returned null (stale page context?)');
+    return { __error: 'snapshot evaluate returned null' };
+  }
+  return r || {};
 }
 
-// Return ONLY the inner info object from snapshot() (no {ok,info,_dbg} wrapper),
-// so command handlers can do `info: await snapshotInfo()` and the Python client
-// receives the flat world state (player/nearby/quests) directly in resp.info.
-async function snapshotInfo() {
-  const s = await snapshot();
-  return (s && s.info) || {};
+// Server-side wrapper: snapshot() returns either a flat info object `r` or an
+// {__error: msg} marker. This turns a broken/missing game tab into a real
+// {ok:false, error} so Python's BrowserEnv raises BrowserBridgeError (infra
+// path) instead of treating an empty info as a live, alive character.
+async function snap() {
+  const r = await snapshot();
+  if (r && r.__error) return { ok: false, error: r.__error };
+  return { ok: true, info: r || {} };
 }
 
 // ---- HTTP server ----
@@ -812,7 +645,7 @@ let cmdQueue = Promise.resolve();
 // Last accept_quest result (questId/giverId/giverPos), surfaced to Python so it
 // can persist the turn-in NPC in WorldMemory (the game does not return giverId).
 let lastAccept = null;
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
   // Health probe (start_ragent.bat does `HEAD /` expecting 200). Keep POST
   // for real commands; answer liveness with 200 so the launcher starts the agent.
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -825,16 +658,16 @@ const server = http.createServer(async (req, res) => {
       if (page) {
         health.page = true;
         try {
-          health.game = !!(await page.evaluate(
-            () => !!(window.__game && window.__game.sim && window.__game.sim.player)));
+          health.game = !!page.evaluate(
+            () => !!(window.__game && window.__game.sim && window.__game.sim.player));
         } catch (_) { health.game = false; }
       }
-      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify(health)), 'Connection': 'close' });
+      res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(health));
       return;
     }
     // simple liveness probe (back-compat)
-    res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(JSON.stringify({ ok: true, alive: true })), 'Connection': 'close' });
+    res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: true, alive: true }));
     return;
   }
@@ -842,17 +675,17 @@ const server = http.createServer(async (req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    const work = (async () => {
+    cmdQueue = cmdQueue.then(async () => {
       let resp = { ok: false };
       try {
         const cmd = JSON.parse(body || '{}');
       if (cmd.action === 'snapshot') {
         // Agent primes its first observation with POST {action:'snapshot'}
         // (browser_env.py __init__). Return the live game snapshot.
-        resp = { ok: true, info: await snapshotInfo() };
+        resp = await snap();
       } else if (cmd.action === 'step') {
         await applyAction(cmd.idx || 0, cmd);
-        resp = { ok: true, info: await snapshotInfo() };
+        resp = await snap();
         // Surface the giver the agent just accepted from (if this step was accept_quest)
         if (lastAccept && (cmd.idx === 2 || cmd.questId)) {
           resp.giver = lastAccept;
@@ -860,7 +693,8 @@ const server = http.createServer(async (req, res) => {
         }
       } else if (cmd.action === 'navigate') {
         const arrived = await navigateToCoord(cmd.x, cmd.z, cmd.max_steps || 80);
-        resp = { ok: true, arrived, info: await snapshotInfo() };
+        const base = await snap();
+        resp = base.ok ? { ok: true, arrived, info: base.info } : base;
       } else if (cmd.action === 'raw_move') {
         await safeEval((kind) => {
           try { window.__game.controller.stop(); } catch (_) {}
@@ -870,118 +704,80 @@ const server = http.createServer(async (req, res) => {
           else if (kind === 'turnRight') window.__game.controller.move({ turnRight: true });
         }, cmd.kind);
         await sleep(TICK_MS);
-        resp = { ok: true, info: await snapshotInfo() };
+        resp = await snap();
       } else if (cmd.action === 'respawn') {
-        // Death is a two-stage server operation:
-        //   1) release the spirit;
-        //   2) WALK THE GHOST to the spirit healer;
-        //   3) resurrect at the healer.
-        // Calling resurrectAtSpiritHealer() at the corpse is rejected by the
-        // authoritative server. The old bridge did exactly that, so every death
-        // became a permanent ghost.
-        const released = await safeEval(() => {
-          const sim = window.__game.sim;
-          if (!sim.player || !sim.player.dead) return { dead: false };
-          sim.releaseSpirit();
-          return { dead: !!sim.player.dead };
-        });
-        if (!released) throw new Error('respawn failed: releaseSpirit evaluate failed');
-
-        // Give the server a tick to switch the character into ghost state.
-        await sleep(TICK_MS);
-        // The authoritative server requires the ghost to be near the Spirit
-        // Healer. Find a real healer and walk there as the ghost, then resurrect.
-        const healer = await findSpiritHealer();
-        if (!healer) throw new Error('respawn failed: spirit healer not found');
-        console.error('[bridge] spirit healer target', JSON.stringify(healer));
-        const arrived = await navigateToCoord(healer.x, healer.z, 160);
-        if (!arrived) throw new Error('respawn failed: could not reach spirit healer');
-        await simCall('resurrectAtSpiritHealer', []);
+        // Death-recovery path (src/sim death recovery): releaseSpirit() FIRST,
+        // then resurrectAtSpiritHealer(). resurrectAtCorpse() only works if the
+        // player is still physically near the body (not a ghost), so it is useless
+        // once dead:true. resurrectAtSpiritHealer() returns a Promise<boolean> over
+        // the network (src/net/online.ts) — it does NOT flip player.dead
+        // synchronously, so we must await it and then POLL (with a timeout).
+        //
+        // CRITICAL (recovery-bug fix): we used to fire both calls, swallow the
+        // Promise, and always return ok:true. That hid resurrection failures: the
+        // agent believed it was alive while the snapshot still showed dead:true,
+        // then ran farm/heal/loot on a corpse forever. Now we AWAIT the outcome and
+        // POLL player.dead === false && player.hp > 0, and report the real
+        // `revived` flag so Python can stop spinning instead of trusting a lie.
         let revived = false;
-        for (let i = 0; i < 50 && !revived; i++) {
-          await sleep(TICK_MS);
-          const probe = await safeEval(() => ({
-            dead: !!(window.__game.sim.player && window.__game.sim.player.dead),
-            hp: window.__game.sim.player && window.__game.sim.player.hp
-          }));
-          revived = !!(probe && !probe.dead);
+        const deadBefore = await safeEval(() => !!(window.__game.sim.player && window.__game.sim.player.dead)).catch(() => false);
+        if (deadBefore) {
+          await safeEval(() => {
+            const sim = window.__game.sim;
+            try { sim.releaseSpirit(); } catch (_) {}
+          });
+          // Await the network outcome (resolves false if the server rejects it).
+          const okHeal = await safeEval(() => {
+            const sim = window.__game.sim;
+            if (typeof sim.resurrectAtSpiritHealer === 'function') {
+              return sim.resurrectAtSpiritHealer().then(() => true).catch(() => false);
+            }
+            return false;
+          }).catch(() => false);
+          // Poll up to ~6s (TICK_MS * 30) for dead:false AND hp>0.
+          for (let i = 0; i < 30 && !revived; i++) {
+            await sleep(TICK_MS);
+            revived = await safeEval(() => {
+              const p = window.__game.sim.player;
+              return !!(p && !p.dead && (p.hp ?? 0) > 0);
+            }).catch(() => false);
+          }
+          if (!revived) console.error('[bridge] respawn: revival not confirmed (healerOutcome=' + okHeal + ')');
+        } else {
+          // Not dead on entry — nothing to resurrect; treat as already revived.
+          revived = true;
         }
-        if (!revived) {
-          throw new Error('respawn failed: spirit healer did not revive player');
-        }
-        resp = { ok: true, info: await snapshotInfo(), healer };
+        resp = { ok: true, revived, info: (await snap()).info || {} };
       } else if (cmd.action === 'explore') {
         // sustained walk: head toward nearest mob/NPC (or just forward if none),
         // so the agent actually covers ground instead of 1-step jitter.
         const arrived = await exploreWalk(cmd.steps || 10);
-        resp = { ok: true, arrived, info: await snapshotInfo() };
-      } else if (cmd.action === 'accept_quest') {
-        // Agent requests a specific quest (by id) — call the real sim API.
-        // The game server validates proximity to the giver; we just forward it.
-        // Accept BOTH wire keys: Python wow_env sends `quest_id`, older/other
-        // callers send `questId`. Mismatch here silently dropped the id and
-        // made accept_quest inconclusive / turn_in_quest fail with "requires questId".
-        const qid = cmd.questId || cmd.quest_id || (cmd.quest && cmd.quest.id);
-        if (!qid) { resp = { ok: false, error: 'accept_quest requires questId' }; }
-        else {
-          const r = await simCall('acceptQuest', [String(qid)]);
-          resp = { ok: true, api: r, info: await snapshotInfo() };
-        }
-      } else if (cmd.action === 'turn_in_quest') {
-        // Turn in a completed quest by id — call the real sim API.
-        // Accept BOTH wire keys (see accept_quest note): Python wow_env sends `quest_id`.
-        const qid = cmd.questId || cmd.quest_id || (cmd.quest && cmd.quest.id);
-        if (!qid) { resp = { ok: false, error: 'turn_in_quest requires questId' }; }
-        else {
-          const r = await simCall('turnInQuest', [String(qid)]);
-          resp = { ok: true, api: r, info: await snapshotInfo() };
-        }
+        resp = { ok: true, arrived, info: (await snap()).info || {} };
       } else {
         resp = { ok: false, error: 'unknown action' };
       }
     } catch (e) {
       resp = { ok: false, error: e.message };
     }
-    return resp;   // DO NOT write the HTTP response here — the response is sent
-                   // by the cmdQueue chain below, so a cmdTimeout can answer the
-                   // client instead of leaving the socket hanging ("no HTTP headers").
-  });
-  // Run `work` on the sequential command queue, but NEVER let a single command
-  // block the queue forever. If it exceeds CMD_TIMEOUT_MS (e.g. a page.evaluate
-  // hung during a respawn/SPA navigation), answer with a timeout error AND reset
-  // the queue so subsequent commands still run.
-  //
-  // The HTTP response is written HERE (not inside work()) so whichever settles
-  // first — the real result or the timeout — actually answers the client. The
-  // orphaned work() may still finish later; guard the write so it cannot touch
-  // an already-closed response.
-  cmdQueue = cmdQueue.then(() =>
-    withTimeout(work(), CMD_TIMEOUT_MS, 'cmd')
-      .then((r) => ({ ok: r && r.ok !== undefined ? r.ok : false, ...(r || {}), _timedOut: false }))
-      .catch((err) => ({ ok: false, error: (err && err.message) || 'cmd failed', _timedOut: true }))
-      .finally(() => { cmdQueue = Promise.resolve(); })
-  ).then((resp) => {
-    if (!res.writableEnded) {
-      const body = JSON.stringify(resp);
-      res.writeHead(200, { 'content-type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'Connection': 'close' });
-      res.end(body);
-    }
-  });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(resp));
+    }).catch((e) => {
+      try { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: e.message })); } catch (_) {}
+    });
   });
 });
 
 async function main() {
-  try { fs.writeFileSync(BRIDGE_PID_PATH, String(process.pid), 'utf8'); } catch (_) {}
+  if (!await reconnect()) { console.error('[bridge] initial connect failed'); process.exit(1); }
+  console.log('[bridge] online game tab ready; serving on :' + PORT);
   server.on('error', (e) => {
+    // EADDRINUSE means a previous bridge instance is still holding :PORT.
+    // Exit loudly so the launcher's 10s loop can restart us cleanly once the
+    // stale instance is gone, instead of silently dying with no log clue.
     console.error('[bridge] server error:', e.code || e.message);
     process.exit(e.code === 'EADDRINUSE' ? 2 : 1);
   });
-  // Serve IMMEDIATELY. Do not block startup on reconnect(): the game tab may be
-  // booting/respawning. The readiness pump heals the connection in the background.
-  server.listen(PORT, () => {
-    console.log('[bridge] serving on :' + PORT + ' (game tab may still be connecting)');
-  });
-  readyPump();
+  server.listen(PORT);
 }
 
 main().catch((e) => { console.error('FATAL', e.message); process.exit(1); });

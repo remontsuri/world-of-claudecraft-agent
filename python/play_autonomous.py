@@ -276,8 +276,13 @@ def main():
         _p0 = (env._last_info or {}).get("player", {}) or {}
         if _p0.get("dead") or _p0.get("hp", 1) <= 0:
             print("[autonomous] init: character dead at startup -> respawning")
-            env.respawn()
-            m["respawns"] += 1
+            _, alive = env.respawn()
+            if alive:
+                m["respawns"] += 1
+            else:
+                # Could not revive at init (e.g. healer not reachable). Do NOT
+                # inflate the counter; let the in-loop recovery handle it.
+                print("[autonomous] init respawn not confirmed (revived=false); continuing", flush=True)
     except Exception as e:
         # respawn failure at init is infra, not a programming bug; log and continue
         sys.stderr.write(f"[autonomous] init respawn failed (continuing): {type(e).__name__}: {e}\n")
@@ -378,19 +383,26 @@ def main():
                 # self.pre_death_goal; resume_after_respawn() restores it.
                 if goal_fsm is not None:
                     goal_fsm.enter_dead()
-                env.respawn()
-                m["respawns"] += 1
-                # after respawn, return to the goal we had before death
-                if goal_fsm is not None:
-                    goal_fsm.resume_after_respawn()
-                    # tag RESPAWN_SUCCESS in the replay buffer (rare event)
-                    if replay is not None:
-                        replay.add({
-                            "state": "respawn", "action": "respawn",
-                            "reward": 0.0, "next_state": "alive",
-                            "done": False, "goal": goal_fsm.goal,
-                            "skill": "respawn", "event": "RESPAWN_SUCCESS",
-                        })
+                _, alive = env.respawn()
+                if not alive:
+                    # RESPAWN_FAILED inside the in-loop glue: do NOT inflate
+                    # respawns/counters or resume goals as if alive. The next
+                    # cycle will re-attempt and eventually pause as ENV_ERROR.
+                    m["bridge_errors"] += 1
+                    print("[autonomous] respawn not confirmed (revived=false); will retry next cycle", flush=True)
+                else:
+                    m["respawns"] += 1
+                    # after respawn, return to the goal we had before death
+                    if goal_fsm is not None:
+                        goal_fsm.resume_after_respawn()
+                        # tag RESPAWN_SUCCESS in the replay buffer (rare event)
+                        if replay is not None:
+                            replay.add({
+                                "state": "respawn", "action": "respawn",
+                                "reward": 0.0, "next_state": "alive",
+                                "done": False, "goal": goal_fsm.goal,
+                                "skill": "respawn", "event": "RESPAWN_SUCCESS",
+                            })
                 rec["ws_after"] = snap(env._last_info)
             except BrowserBridgeError as e:
                 # respawn can fail if the bridge is mid-reconnect or the game

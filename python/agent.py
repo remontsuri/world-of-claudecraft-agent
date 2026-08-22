@@ -65,7 +65,10 @@ class Agent:
         self.replay = replay
         # StrategyMemory: per-(quest,skill) success/fail generalizations.
         self.strat_mem = strat_mem
-
+        # Recovery: max respawn attempts per cycle before pausing as ENV_ERROR.
+        # 3 is enough to survive a transient healer rejection without burning the
+        # whole run; beyond that it is a real recovery failure, not bad luck.
+        self.RESPAWN_MAX_ATTEMPTS = 3
     def _remember_visible_world(self, info: dict):
         """Persist NPC facts observed by the live browser without steering policy."""
         changed = False
@@ -227,11 +230,31 @@ class Agent:
         return self._cycle(learn=False, exploration_weight=exploration_weight)
 
     def _cycle(self, learn: bool = True, exploration_weight: float = 1.0) -> dict:
-        # 0. Survival: a dead character cannot act. Respawn (release spirit +
-        # resurrect at healer) so the loop keeps running instead of spinning
-        # on a corpse. This is infra safety, NOT a learned action.
+        # 0. Survival / recovery state machine. A dead character cannot act.
+        # respawn() releases the spirit + resurrects at the healer; the bridge now
+        # returns the REAL `revived` flag (dead:false AND hp>0), so we STOP spinning
+        # on a corpse instead of trusting a blind ok:true. If resurrection fails N
+        # times in a row, we PAUSE this cycle as ENV_ERROR (no farming/heal/loot, no
+        # RL transition recorded) and let the launcher reconnect — exactly the
+        # "RESPAWN_FAILED -> ENV_ERROR/PAUSE" branch from the design. We do NOT raise:
+        # a failed respawn is an infra/recovery condition, not a programming bug, and
+        # must not poison the policy with a false lesson.
         if self.env._last_info.get("player", {}).get("dead"):
-            self.env.respawn()
+            info, alive = self.env.respawn()
+            tries = 1
+            while not alive and tries < self.RESPAWN_MAX_ATTEMPTS:
+                time.sleep(2.0)
+                info, alive = self.env.respawn()
+                tries += 1
+            if not alive:
+                # RESPAWN_FAILED: pause without emitting a normal RL transition.
+                sys.stderr.write(
+                    "[agent] respawn failed %d times; pausing cycle as ENV_ERROR\n" % tries)
+                return {
+                    "action": "recover", "verdict": "FAILURE", "outcome_kind": "ENV_ERROR",
+                    "reward": 0.0,
+                    "ws_before": _world_state_dict(info), "ws_after": _world_state_dict(info),
+                }
         info_before = self.env._last_info
         self._remember_visible_world(info_before)
         ws_before = _world_state_dict(info_before)
