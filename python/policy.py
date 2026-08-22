@@ -205,7 +205,11 @@ class GoalManager:
         # empty objective list must NOT count as "ready" — previously a freshly-
         # accepted quest with no progress was treated as turn-in-ready and the
         # agent ran straight to the giver without ever farming the objective mobs.
-        quest_ready = quest_complete or bool(ready)
+        # SURVIVAL GATE: at hp < 0.35 the agent must NOT walk anywhere (turn_in
+        # / return both cross mob territory). Run 20132: hp=0.2 + turn_in spam
+        # = death loop; heal+food regen needs SAFE ticks to actually fill HP.
+        # Only when healthy again do the quest actions come back.
+        quest_ready = (quest_complete or bool(ready)) and ws.get("hp_frac", 1.0) >= 0.35
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg
@@ -272,7 +276,14 @@ class GoalManager:
         # and the agent is locked in a death loop (observed: 7 deaths in one run,
         # hp=0.2, still farming). Survival beats phase discipline — added AFTER
         # the phase gate so it survives DO_OBJECTIVE filtering.
-        if quest_accepted and ws.get("danger") and SKILL_RETURN not in cands:
+        # GATE: only above the crit floor (hp>=0.35). Below it walking anywhere
+        # is a death sentence (run 20132: hp=0.2 + turn_in spam); heal+food needs
+        # safe ticks to fill HP back up.
+        if (
+            quest_accepted and ws.get("danger")
+            and ws.get("hp_frac", 1.0) >= 0.35
+            and SKILL_RETURN not in cands
+        ):
             cands.append(SKILL_RETURN)
         # de-dup, preserve order
         seen = set(); out = []
