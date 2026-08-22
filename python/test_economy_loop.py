@@ -121,3 +121,37 @@ def test_policy_no_craft_without_materials():
 def test_skills_table_has_craft_item():
     from hierarchical_env import SKILLS
     assert "craft_item" in SKILLS
+
+
+# ---------- ready-bucket quest must surface turn_in (user report 2026-08-22) ----------
+
+def test_turn_in_offered_when_ready_bucket_nonempty():
+    """4 ready quests but ws picked an ACTIVE 0/0 one -> turn_in still offered."""
+    info = {
+        "player": {"hp": 100, "maxHp": 100, "dead": False},
+        "player_pos": [0, 0], "nearby": [], "inventory": [],
+        "quests": {
+            "active": [{"id": "q_prof_attune_smith", "state": "active",
+                        "objectives": [{"current": 0, "required": 0}]}],
+            # server-authoritative ready bucket: these CAN be turned in NOW
+            "ready": [
+                {"id": "q_boars", "state": "ready", "objectives": [{"current": 5, "required": 5}],
+                 "turnInNpc": {"x": -7.0, "z": 0.8}},
+                {"id": "q_spiders", "state": "ready", "objectives": [{"current": 6, "required": 6}],
+                 "turnInNpc": {"x": 3.0, "z": 1.0}},
+            ],
+            "done": [],
+        },
+        "kills": 0, "deaths": 0,
+    }
+    ws = build_world_state(info)
+    gm = GoalManager(ExperienceStore())
+    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    assert "turn_in_quest" in cands, cands
+    act, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    if act == SKILL_TURN_IN_IF_IMPORTED():
+        pass
+
+
+def SKILL_TURN_IN_IF_IMPORTED():
+    return "turn_in_quest"

@@ -205,7 +205,7 @@ class GoalManager:
         # empty objective list must NOT count as "ready" — previously a freshly-
         # accepted quest with no progress was treated as turn-in-ready and the
         # agent ran straight to the giver without ever farming the objective mobs.
-        quest_ready = quest_complete
+        quest_ready = quest_complete or bool(ready)
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg

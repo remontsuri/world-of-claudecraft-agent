@@ -229,6 +229,10 @@ async function applyAction(idx, cmd, gameClient) {
         // nearest attacking mob, casting_lifecycle.ts:771, but pick any nearest
         // hostile when not yet in combat — ranged opening hit)
         try {
+          // stop any residual turn/forward input first: a pending turnLeft
+          // from a previous chase keeps spinning the camera/facing during the
+          // cast (user-visible: "camera rotates while casting fireball").
+          try { window.__game.controller.stop(); } catch (_) {}
           if (sim.player.targetId == null) {
             let best = null, bd = Infinity;
             for (const e of sim.entities.values()) {

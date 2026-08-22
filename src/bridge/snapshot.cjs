@@ -34,6 +34,48 @@ const FARSHORE_QUEST_TURNIN = {
   q_fs_the_three_bells: 'bellkeeper_tam',
 };
 
+// Eastbrook (starting zone, src/sim/content/zone1.ts questIds). Positions are
+// a LAST-RESORT fallback only: the live entity positions are authoritative
+// (the layout table drifted from the real world — e.g. apothecary_lin is at
+// (2.8, 9.7) live vs (11,-3) in the table), so resolveTurnIn prefers
+// sim.entities first.
+const EASTBROOK_NPC_POS = {
+  the_merchant: { x: 0, z: 9.5 },
+  marshal_redbrook: { x: 4.5, z: 5.5 },
+  trader_wilkes: { x: -7.13, z: 0.81 },
+  apothecary_lin: { x: 2.84, z: 9.72 },
+  brother_aldric: { x: -16.59, z: -1.4 },
+  smith_haldren: { x: 7, z: 16.5 },
+  fisherman_brandt: { x: -16, z: 6 },
+  foreman_odell: { x: -8, z: -9.5 },
+};
+const EASTBROOK_QUEST_TURNIN = {
+  // marshal_redbrook
+  q_wolves: 'marshal_redbrook',
+  q_greyjaw: 'marshal_redbrook',
+  q_bandits: 'marshal_redbrook',
+  q_ringleader: 'marshal_redbrook',
+  q_mogger: 'marshal_redbrook',
+  // trader_wilkes
+  q_boars: 'trader_wilkes',
+  q_supplies: 'trader_wilkes',
+  // apothecary_lin
+  q_spiders: 'apothecary_lin',
+  // brother_aldric
+  q_bones: 'brother_aldric',
+  q_whispers: 'brother_aldric',
+  q_names_of_the_dead: 'brother_aldric',
+  q_silence_the_call: 'brother_aldric',
+  q_rite: 'brother_aldric',
+  q_sexton: 'brother_aldric',
+  q_hollow: 'brother_aldric',
+  q_gravecallers_trail: 'brother_aldric',
+  // fisherman_brandt
+  q_murlocs: 'fisherman_brandt',
+  // foreman_odell
+  q_mine: 'foreman_odell',
+};
+
 // WorldMemory JSON written by python/memory.py WorldMemory.remember_giver().
 function loadWorldMemory() {
   try {
@@ -146,6 +188,17 @@ function readGameState() {
     abilities,
     player_pos: [p.pos.x, p.pos.z],
     nearby,
+    // live NPC positions by templateId — the AUTHORITATIVE turn-in source
+    // (static layout tables drifted from the real world). Collected for every
+    // npc entity in range; resolveTurnIn checks here FIRST.
+    npc_positions: (function () {
+      const m = {};
+      for (const e of sim.entities.values()) {
+        if (e.kind !== 'npc' || !e.templateId || !e.pos) continue;
+        m[e.templateId] = { x: e.pos.x, z: e.pos.z };
+      }
+      return m;
+    })(),
     inventory: invFull,
     inventory_by_id: invFull.reduce((m, s) => { if (s.id) m[s.id] = (m[s.id] || 0) + (s.count || 1); return m; }, {}),
     recipes_known: recipesKnown,
@@ -171,10 +224,20 @@ function resolveTurnIn(r) {
       let pos = null;
       const wg = wm && wm.quest_givers && wm.quest_givers[q.id];
       if (wg && wg.giver_pos) pos = { x: wg.giver_pos.x, z: wg.giver_pos.z };
+      // LIVE entity position is authoritative: static layout tables drifted
+      // from the real world (apothecary_lin table (11,-3) vs live (2.8,9.7)),
+      // and walking to a stale spot = "Too far away" at the real NPC.
       if (!pos) {
-        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || null;
-        if (turnInId && FARSHORE_NPC_POS[turnInId]) {
-          pos = { x: FARSHORE_NPC_POS[turnInId].x, z: FARSHORE_NPC_POS[turnInId].z };
+        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
+        if (turnInId && r.npc_positions && r.npc_positions[turnInId]) {
+          pos = { x: r.npc_positions[turnInId].x, z: r.npc_positions[turnInId].z };
+        }
+      }
+      if (!pos) {
+        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
+        const npcTable = Object.assign({}, FARSHORE_NPC_POS, EASTBROOK_NPC_POS);
+        if (turnInId && npcTable[turnInId]) {
+          pos = { x: npcTable[turnInId].x, z: npcTable[turnInId].z };
         }
       }
       if (pos) q.turnInNpc = pos;
