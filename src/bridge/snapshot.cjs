@@ -111,6 +111,13 @@ function readGameState() {
     });
   }
   // Real active quests live in sim.questLog (Map<questId, QuestProgress>).
+  // REQUIRED counts come from qp.resolvedCounts[i] (authoritative, rank/talent
+  // resolved — e.g. q_mine needs 10 kills, q_spiders obj2 needs 4), falling back
+  // to the def objective count. NEVER qp.counts (that's CURRENT progress) — the
+  // old fallback `required: c` made required==current so every quest with any
+  // progress looked instantly complete, and quests whose defs aren't in
+  // questDefs reported 0/0 forever. That mismatch is what drove the circling:
+  // the agent saw "0/0 ACTIVE" on genuinely ready quests and vice versa.
   let active = [], ready = [], done = [];
   const qlog = sim.questLog || (g.world && g.world.questLog) || null;
   const qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
@@ -118,12 +125,16 @@ function readGameState() {
     qlog.forEach((qp, qid) => {
       const st = qp.state || 'active';
       const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
-      const objs = (def && Array.isArray(def.objectives))
-        ? def.objectives.map((o, i) => ({
-            current: (qp.counts && qp.counts[i]) || 0,
-            required: (o && (o.count != null ? o.count : o.required)) || 0,
-          }))
-        : (qp.counts || []).map((c) => ({ current: c, required: c }));
+      const nObj = Math.max((qp.counts || []).length, (def && Array.isArray(def.objectives)) ? def.objectives.length : 0);
+      const objs = [];
+      for (let i = 0; i < nObj; i++) {
+        const o = (def && Array.isArray(def.objectives)) ? def.objectives[i] : null;
+        const resolved = qp.resolvedCounts ? qp.resolvedCounts[i] : undefined;
+        objs.push({
+          current: (qp.counts && qp.counts[i]) || 0,
+          required: (resolved != null ? resolved : (o && (o.count != null ? o.count : o.required))) || 0,
+        });
+      }
       const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
       if (st === 'active') active.push(entry);
       else if (st === 'ready') ready.push(entry);
