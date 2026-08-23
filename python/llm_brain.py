@@ -41,6 +41,19 @@ class LLMBrain:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
+    def should_consult(self, goal_prev, goal_new, step_idx,
+                       consecutive_failures, new_quest):
+        """Call the LLM only on transitions, not every step (latency budget).
+
+        True when: first decision / phase change / new quest / >=3 consecutive
+        failures / every 50th step. Otherwise False — cached goal keeps ruling.
+        """
+        if goal_prev is None or goal_new != goal_prev or new_quest:
+            return True
+        if consecutive_failures >= 3:
+            return True
+        return step_idx % 50 == 0
+
     def decide(self, world: dict, failures: list, lessons: list):
         """Ask the local LLM for a strategic goal. Returns {goal, reason} or None."""
         body = {
