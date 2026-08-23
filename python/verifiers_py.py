@@ -42,9 +42,10 @@ def _node_by_id(w, node_id):
     return None
 def _quest_state(w, qid):
     qs = w.get('quests') or {}
-    for q in (qs.get('active') or []):
-        if q.get('id') == qid:
-            return q.get('state')
+    for bucket in ('active', 'ready'):
+        for q in (qs.get(bucket) or []):
+            if q.get('id') == qid:
+                return q.get('state')
     if qid in (qs.get('done') or []):
         return 'done'
     if qid in (qs.get('available') or []):
@@ -119,6 +120,14 @@ def verify_quest_turn_in(c):
     s1 = _quest_state(c['after'], qid)
     if s0 in ('active', 'ready', 'complete') and s1 == 'done':
         return 'success'
+    # Fix2 (2026-08-23): the server REJECTS doomed turn-ins silently — no error
+    # event reaches the client (probed live: quest stays ready, no events). A
+    # rejected attempt left the world unchanged, which used to be
+    # 'inconclusive' (reward 0) and made blind turn-in spam FREE (measured:
+    # 350x turn_in_quest all inconclusive in one run). Unchanged evidence on an
+    # ATTEMPTED action is a failure of that attempt.
+    if s0 is not None and s1 is not None and s0 == s1:
+        return 'failure'
     return 'inconclusive'
 
 def verify_sell_junk(c):
