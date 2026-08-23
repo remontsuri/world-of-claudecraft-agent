@@ -370,6 +370,7 @@ def main():
                     except Exception:
                         traceback.print_exc()
                 rec = agent.step()
+        except BrowserBridgeError as e:
             # Infra failure (bridge/CDP/HTTP down). RECOVER IN-PROCESS — do NOT
             # re-create BrowserEnv/Agent. That re-init itself calls snapshot/
             # respawn, which raises AGAIN while the bridge is down, escaping as
