@@ -39,6 +39,13 @@ def build_brain_payload(ws: dict, info: dict, fsm_quest_id) -> dict:
             "dead": bool((info.get("player") or {}).get("dead")),
         },
         "bag_slots": len([s for s in (info.get("inventory") or []) if s]),
+        # 2026-08-23: collect-квесты требуют предметы; мозг должен видеть ЧТО
+        # лежит в сумках, чтобы понять «не хватает 1 silk -> фармить пауков».
+        "inventory": [
+            {"id": s.get("id"), "count": s.get("count")}
+            for s in (info.get("inventory") or [])
+            if s and s.get("count")
+        ][:12],
     }
 
 
