@@ -132,6 +132,11 @@ def _softmax_sample(weights: Dict[str, float], temperature: float = 1.0,
 # stale conclusions expire.
 HINT_TTL_SECONDS = 20 * 60
 
+# Подавление залипшего скилла живёт в ВЕСАХ, не в членстве в кандидатах
+# (см. комментарий в _candidates). x0.3 тормозит спам, но оставляет путь
+# назад: починенный скилл снова победит, как только его Q подрастёт.
+SPIN_WEIGHT_MULT = 0.3
+
 
 def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
     """Load machine hints from self_reflection.json (the SelfReflection journal).
@@ -346,17 +351,28 @@ class GoalManager:
         #   spin:<action> -> suppress that action (weight x0.3 at decide time,
         #     removed from candidates entirely when the journal is fresh)
         #   death:<cell>  -> while hp<0.6, no farm in a cell that killed us
+        # 2026-08-24 (найдено со-архитектором): раньше здесь стоял
+        # cands.remove(bad) — ЖЁСТКОЕ удаление скилла, хотя контракт обещает
+        # подавление веса x0.3. Из-за этого spin:return_to_giver физически
+        # вырезал скилл из кандидатов, детерминированный override фазы
+        # RETURN_TO_GIVER не срабатывал, и агент не сдал ни одного квеста за
+        # 1288 шагов. Теперь подавление живёт ТОЛЬКО в весах: скилл остаётся
+        # кандидатом (self._suppressed), а decide() множит его вес на
+        # SPIN_WEIGHT_MULT. Так залипание тормозится, но починенный скилл
+        # всегда может вернуться.
+        self._suppressed = set()
         for key, h in (self.hints or {}).items():
             if not isinstance(h, dict):
                 continue
             kind = (h.get("kind") or "").upper()
             if "ACTION_SATURATION" in kind and key.startswith("spin:"):
-                bad = key.split(":", 1)[1]
-                if bad in cands:
-                    cands.remove(bad)
+                self._suppressed.add(key.split(":", 1)[1])
             if ("DEATH" in kind and key.startswith("death:")
                     and ws.get("hp_frac", 1.0) < 0.6
                     and str(info.get("cell")) == key.split(":", 1)[1]):
+                # ЗДЕСЬ жёсткое удаление ОПРАВДАНО и сохраняется: это не
+                # анти-залипание, а гейт выживания — фармить в клетке, которая
+                # нас уже убила, при hp<0.6 нельзя ни при каком весе.
                 for risky in (SKILL_FARM,):
                     if risky in cands:
                         cands.remove(risky)
@@ -425,6 +441,12 @@ class GoalManager:
         if not cands:
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)
+        # Подавление залипших скиллов (spin:/death: хинты) — ЗДЕСЬ, в весах.
+        # Скилл остаётся кандидатом, но его вес множится на SPIN_WEIGHT_MULT.
+        for bad in getattr(self, "_suppressed", ()) or ():
+            if bad in vals:
+                v = vals[bad]
+                vals[bad] = v * SPIN_WEIGHT_MULT if v > 0 else v - 0.2
         # ensure every candidate has an entry (unseen -> 0)
         bucket = _bucket(ws)   # SAME key ExperienceStore uses, so the count-based
                                # exploration bonus actually differentiates candidates
