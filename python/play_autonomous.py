@@ -634,6 +634,7 @@ def main():
             "bucket_before": bucket, "bucket_after": bucket_after,
             "hp": round(ws.get("hp_frac", 0), 2),
             "quest_status": ws.get("quest_status"),
+            "goal": goal_fsm.goal,
             "dist": round(ws.get("distance_to_giver", 0), 1),
             "kills": ws.get("kills"), "xp": ws.get("xp"),
             "qprog": ws.get("quest_progress"), "cell": cell,
