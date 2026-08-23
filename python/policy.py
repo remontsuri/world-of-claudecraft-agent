@@ -124,6 +124,15 @@ def _softmax_sample(weights: Dict[str, float], temperature: float = 1.0,
     return actions[-1]
 
 
+# Fix4 (2026-08-23): hints describe PAST behavior and must decay. A spin:hint
+# journaled while an action was genuinely broken would otherwise suppress the
+# repaired action forever — the loop could never re-admit it. 20 minutes is
+# ~1 full SAVE_EVERY reflect() cycle x several: a still-true conclusion gets
+# re-journaled with a fresh timestamp on every reflect(), so only genuinely
+# stale conclusions expire.
+HINT_TTL_SECONDS = 20 * 60
+
+
 def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
     """Load machine hints from self_reflection.json (the SelfReflection journal).
 
@@ -132,13 +141,18 @@ def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
     optional steering, never a hard dependency.
     """
     import json
+    import time
     base = dirpath or os.path.dirname(os.path.abspath(__file__))
     path = os.path.join(base, "self_reflection.json")
+    now = time.time()
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         out = {}
         for c in data.get("journal", [])[-40:]:
+            t = c.get("t")
+            if not isinstance(t, (int, float)) or (now - t) > HINT_TTL_SECONDS:
+                continue  # stale or timestamp-less -> no longer steering
             out[c.get("key")] = {"kind": c.get("kind"),
                                  "detail": c.get("detail"),
                                  "hint": c.get("hint")}

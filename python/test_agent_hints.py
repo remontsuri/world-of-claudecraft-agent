@@ -39,7 +39,8 @@ def test_agent_refresh_hints_reads_journal(tmp_path=None):
     with open(jr, "w", encoding="utf-8") as f:
         json.dump({"journal": [
             {"kind": "ACTION_SATURATION", "key": "spin:return_to_giver",
-             "detail": "x", "hint": "reduce_weight"}]}, f)
+             "detail": "x", "hint": "reduce_weight",
+             "t": __import__("time").time()}]}, f)
     from agent import Agent
     from memory import ExperienceStore
     mem = ExperienceStore(path=":memory:")

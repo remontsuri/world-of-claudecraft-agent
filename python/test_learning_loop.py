@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 def _write_hints(hints, tmpdir):
     """Write a self_reflection.json with the given journal entries."""
     path = os.path.join(tmpdir, "self_reflection.json")
-    journal = [{"t": 1.0, "kind": k.split(":")[0], "detail": "test", "key": k,
+    # Fix4: hints now carry a TTL — entries must look FRESH to steer.
+    import time as _t
+    journal = [{"t": _t.time(), "kind": k.split(":")[0], "detail": "test", "key": k,
                 "hint": "reduce_weight"} for k in hints]
     json.dump({"journal": journal}, open(path, "w", encoding="utf-8"))
     return path
