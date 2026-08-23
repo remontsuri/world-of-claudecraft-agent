@@ -229,11 +229,11 @@ def build_world_state(info: Dict) -> Dict:
     danger = dead or (hp_frac < 0.3) or in_combat
 
     # has_ready: a turn-in-ready quest exists in the log (any). The FSM keeps a
-    # RETURN_TO_GIVER goal alive while this is true — going to turn it in IS the
-    # right move even though another quest shows ACTIVE objectives.
-    out["has_ready"] = bool(ready)
 
     return {
+        # has_ready: a turn-in-ready quest exists (any). The FSM keeps
+        # RETURN_TO_GIVER alive while this is true.
+        "has_ready": bool(ready),
         # bucket features (observations)
         "hp_frac": hp_frac,
         "player_maxhp": maxhp,
