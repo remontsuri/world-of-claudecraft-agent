@@ -287,22 +287,30 @@ class HierarchicalWoWEnv(gym.Env):
                         and (e.get("dist") or 99) < 20
                         for e in near)
                     if close_mob and hasattr(self.base, "_post"):
-                        ppos = (base_info.get("player_pos") or [0, 0])
-                        # run away from the closest mob: opposite bearing, 15yd
+                        # 2026-08-23 death-spiral fix: 15yd leg was not enough —
+                        # mobs re-aggro mid-meal (measured: hp yoyo 0.99->0.07,
+                        # heal 75% of all steps). Flee 30yd AND keep fleeing while
+                        # any mob stays within 20yd (up to 3 legs).
                         import math as _m
-                        best, bd = None, 1e9
-                        for e in near:
-                            if e.get("kind") == "mob" and not e.get("dead"):
-                                d = e.get("dist") or 99
-                                if d < bd:
-                                    bd, best = d, e
-                        if best and best.get("x") is not None:
+                        ppos = (base_info.get("player_pos") or [0, 0])
+                        for _leg in range(3):
+                            near = (getattr(self.base, "_last_info", None) or {}).get("nearby") or []
+                            close = [e for e in near
+                                     if e.get("kind") == "mob" and not e.get("dead")
+                                     and (e.get("dist") or 99) < 20]
+                            if not close:
+                                break
+                            best = min(close, key=lambda e: e.get("dist") or 99)
+                            if best.get("x") is None:
+                                break
                             dx = ppos[0] - best["x"]
                             dz = ppos[1] - best["z"]
                             n = _m.hypot(dx, dz) or 1.0
                             self.base._navigate_to_coord(
-                                ppos[0] + dx / n * 15, ppos[1] + dz / n * 15,
-                                max_steps=12)
+                                ppos[0] + dx / n * 30, ppos[1] + dz / n * 30,
+                                max_steps=25)
+                            ppos = (getattr(self.base, "_last_info", None)
+                                    or {}).get("player_pos") or ppos
                 except Exception:
                     pass
                 obs, r, term, trunc, info = self.base.step(ACT_EAT_DRINK)
