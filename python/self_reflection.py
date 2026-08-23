@@ -99,14 +99,23 @@ class SelfReflection:
                     "hint": "avoid_when_low_hp",
                 })
 
-        # 2. ACTION_SATURATION: one action dominates with near-zero avg reward
+        # 2. ACTION_SATURATION: one action dominates the window while producing
+        #    NO RESULT. Two shapes of "no result":
+        #      a) near-zero avg reward (classic spinning), OR
+        #      b) near-CONSTANT reward — a navigation treadmill: return_to_giver
+        #         earns positive arrival reward every step, but kills/xp/qprog
+        #         never move. R3 FIX (2026-08-23): shape (b) previously passed
+        #         the |avg|<0.05 gate and the treadmill was invisible (measured
+        #         run: 1860x return_to_giver with avg reward +0.31).
         acts = Counter(d.get("action") for d in w)
         if acts:
             top_a, top_n = acts.most_common(1)[0]
             if top_n / len(w) > 0.6 and top_n >= 25:
                 rs = [d.get("reward", 0.0) for d in w if d.get("action") == top_a]
                 avg_r = sum(rs) / max(len(rs), 1)
-                if abs(avg_r) < 0.05:
+                var = sum((r - avg_r) ** 2 for r in rs) / max(len(rs), 1)
+                flat_reward = abs(avg_r) < 0.05 or var < 1e-4
+                if flat_reward:
                     conclusions.append({
                         "kind": "ACTION_SATURATION",
                         "detail": f"'{top_a}' took {top_n}/{len(w)} steps "

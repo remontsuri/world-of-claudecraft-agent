@@ -589,6 +589,14 @@ def main():
         # strategy memory: record per-quest outcomes
         if _q.get("id"):
             strat_mem.record_outcome(f"quest:{_q['id']}", a, verdict == "SUCCESS")
+        # R2 FIX (2026-08-23): observe EVERY step. Previously observe() lived
+        # inside `if i % SAVE_EVERY == 0`, so the 30-entry window needed ~3000
+        # steps and the journal was never written in a 3000-step run — hints
+        # never existed. reflect() stays on the SAVE_EVERY cadence.
+        try:
+            refl.observe(rec)
+        except Exception:
+            traceback.print_exc()
         # periodic replay buffer flush (cheap, atomic) + training pass
         if i % SAVE_EVERY == 0:
             replay.save()
@@ -597,10 +605,14 @@ def main():
             # draw conclusions, persist them to the journal. Conclusions carry
             # machine hints consumed via reflector.hints() by the policy layer.
             try:
-                refl.observe(rec)
                 conclusions = refl.reflect()
                 for c in conclusions:
                     print(f"[reflect] {c['kind']}: {c['detail']}", flush=True)
+                # R4 FIX: push fresh journal hints into the live policy —
+                # without this the loop was closed in tests only.
+                if agent.refresh_hints():
+                    print(f"[reflect] hints active: "
+                          f"{sorted(agent.policy.hints)}", flush=True)
             except Exception:
                 traceback.print_exc()
             # Rare-event training pass: replay stored transitions (accept/turn_in/

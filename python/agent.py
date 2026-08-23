@@ -19,6 +19,7 @@ ENV_ERROR (headless server crash) is reported as outcome_kind="ENV_ERROR" and yi
 reward 0.0 — it must NOT poison the policy with a false "farm is bad" lesson.
 """
 
+import os
 import sys
 import time
 import traceback
@@ -52,11 +53,22 @@ def _world_state_dict(info: dict) -> dict:
 class Agent:
     def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None,
                  world_mem: "WorldMemory" = None, fsm=None, replay=None,
-                 strat_mem=None):
+                 strat_mem=None, reflection_hints: dict = None,
+                 journal_dir: str = None):
         self.env = env
         self.mem = memory
         self.world_mem = world_mem or WorldMemory()
-        self.policy = GoalManager(memory, temperature=1.2, seed=seed)
+        # R4 FIX (2026-08-23): hints must reach the LIVE agent. Previously
+        # GoalManager was built with no reflection_hints and nothing ever
+        # called load_reflection_hints() in production — the hint loop was
+        # closed in tests only.
+        from policy import load_reflection_hints
+        base_dir = journal_dir or os.path.dirname(os.path.abspath(__file__))
+        self._journal_dir = base_dir
+        hints = dict(reflection_hints or {}) or \
+            load_reflection_hints(base_dir)
+        self.policy = GoalManager(memory, temperature=1.2, seed=seed,
+                                  reflection_hints=hints)
         self.cap = QuestCapability(env)
         # GoalFSM: explicit current_goal, persisted to goal_state.json so an
         # infra restart resumes the in-progress quest instead of NO_QUEST.
@@ -69,6 +81,18 @@ class Agent:
         # 3 is enough to survive a transient healer rejection without burning the
         # whole run; beyond that it is a real recovery failure, not bad luck.
         self.RESPAWN_MAX_ATTEMPTS = 3
+
+    def refresh_hints(self):
+        """Reload reflection hints from the journal into the live policy.
+
+        Called by the runner every SAVE_EVERY steps so conclusions drawn at
+        runtime (spin:<action>, death:<cell>) steer decisions within seconds,
+        not after the next restart.
+        """
+        from policy import load_reflection_hints
+        self.policy.hints = load_reflection_hints(self._journal_dir)
+        return self.policy.hints
+
     def _remember_visible_world(self, info: dict):
         """Persist NPC facts observed by the live browser without steering policy."""
         changed = False
