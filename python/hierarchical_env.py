@@ -273,7 +273,38 @@ class HierarchicalWoWEnv(gym.Env):
                 else:
                     obs, r, term, trunc, info = self.base.step(ACT_NOOP)
             elif name == "heal":
-                # eat/drink to recover HP (noop if already full — sim ignores)
+                # eat/drink to recover HP (noop if already full — sim ignores).
+                # 2026-08-23: eating while a mob swings at you is blocked
+                # ("You can't do that while in combat") — measured 173/192 heal
+                # fails in a death spiral. If a hostile is close, take ONE short
+                # flee-leg first (navigateToCoord's own flee logic runs when
+                # inCombat && hp<0.5), then eat.
+                try:
+                    base_info = getattr(self.base, "_last_info", None) or {}
+                    near = base_info.get("nearby") or []
+                    close_mob = any(
+                        e.get("kind") == "mob" and not e.get("dead")
+                        and (e.get("dist") or 99) < 20
+                        for e in near)
+                    if close_mob and hasattr(self.base, "_post"):
+                        ppos = (base_info.get("player_pos") or [0, 0])
+                        # run away from the closest mob: opposite bearing, 15yd
+                        import math as _m
+                        best, bd = None, 1e9
+                        for e in near:
+                            if e.get("kind") == "mob" and not e.get("dead"):
+                                d = e.get("dist") or 99
+                                if d < bd:
+                                    bd, best = d, e
+                        if best and best.get("x") is not None:
+                            dx = ppos[0] - best["x"]
+                            dz = ppos[1] - best["z"]
+                            n = _m.hypot(dx, dz) or 1.0
+                            self.base._navigate_to_coord(
+                                ppos[0] + dx / n * 15, ppos[1] + dz / n * 15,
+                                max_steps=12)
+                except Exception:
+                    pass
                 obs, r, term, trunc, info = self.base.step(ACT_EAT_DRINK)
             elif name in ("cast_frostbolt", "cast_fireball"):
                 # mage ranged nuke: bridge case 10/11 -> targetEntity + castAbility.
