@@ -312,6 +312,13 @@ class Agent:
         # WorldState -> identical bucket key (see world_state.py for the bug this
         # prevents).
         fsm_goal = self.fsm.goal if self.fsm is not None else None
+        # step_idx нужен политике для разведочного бюджета gather-гейта
+        # (GATHER_PROBE_EVERY): раз в N шагов пробуем действие вопреки фильтру.
+        self._step_counter = getattr(self, "_step_counter", 0) + 1
+        try:
+            self.policy.step_idx = self._step_counter
+        except Exception:
+            pass
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
                                           goal=fsm_goal)

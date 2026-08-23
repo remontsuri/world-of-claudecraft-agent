@@ -137,6 +137,14 @@ HINT_TTL_SECONDS = 20 * 60
 # назад: починенный скилл снова победит, как только его Q подрастёт.
 SPIN_WEIGHT_MULT = 0.3
 
+# Q5 (консенсус 2026-08-24, вариант «гибрид»): gather предлагается ТОЛЬКО
+# когда рядом есть объект действия (харвестный узел или труп с
+# componentTags). Измерено: без гейта 25 из 171 шага (14.6%) уходили в
+# пустой вызов. Чтобы не ослепнуть (мир меняется между снапшотами),
+# раз в GATHER_PROBE_EVERY шагов делаем разведочную пробу вопреки фильтру —
+# такая проба теперь честно верифицируется как failure при noTarget.
+GATHER_PROBE_EVERY = 20
+
 
 def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
     """Load machine hints from self_reflection.json (the SelfReflection journal).
@@ -280,7 +288,16 @@ class GoalManager:
         quest_collect_pending = any(
             (qq.get("id") or "").startswith("q_prof_workorder")
             for qq in (active + ready))
-        if quest_collect_pending and inv_map:
+        # объект действия для gather: харвестный узел ИЛИ труп с componentTags
+        gather_nodes = [n for n in ((info.get("gather") or {}).get("nearbyNodes") or [])
+                        if n.get("harvestable")]
+        gather_corpses = [e for e in (info.get("nearby") or [])
+                          if e.get("kind") == "mob" and e.get("dead")
+                          and (e.get("componentTags") or [])]
+        gather_object_near = bool(gather_nodes or gather_corpses)
+        probe_now = (int(getattr(self, "step_idx", 0)) % GATHER_PROBE_EVERY == 0
+                     and int(getattr(self, "step_idx", 0)) > 0)
+        if quest_collect_pending and inv_map and (gather_object_near or probe_now):
             if SKILL_GATHER not in cands:
                 cands.append(SKILL_GATHER)
         # Do not send an incomplete quest back to its giver prematurely.
