@@ -358,7 +358,7 @@ def main():
                                                 new_qid != getattr(brain, "_last_qid", None)):
                             from world_state import build_world_state as _bws
                             _live_info = getattr(env, "_last_info", None) or {}
-                            _live_ws = ws if ws is not None else _bws(_live_info)
+                            _live_ws = _bws(_live_info)
                             world_payload = build_brain_payload(_live_ws, _live_info, new_qid)
                             fails = episodes.recent_failures(n=3)
                             lessons = [c.get("detail") for c in refl.journal[-5:]]
