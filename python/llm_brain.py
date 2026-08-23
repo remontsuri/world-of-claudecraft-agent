@@ -30,6 +30,7 @@ _SYSTEM = (
     "- RETURN_TO_GIVER: progress>=required, но giver далеко (>7yd)\n"
     "- TURN_IN: phase=READY И giver рядом (<7yd)\n"
     "- HEAL: hp_frac<0.35; SURVIVE: dead или hp_frac<0.15\n"
+    "- Если ready_quests непустой: цель TURN_IN (гивер рядом) или RETURN_TO_GIVER (идти к гиверу готового квеста)\n"
     "- SELL_REPAIR: сумки полны и рядом vendor\n"
     "Учитывай recent_failures: не повторяй недавние проваленные действия.\n"
     "Отвечай только JSON по схеме."

@@ -14,7 +14,19 @@ def build_brain_payload(ws: dict, info: dict, fsm_quest_id) -> dict:
     q = dict(ws.get("quest") or {})
     if fsm_quest_id:
         q["id"] = fsm_quest_id
+    # Fix (2026-08-23): the brain must SEE ready quests — without this it can
+    # never choose TURN_IN (measured: 492 steps, 0 turn-in attempts, the ready
+    # quest invisible in the payload).
+    ready_quests = []
+    for rq in ((info.get("quests") or {}).get("ready") or []):
+        prog, req = 0, 0
+        for o in (rq.get("objectives") or []):
+            prog += min(o.get("current") or 0, o.get("required") or 0)
+            req += o.get("required") or 0
+        ready_quests.append({"id": rq.get("id"),
+                             "progress": prog, "required": req})
     return {
+        "ready_quests": ready_quests,
         "quest": {
             "id": q.get("id"),
             "phase": q.get("phase"),
