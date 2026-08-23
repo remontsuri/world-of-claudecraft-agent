@@ -1,0 +1,149 @@
+{
+  "agreements": [
+    {
+      "id": "A1",
+      "accept": "Моя гипотеза раунда 1 о gather ('не ретраится из-за затухшего exploration-бонуса 0.5/(1+0.1c)') — НЕВЕРНА.",
+      "evidence": "В experience_autonomous.json gather count=0 => бонус = 0.5/(1+0) = 0.500 (максимум, у farm при count=63 бонус 0.068). gather не 'затух' — он вообще никогда не исполнялся, потому что отсутствовал в списке кандидатов для активной фазы до коммита 7b7f01f (quest_collect_pending). Признак затухания ложный."
+    },
+    {
+      "id": "A2",
+      "accept": "Методологическое уточнение принято: прогон на 1288 шагов (старт 00:18) стартовал ДО gather-фикса (закоммичен 01:28).",
+      "evidence": "Этот прогон физически не содержал фикс, поэтому 'gather=0' в нём ничего не доказывает о поведении gather. Агент перезапущен на актуальном коде — только пост-фикс прогоны релевантны."
+    },
+    {
+      "id": "A3",
+      "accept": "Корень низкого покрытия (36% = 390/1079) — слишком мелкая сетка состояний для 13 скиллов, а НЕ затухание exploration.",
+      "evidence": "Опыт не обобщается между похожими состояниями из-за избыточных признаков в бакете. Это переформулирует Q2 в сторону СОКРАЩЕНИЯ размерности, а не только лечения priors."
+    },
+    {
+      "id": "A4",
+      "accept": "Находка про spin hard-removal — механическая причина turn_in=0. Подтверждаю и делаю фиксом №1 (коррелирует с моим пунктом 5 раунда 1).",
+      "evidence": "ПРОВЕРЕНО в живом self_reflection.json: spin:heal x3, spin:return_to_giver x1 (kind=ACTION_SATURATION). policy.py:353-356 делает cands.remove(bad) — жёстко вырезает оба. Следствие: return_to_giver вырезан => детерминированный override 'if goal==RETURN_TO_GIVER and SKILL_RETURN in cands' (lines 419-424) НИКОГДА не срабатывает => turn_in=0 за 1288 шагов. heal вырезан => риск смертельных петель. Комментарий обещает x0.3, код делает remove."
+    },
+    {
+      "id": "A5",
+      "accept": "Все 7 пунктов 'согласен без возражений' принимаю как обязывающие проектные ограничения.",
+      "evidence": "1) логистика детерминирована и вне Q; 2) LLM-фаза перезаписывается => либо рычаг, либо убрать; 3) один писатель goal; 4) safe-anchors вместо random flee; 5) награда за turn_in только по verify_quest_turn_in==success; 6) оффлайн-merge логов запрещён; 7) оставить nav_policy primary, убрать балласт-навигаторы."
+    }
+  ],
+  "counter_arguments": [
+    {
+      "id": "C1",
+      "holds_position": "spin→weight(0.3) НЕ делает optimistic-exploration-prior устаревшим. Оба нужны.",
+      "argument": "Два РАЗНЫХ мягких prior-а: (i) spin x0.3 — мягкое подавление самозаключённо-плохого действия, затухает через HINT_TTL=20*60 (policy.py:133); (ii) optimistic 0.5/(1+0.1c) (policy.py:110-113) — бонус за нетронутые пары. gather доказывает необходимость (ii): при count=0 бонус=0.5 удерживает НОВОЕ хорошее действие в живых против уже натренированных high-Q действий. Без (ii) после того как gather потыкают 50x и он покажет -0.4, низкий Q его похоронит навсегда. Фикс #1 (spin→0.3) — это необходимое, но не достаточное; prior (ii) сохраняем.",
+      "fact_anchors": ["policy.py:110-113", "policy.py:133", "policy.py:353-356"]
+    },
+    {
+      "id": "C2",
+      "holds_position": "death:<cell> hard-removal ПРАВИЛЬНО остаётся жёстким. Фикс #1 должен охватывать ТОЛЬКО spin.",
+      "argument": "death-правило (policy.py:357-362) — наблюдательский safety-гейт: не ре-фармить моба, убившего нас, при hp<0.6. В отличие от spin оно бьёт ТОЛЬКО по farm в известно-летальной клетке, а не по heal/return. Если конвертировать и его в x0.3, агент может снова полезть в смертельную клетку. Приравнивать его к сломанному spin — значит вернуть suicide-farming. Скоуп: spin→weight(0.3); death→hard remove оставить.",
+      "fact_anchors": ["policy.py:357-362"]
+    },
+    {
+      "id": "C3",
+      "holds_position": "Мой раунд-1 тезис 'логистика вне Q' подтверждён тобой (пункт 1) — не оспаривается; уточняю связь: детерминированный override уже частично есть (policy.py:419-424), и именно spin-фикс его разблокирует.",
+      "argument": "Это соединяет мой пункт 5 и твою находку: override не работал не из-за логики, а потому что cands.remove вырезал return_to_giver ДО проверки. Поэтому порядок 'spin сначала' правильный, но сама детерминизация логистики — отдельный, уже согласованный шаг (#2).",
+      "fact_anchors": ["policy.py:419-424"]
+    }
+  ],
+  "answers": {
+    "Q1": "ДА, меняю порядок. Первым — spin hard-removal → weight×0.3. Причина: cands.remove выполняется внутри _candidates() ДО candidate_values()/_softmax_sample(), поэтому ни один prior, ни Q не могут спасти жёстко вырезанное действие — любой prior бесполезен, пока действия нет в cands. Живой журнал (проверено) содержит spin:heal×3 и spin:return_to_giver×1 => оба вырезаются; return_to_giver вырезан => override RETURN_TO_GIVER не срабатывает => turn_in=0; heal вырезан => риск death-loop. 1-строковой фикс: policy.py:353-356 заменить cands.remove(bad) на сбор множителей 0.3, применяемых в decide() перед softmax. СКОУП: ТОЛЬКО spin; death оставить hard (см. C2).",
+    "Q2": "СОКРАТИТЬ размерность + ДВОЙНАЯ ТАБЛИЦА. Боевая/micro Q-таблица бакет = {hp_band(4), strong_mob_near, weak_mob_near, has_mob, has_corpse, danger, in_combat}. УБРАТЬ из Q-бакета: junk, far(distance_to_giver), quest_status(qs). Обоснование: junk→sell детерминирован (логистика FSM); far→навигация детерминирована; qs→FSM-фаза. Они не меняют выбор БОЕВОГО скилла и только раздували ключи (256 против 1079). Логистика (accept/return/turn_in/sell) — вне Q, управляется FSM-фазой. Это поднимает заполняемость (390/~256) и ПРИНУДИТЕЛЬНО обобщает (грубый бакет сливает похожие состояния в один). Плюс сохранить optimistic prior (C1).",
+    "Q3": "Выбираю (в) — убрать LLM из горячего цикла, сделать ПЕРИОДИЧЕСКИМ рефлектором/автором hints каждые ~100 шагов, асинхронно (латентность 1-7с не блокирует decide()). Его вывод = затухающие machine-hints (spin:/death:) в self_reflection.json, применяемые как weight×0.3 через ИСПРАВЛЕННЫЙ механизм #1 (не жёсткое удаление). Отвергаю (б) N-step планировщик: стохастичный мир (мобы/смерти/лут) ломает фиксированные последовательности и конфликтует с детерминированной-логистикой + Q-боем. (а) — это ТРАНСПОРТ для (в): hint = затухающий prior. Даёт реальный рычаг (пункт 2) без перешаговой латентности, переиспользует существующий consumer self_reflection.json. ТРЕБУЕТ сначала фикс #1, иначе LLM-hints опять вырежут действия намертво.",
+    "Q4": "См. autonomy_criteria: 6 измеримых критериев приёмочного теста (quest throughput, надёжность turn_in, выживаемость, самосохранение, кривая обучения, независимость от LLM)."
+  },
+  "final_order": [
+    {
+      "step": 1,
+      "title": "spin hard-removal → weight×0.3 (ТОЛЬКО spin)",
+      "action": "policy.py:353-356 заменить cands.remove(bad) на аккумуляцию suppressed-множителя 0.3, применяемого в decide() перед _softmax_sample(); death-правило (357-362) оставить hard.",
+      "loc": "python/policy.py:344-362 + decide() softmax",
+      "metric": "На свежем прогоне актуального кода: return_to_giver ∈ cands всякий раз когда goal∈{RETURN_TO_GIVER,TURN_IN} и hp≥0.35; turn_in_quest count > 0 в первые 200 шагов; spin:heal НЕ вырезает heal (heal доступен при любом hp)."
+    },
+    {
+      "step": 2,
+      "title": "Детерминизация логистики вне Q + награда только по verify",
+      "action": "FSM-фаза детерминированно ведёт accept/return/turn_in/sell; reward.turn_in начисляется ТОЛЬКО при verify_quest_turn_in==success (навигационные leg'и реварда не дают).",
+      "loc": "python/policy.py:419-424 (сохранить) + reward.py",
+      "metric": "P(return|RETURN_TO_GIVER, hp≥0.35)=1.0 на ≥100 phase-шагах; reward(return-nav-leg)=0; reward(verified turn_in)=+5.0; turn_in success_rate ≥ 0.90."
+    },
+    {
+      "step": 3,
+      "title": "Один писатель goal (brain + FSM → один)",
+      "action": "Убрать второго писателя; goal устанавливается единственным источником (FSM-фаза), LLM-фаза (если есть) не перезаписывает.",
+      "loc": "goal_fsm.py / brain модуль",
+      "metric": "Ровно один writer ставит goal за шаг; 0 случаев перезаписи LLM-фазы update_from_world (и наоборот) в логе на 5000 шагов."
+    },
+    {
+      "step": 4,
+      "title": "Сокращение сетки + двойная таблица (Q2)",
+      "action": "Новый _combat_bucket = {hp_band, strong_mob_near, weak_mob_near, has_mob, has_corpse, danger, in_combat}; убрать junk/far/qs. Логистика вне Q.",
+      "loc": "python/memory.py:_bucket → _combat_bucket; python/policy.py uses it",
+      "metric": "Ключевое пространство Q-бакета ≤ 256; combat-покрытие ≥ 60% за 5000 шагов; P(turn_in|READY,hp≥0.35) ≥ 0.9 в ≥5 различных бакетах."
+    },
+    {
+      "step": 5,
+      "title": "LLM → периодический hint-автор (Q3, вариант в+а)",
+      "action": "LLM вызывается асинхронно каждые ~100 шагов, пишет затухающие hints в self_reflection.json (применяются через фикс #1 как ×0.3). Не в decide().",
+      "loc": "llm-рефлекс-модуль + python/policy.py load_reflection_hints",
+      "metric": "LLM blocking-вызовов в decide()==0; LLM периодических вызовов ≤10/1000 шагов; ≥1 поведенчески-меняющий hint на 1000 шагов; 0 латентности в пути решения."
+    },
+    {
+      "step": 6,
+      "title": "safe-anchors + консолидация навигаторов",
+      "action": "flee заменить на safe-anchor (возврат к 3×30yd якорю); убрать 3 вторичных навигатора, оставить nav_policy primary.",
+      "loc": "навигационный модуль + flee-логика",
+      "metric": "deaths/1000 ≤ 2.0 (приёмка) / ≤1.0 (цель); P(heal|hp<0.35) ≥ 0.70."
+    }
+  ],
+  "autonomy_criteria": [
+    {
+      "id": "quest_throughput",
+      "description": "Агент сам завершает квесты (играет).",
+      "metric": "info.quests_done delta ≥ 10 за 5000 шагов (≈1 квест / 500 шагов)",
+      "target": "≥ 10 / 5000 шагов",
+      "window": "5000",
+      "source": "info.quests_done"
+    },
+    {
+      "id": "turnin_reliability",
+      "description": "Логистика детерминирована: решив сдать — сдаёт.",
+      "metric": "success_rate(turn_in_quest при наличии ready-квеста) ≥ 0.90",
+      "target": "≥ 0.90",
+      "window": "5000",
+      "source": "verify_quest_turn_in == success / attempts"
+    },
+    {
+      "id": "survival",
+      "description": "Не умирает пачками (выживает сам).",
+      "metric": "deaths / 1000 шагов",
+      "target": "≤ 2.0 (приёмка), ≤ 1.0 (цель)",
+      "window": "rolling 1000",
+      "source": "info.deaths"
+    },
+    {
+      "id": "self_preservation",
+      "description": "При критическом HP лечится (думает о выживании).",
+      "metric": "P(action == heal | hp_frac < 0.35) ≥ 0.70",
+      "target": "≥ 0.70",
+      "window": "все шаги с hp<0.35",
+      "source": "decide() action + ws.hp_frac"
+    },
+    {
+      "id": "learning_curve",
+      "description": "Улучшается со временем (учится).",
+      "metric": "quests_done(2-я половина 10000) ≥ 1.25× quests_done(1-я половина) И deaths/1000(2-я) ≤ 0.7× deaths/1000(1-я)",
+      "target": "≥ 1.25× throughput, ≤ 0.7× deaths",
+      "window": "10000 (две половины по 5000)",
+      "source": "info.quests_done, info.deaths"
+    },
+    {
+      "id": "llm_independence",
+      "description": "Автономен от LLM в горячем цикле (думает сам, без перешаговой зависимости).",
+      "metric": "LLM blocking-вызовов в decide() == 0 за прогон; LLM периодических вызовов ≤ 10 / 1000 шагов",
+      "target": "0 blocking, ≤ 10/1000 periodic",
+      "window": "5000",
+      "source": "decide() call trace + llm scheduler"
+    }
+  ]
+}
