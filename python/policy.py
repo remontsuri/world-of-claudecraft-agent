@@ -373,6 +373,23 @@ class GoalManager:
                 seen.add(c); out.append(c)
         return out
 
+    def _turn_ctx(self, info: dict, action: str) -> dict:
+        """Ctx for return/turn-in skills: prefer the READY quest (it is the one
+        that can actually be turned in), else the first active with turnInNpc."""
+        quests = info.get("quests", {}) or {}
+        ready = quests.get("ready") or []
+        if ready:
+            return {"quest": ready[0]}
+        preferred = None
+        for q in (quests.get("active") or []):
+            if (q.get("turnInNpc") or {}).get("x") is not None:
+                preferred = q
+                break
+        ctx = {}
+        if preferred is not None:
+            ctx["quest"] = preferred
+        return ctx
+
     # ---- main decision ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
                 goal: Optional[str] = None) -> Tuple[str, dict]:
@@ -384,6 +401,17 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         cands = self._candidates(info, ws, goal=goal)
+        # Ruling (2026-08-23): inside RETURN_TO_GIVER / TURN_IN phases the correct
+        # skill is deterministic — navigate toward the giver, then turn in. Leaving
+        # the choice to softmax let Q-values re-derive a farm/heal loop while the
+        # ready quest waited (measured: 119 steps of RETURN_TO_GIVER with zero
+        # return attempts). Survival gates still veto above.
+        if goal == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
+                and SKILL_RETURN in cands:
+            return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
+        if goal == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35 \
+                and SKILL_TURN_IN in cands:
+            return SKILL_TURN_IN, self._turn_ctx(info, SKILL_TURN_IN)
         if not cands:
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)
