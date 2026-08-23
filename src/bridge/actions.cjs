@@ -20,6 +20,9 @@ function setLastAccept(v) { lastAccept = v; }
 // 7=heal 8=equip 9=buy. Each case uses the REAL client API; unsupported
 // capabilities are honest no-ops with a console warning (no fake success).
 async function applyAction(idx, cmd, gameClient) {
+  // handle: факты об исполнении, которые нужны верификаторам Python
+  // (например gatherNoTarget: у gather не было ни узла, ни трупа).
+  let gatherNoTarget = false;
   switch (idx) {
     case 0: { // farm: chase + attack nearest HOSTILE living mob until it dies
       const targetId = await gameClient.evaluate(() => {
@@ -320,6 +323,7 @@ async function applyAction(idx, cmd, gameClient) {
       await gameClient.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} });
   }
   await sleep(gameClient.tickMs);
+  return { noTarget: gatherNoTarget };
 }
 
 // Walk toward (x,z); returns arrived bool. Geometry (measured live):
@@ -459,10 +463,15 @@ function createActions({ gameClient, buildSnapshot, tickMs = 220 }) {
   }
 
   async function stepHandler(cmd) {
-    await apply(cmd.idx || 0, cmd);
+    const applied = await apply(cmd.idx || 0, cmd);
     const r = await buildSnapshot(gameClient);
     if (r == null) return { ok: false, error: 'snapshot after step failed' };
     const out = { ok: true, info: r };
+    // Факты исполнения для Python-верификаторов (2026-08-24): noTarget=true
+    // означает, что у скилла не было объекта действия (нет узла/трупа для
+    // gather) — верификатор превращает это в честный failure, а не в
+    // inconclusive, иначе агент бьёт в пустоту без обучающего сигнала.
+    if (applied && applied.noTarget) out.noTarget = true;
     if (lastAccept && (cmd.idx === 2 || cmd.questId)) {
       out.giver = lastAccept;
       lastAccept = null;

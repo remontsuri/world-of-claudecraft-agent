@@ -148,6 +148,14 @@ def verify_gather(c):
         return 'success'
     if ma > mb:
         return 'success'
+    # 2026-08-24: если МОСТ не нашёл ни узла, ни трупа (noTarget=True), это
+    # честный ПРОВАЛ решения, а не неопределённость: агент выбрал скилл,
+    # которому физически нечего делать. Измерено: 25 подряд gather в пустоту
+    # на позиции без трупов -> все inconclusive -> reward~0 -> Q ничему не
+    # училось и цикл мог длиться бесконечно. Отсутствие флага (старые записи)
+    # сохраняет прежнее поведение.
+    if h.get('noTarget') is True:
+        return 'failure'
     return 'inconclusive'
 
 def verify_craft(c):

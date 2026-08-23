@@ -271,7 +271,21 @@ class HierarchicalWoWEnv(gym.Env):
                     info = self.base.harvest_node(str(node.get("id")), False)
                     self._last_info = info
                 else:
-                    obs, r, term, trunc, info = self.base.step(ACT_NOOP)
+                    # 2026-08-24: раньше здесь стоял ACT_NOOP — то есть
+                    # corpse-harvest в мосте (bridge case 5) НИКОГДА не
+                    # вызывался, и 25 подряд gather были пустыми noop'ами при
+                    # полностью рабочем sim.harvestCorpse. Теперь идём в
+                    # bridge case 5: он сам пробует узел, затем труп с
+                    # componentTags, и честно сообщает noTarget, если рядом
+                    # нет ни того, ни другого.
+                    if hasattr(self.base, "_post"):
+                        resp = self.base._post({"action": "step", "idx": 5})
+                        info = resp.get("info") or self._last_info
+                        self._last_info = info
+                        if resp.get("noTarget"):
+                            self._last_handle_no_target = True
+                    else:
+                        obs, r, term, trunc, info = self.base.step(ACT_NOOP)
             elif name == "heal":
                 # eat/drink to recover HP (noop if already full — sim ignores).
                 # 2026-08-23: eating while a mob swings at you is blocked

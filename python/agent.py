@@ -190,6 +190,16 @@ class Agent:
                 elif action == "accept_quest" and ctx.get("npc"):
                     qids = ctx["npc"].get("questIds") or ctx["npc"].get("questId") or [None]
                     handle = str(qids[0]) if qids else None
+                elif action == "gather":
+                    # 2026-08-24: мост сообщает noTarget, когда у gather не было
+                    # ни узла, ни трупа. Верификатор превращает это в честный
+                    # failure (иначе агент бьёт в пустоту без сигнала обучения).
+                    no_target = bool(getattr(self.env, "_last_handle_no_target", False))
+                    handle = {"noTarget": no_target}
+                    try:
+                        self.env._last_handle_no_target = False
+                    except Exception:
+                        pass
                 v = verify_skill(action, {"before": before, "after": after, "handle": handle})
                 verdict = v if isinstance(v, str) else str(v)
                 return after, verdict, "OK"
