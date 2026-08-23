@@ -240,13 +240,15 @@ class ExperienceStore:
         batch_items = replay.sample(batch)
         n = 0
         for it in batch_items:
+            # Marker rows (e.g. the respawn glue stores state="respawn") are not
+            # transitions: _bucket() would crash on a string. Skip them.
+            if not isinstance(it.get("state"), dict):
+                continue
             try:
                 # Replay items store the RAW WorldState dict as `state`/
                 # `next_state` (see play_autonomous.py ~line 562). ExperienceStore
                 # .update() expects a dict and bucketizes it internally via
-                # _bucket(), so pass it through unchanged. (If a writer ever
-                # stored a pre-bucketed string, that's a contract bug — let it
-                # surface rather than silently mis-bucket.)
+                # _bucket(), so pass it through unchanged.
                 self.update(it["state"], it["action"], it["reward"],
                             it.get("next_state"), outcome_kind="OK")
                 n += 1
