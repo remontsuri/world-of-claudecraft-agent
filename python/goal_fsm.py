@@ -190,9 +190,12 @@ class GoalFSM:
         elif self.goal == ACCEPT:
             self.set(DO_OBJECTIVE, q.get("id"))
         elif self.goal == RETURN_TO_GIVER:
-            # We were returning but objective isn't done yet (maybe drifted);
-            # go back to doing the objective.
-            self.set(DO_OBJECTIVE, q.get("id"))
+            # 2026-08-23: keep RETURN_TO_GIVER while a READY quest waits — turning
+            # it in is the correct move even if the ws-selected quest shows ACTIVE
+            # objectives (the ready quest lives in a parallel bucket). Only demote
+            # when nothing is ready.
+            if not ws.get("has_ready"):
+                self.set(DO_OBJECTIVE, q.get("id"))
         # DO_OBJECTIVE / TURN_IN stay as-is (TURN_IN only set when READY).
 
     def is_active(self) -> bool:
