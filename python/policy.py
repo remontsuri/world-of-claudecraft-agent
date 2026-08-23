@@ -268,6 +268,16 @@ class GoalManager:
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg
+        # 2026-08-23: collect-квесты требуют предметы; если квестовый предмет уже
+        # лежит в сумках (пусть не полный стек), harvest с ближайших трупов —
+        # способ добить остаток (measured: spider_silk 5/6, loom ждал одну единицу).
+        inv_map = {s.get("id"): s.get("count") for s in inv}
+        quest_collect_pending = any(
+            (qq.get("id") or "").startswith("q_prof_workorder")
+            for qq in (active + ready))
+        if quest_collect_pending and inv_map:
+            if SKILL_GATHER not in cands:
+                cands.append(SKILL_GATHER)
         # Do not send an incomplete quest back to its giver prematurely.
         # Bag pressure: a nearly-full bag blocks quest turn-ins (bagsFullError)
         # even with zero junk-quality items (materials are common). Offer
