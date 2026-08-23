@@ -137,7 +137,7 @@ async function applyAction(idx, cmd, gameClient) {
       void sold;
       break;
     }
-    case 5: { // gather: harvest the nearest harvestable node within range
+    case 5: { // gather: node first; else harvest a fresh beast/spider corpse
       const nodeId = await gameClient.evaluate(() => {
         const g = window.__game, sim = g.sim, p = sim.player;
         let best = null, bd = Infinity;
@@ -151,6 +151,26 @@ async function applyAction(idx, cmd, gameClient) {
       });
       if (nodeId != null) {
         await gameClient.evaluate((id) => { try { window.__game.sim.harvestNode(String(id)); } catch (_) {} }, nodeId);
+        break;
+      }
+      // 2026-08-23: no node -> corpse-harvest (spider_silk etc. come from
+      // componentTagged corpses via sim.harvestCorpse, public on the sim).
+      const corpseId = await gameClient.evaluate(() => {
+        const g = window.__game, sim = g.sim, p = sim.player;
+        let best = null, bd = Infinity;
+        for (const e of sim.entities.values()) {
+          if (e.kind !== 'mob' || !e.dead) continue;
+          const tags = e.componentTags || [];
+          if (!tags.length) continue;
+          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+          if (d <= 30 && d < bd) { bd = d; best = { id: e.id, tags }; }
+        }
+        return best;
+      });
+      if (corpseId && corpseId.id != null) {
+        await gameClient.evaluate((c) => {
+          try { window.__game.sim.harvestCorpse(Number(c.id), c.tags); } catch (_) {}
+        }, corpseId);
       }
       break;
     }
