@@ -163,6 +163,16 @@ class GoalFSM:
             self.set(DO_OBJECTIVE, q.get("id"))
             return
 
+        # Fix5 (2026-08-23 live run): SAME quest id but observed ACTIVE with
+        # incomplete objectives under a TURN_IN goal — the turn-in already
+        # happened or the objective regressed; the goal is stale. Demote to
+        # DO_OBJECTIVE. (Measured: 700+ steps farming under TURN_IN because the
+        # phase gate offered no candidates and the full-list fallback fired.)
+        if (self.goal == TURN_IN and qphase == "ACTIVE"
+                and not q.get("complete", True)):
+            self.set(DO_OBJECTIVE, q.get("id"))
+            return
+
         if self.quest_id != q.get("id"):
             self.quest_id = q.get("id")
 
