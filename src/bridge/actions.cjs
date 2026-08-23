@@ -168,7 +168,8 @@ async function applyAction(idx, cmd, gameClient) {
           const name = (def.name || '').toLowerCase();
           const id = slot.itemId || def.id;
           if (!id) continue;
-          if (/potion|draught|tonic|elixir|heal/i.test(name)) {
+          const hayP = (name + ' ' + id).toLowerCase();
+          if (/potion|draught|tonic|elixir|heal/i.test(hayP)) {
             try { sim.useItem(id); return true; } catch (_) { return false; }
           }
         }
@@ -190,7 +191,8 @@ async function applyAction(idx, cmd, gameClient) {
           const name = (def.name || '').toLowerCase();
           const id = slot.itemId || def.id;
           if (!id) continue;
-          if (/bread|water|roasted|jerky|ration|meal/i.test(name)) {
+          const hayF = (name + ' ' + id).toLowerCase();
+          if (/bread|water|roasted|jerky|ration|meal/i.test(hayF)) {
             try { sim.useItem(id); return true; } catch (_) { return false; }
           }
         }
