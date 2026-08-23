@@ -60,13 +60,26 @@ def complete_quest_objective(env, ctx: dict, max_substeps: int = 12) -> str:
     return "PARTIAL"
 
 
-def turn_in_quest(env, ctx: dict) -> str:
+def turn_in_quest(env, ctx: dict, world_mem=None) -> str:
     """Walk to turn-in NPC (short nav) and call turn_in_quest. Returns
-    SUCCESS / PARTIAL (couldn't reach) / FAILURE."""
+    SUCCESS / PARTIAL (couldn't reach) / FAILURE.
+
+    Fix3 (2026-08-23): the live questLog reports `turnInNpc: null` for every
+    quest in this build, so navigation used to fail before taking a step.
+    WorldMemory persists giver positions per quest id — backfill the target
+    from there when the live snapshot has none. A READY quest is the
+    preferred target (it is the one that CAN be turned in)."""
     cap = QuestCapability(env)
-    q = ctx.get("quest") or cap.find_active_quest()
+    q = ctx.get("quest")
+    if q is None:
+        q = cap.find_ready_quest() or cap.find_active_quest()
     if q is None:
         return "FAILURE"
+    if not ((q.get("turnInNpc") or {}).get("x") is not None) and world_mem is not None:
+        qid = q.get("id") or q.get("questId")
+        pos = world_mem.giver_pos(qid) if qid else None
+        if pos:
+            q["turnInNpc"] = {"x": pos["x"], "z": pos["z"]}
     res = cap.navigate_to_turn_in(q)
     if res != "SUCCESS":
         return "PARTIAL"

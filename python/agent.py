@@ -151,7 +151,9 @@ class Agent:
             if action == "turn_in_quest":
                 # atomic: walk back (short nav) + turn_in. Use QuestCapability path
                 # so we get the server-side turn-in + verifier-correct handle.
-                res = quest_skill.turn_in_quest(self.env, ctx)
+                # Fix3: world_mem backfills turnInNpc when the live snapshot
+                # reports null (it always does in this build).
+                res = quest_skill.turn_in_quest(self.env, ctx, self.world_mem)
                 after = self.env._last_info
                 if res == "SUCCESS":
                     verdict = "SUCCESS"

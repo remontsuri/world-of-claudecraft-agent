@@ -37,6 +37,14 @@ class QuestCapability:
                 preferred = q
         return preferred
 
+    def find_ready_quest(self) -> Optional[dict]:
+        """The quest that CAN be turned in right now (state == ready)."""
+        quests = self.env._last_info.get("quests", {}) or {}
+        for q in (quests.get("ready") or []):
+            if q.get("state") == "ready":
+                return q
+        return None
+
     def find_available_quest_npc(self) -> Optional[dict]:
         """An NPC near the player that offers a quest (has non-empty questIds)."""
         near = self.env._last_info.get("nearby") or []
