@@ -254,6 +254,17 @@ class GoalManager:
         # = death loop; heal+food regen needs SAFE ticks to actually fill HP.
         # Only when healthy again do the quest actions come back.
         quest_ready = (quest_complete or bool(ready)) and ws.get("hp_frac", 1.0) >= 0.35
+        # Fix (2026-08-23): when the FSM phase is a turn-in/return phase, the
+        # navigation + turn-in skills must ALWAYS be candidates — otherwise the
+        # phase gate finds nothing to gate, falls back to the full list, and the
+        # agent farms under a return phase (measured: goal=RETURN_TO_GIVER for 29
+        # steps while actions were farm/loot/cast). The skills handle distance
+        # honestly themselves (PARTIAL when far).
+        if goal in ("RETURN_TO_GIVER", "TURN_IN") and ws.get("hp_frac", 1.0) >= 0.35:
+            if SKILL_RETURN not in cands:
+                cands.append(SKILL_RETURN)
+            if SKILL_TURN_IN not in cands:
+                cands.append(SKILL_TURN_IN)
         if quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg

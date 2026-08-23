@@ -348,8 +348,25 @@ def main():
                 rec = dict(rec)
                 rec["verdict"] = (rec.get("verdict") or "") + " [MEASURE]"
             else:
+                # LLM brain (spec 2026-08-23): consult on transitions only. The brain
+                # PROPOSES a goal; survival gates in policy still veto everything.
+                if brain is not None and goal_fsm is not None:
+                    try:
+                        new_qid = goal_fsm.quest_id
+                        if brain.should_consult(brain_last_goal, goal_fsm.goal, i,
+                                                brain_fail_streak,
+                                                new_qid != getattr(brain, "_last_qid", None)):
+                            world_payload = build_brain_payload(ws, info, new_qid)
+                            fails = episodes.recent_failures(n=3)
+                            lessons = [c.get("detail") for c in refl.journal[-5:]]
+                            decision = brain.decide(world_payload, fails, lessons)
+                            if apply_decision(goal_fsm, decision):
+                                print(f"[brain] goal={decision['goal']} reason={decision['reason']}", flush=True)
+                                brain_last_goal = decision["goal"]
+                        brain._last_qid = new_qid
+                    except Exception:
+                        traceback.print_exc()
                 rec = agent.step()
-        except BrowserBridgeError as e:
             # Infra failure (bridge/CDP/HTTP down). RECOVER IN-PROCESS — do NOT
             # re-create BrowserEnv/Agent. That re-init itself calls snapshot/
             # respawn, which raises AGAIN while the bridge is down, escaping as
@@ -447,24 +464,6 @@ def main():
                 goal_fsm.update_from_world(ws)
             except Exception:
                 pass
-        # LLM brain (spec 2026-08-23): consult on transitions only. The brain
-        # PROPOSES a goal; survival gates in policy still veto everything.
-        if brain is not None and goal_fsm is not None:
-            try:
-                new_qid = goal_fsm.quest_id
-                if brain.should_consult(brain_last_goal, goal_fsm.goal, i,
-                                        brain_fail_streak,
-                                        new_qid != getattr(brain, "_last_qid", None)):
-                    world_payload = build_brain_payload(ws, info, new_qid)
-                    fails = episodes.recent_failures(n=3)
-                    lessons = [c.get("detail") for c in refl.journal[-5:]]
-                    decision = brain.decide(world_payload, fails, lessons)
-                    if apply_decision(goal_fsm, decision):
-                        print(f"[brain] goal={decision['goal']} reason={decision['reason']}", flush=True)
-                        brain_last_goal = decision["goal"]
-                brain._last_qid = new_qid
-            except Exception:
-                traceback.print_exc()
         a = rec["action"]
         m["steps"] += 1
         m["action_counts"][a] += 1
