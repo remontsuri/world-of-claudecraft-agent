@@ -75,9 +75,17 @@ def turn_in_quest(env, ctx: dict, world_mem=None) -> str:
         q = cap.find_ready_quest() or cap.find_active_quest()
     if q is None:
         return "FAILURE"
-    if not ((q.get("turnInNpc") or {}).get("x") is not None) and world_mem is not None:
+    tNpc = q.get("turnInNpc") or {}
+    if tNpc.get("x") is None:
         qid = q.get("id") or q.get("questId")
-        pos = world_mem.giver_pos(qid) if qid else None
+        pos = world_mem.giver_pos(qid) if (world_mem is not None and qid) else None
+        if pos is None:
+            # live nearby fallback: the NPC offering/owning this quest IS the giver
+            for e in ((getattr(env, "_last_info", None) or {}).get("nearby") or []):
+                ids = e.get("questIds") or []
+                if qid and qid in ids and e.get("x") is not None:
+                    pos = {"x": e["x"], "z": e["z"]}
+                    break
         if pos:
             q["turnInNpc"] = {"x": pos["x"], "z": pos["z"]}
     res = cap.navigate_to_turn_in(q)
@@ -131,6 +139,15 @@ def return_to_giver(env, ctx: dict, world_mem=None) -> str:
         tNpc = q.get("turnInNpc") or {}
         if tNpc.get("x") is not None:
             giver_pos = {"x": tNpc["x"], "z": tNpc["z"]}
+    # 2026-08-23 fallback: scan nearby NPCs whose questIds include this quest —
+    # the live snapshot maps quest->NPC even when turnInNpc/memory are empty
+    # (measured: kitchens had NO memory entry and null turnInNpc -> 35 FAILs).
+    if giver_pos is None and qid:
+        for e in (env._last_info.get("nearby") or []):
+            ids = e.get("questIds") or []
+            if qid in ids and e.get("x") is not None:
+                giver_pos = {"x": e["x"], "z": e["z"]}
+                break
     if giver_pos is None or giver_pos.get("x") is None:
         return "FAILURE"
 
