@@ -356,7 +356,10 @@ def main():
                         if brain.should_consult(brain_last_goal, goal_fsm.goal, i,
                                                 brain_fail_streak,
                                                 new_qid != getattr(brain, "_last_qid", None)):
-                            world_payload = build_brain_payload(ws, info, new_qid)
+                            from world_state import build_world_state as _bws
+                            _live_info = getattr(env, "_last_info", None) or {}
+                            _live_ws = ws if ws is not None else _bws(_live_info)
+                            world_payload = build_brain_payload(_live_ws, _live_info, new_qid)
                             fails = episodes.recent_failures(n=3)
                             lessons = [c.get("detail") for c in refl.journal[-5:]]
                             decision = brain.decide(world_payload, fails, lessons)
