@@ -50,9 +50,19 @@ def build_brain_payload(ws: dict, info: dict, fsm_quest_id) -> dict:
 
 
 def apply_decision(fsm, decision) -> bool:
-    """Apply an LLM {goal, reason} to the FSM. Returns True if applied.
+    """ЗАПИСЬ ЦЕЛИ ОТКЛЮЧЕНА (правка 2026-08-24, вердикт аудита: HARMFUL).
 
-    Invalid/absent decisions leave the FSM untouched (fallback = plain FSM+Q).
+    Измерено на реальных прогонах:
+      * все квестовые цели LLM (ACCEPT/DO_OBJECTIVE/RETURN_TO_GIVER/TURN_IN)
+        затирались через 6 строк вызовом fsm.update_from_world внутри
+        agent.step() — то есть влияния на поведение не было вообще;
+      * при этом шаг замедлялся с 0.30с до 1.80с (6x), доля шагов >3с росла
+        с 6% до 22.7%, что даёт ~75 минут чистого ожидания на 3000 шагов;
+      * quests_turned_in = 0, qprogΔ = 0 — пользы ноль.
+
+    Поэтому LLM больше НЕ пишет цель. Её мнение записывается как СОВЕТ
+    (fsm.suggest) — он не меняет фазу, но сохраняется, чтобы потом измерить,
+    были ли советы полезны. Возврат False означает «цель не менялась».
     """
     if not isinstance(decision, dict):
         return False
@@ -60,5 +70,8 @@ def apply_decision(fsm, decision) -> bool:
     if goal not in GOALS:
         return False
     goal = _GOAL_MAP.get(goal, goal)
-    fsm.set(goal, fsm.quest_id)
-    return True
+    try:
+        fsm.suggest(goal, reason=str(decision.get("reason", ""))[:200])
+    except Exception:
+        pass
+    return False

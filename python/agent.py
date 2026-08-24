@@ -299,7 +299,15 @@ class Agent:
         # each step. update_from_world() only sets the phase; it does not pick a
         # skill. Death is handled by the respawn-glue below (enter_dead /
         # resume_after_respawn), which preserves pre_death_goal.
-        if self.fsm is not None:
+        # 2026-08-24: ЗДЕСЬ БЫЛ ТРЕТИЙ ПИСАТЕЛЬ ЦЕЛИ.
+        # play_autonomous уже вызывает update_from_world ДО консультации мозга
+        # (строка 327), поэтому повторный вызов внутри step() только затирал
+        # решение, принятое между ними, — измерено: все квестовые цели LLM
+        # умирали через 6 строк, goal_switches = 0.71/шаг, quests_turned_in = 0
+        # за 3000 шагов. Синхронизация фазы с миром осталась ровно в одном
+        # месте (play_autonomous), здесь мы только ЧИТАЕМ цель.
+        if self.fsm is not None and getattr(self, "sync_fsm_in_step", False):
+            # аварийный тумблер: включать только если раннер НЕ синхронизирует FSM
             try:
                 self.fsm.update_from_world(ws_before)
             except Exception:
@@ -490,6 +498,11 @@ if __name__ == "__main__":
     obs, info = env.reset(seed=42)
     mem = ExperienceStore()
     agent = Agent(env, mem, seed=12345)
+    # В standalone-режиме раннера play_autonomous нет, значит НИКТО не
+    # синхронизирует FSM с миром — включаем тумблер, чтобы фаза не замерла.
+    # В обычном режиме (play_autonomous) он ВЫКЛЮЧЕН: там синхронизация одна,
+    # в раннере, и второй вызов затирал бы решения (см. комментарий в _cycle).
+    agent.sync_fsm_in_step = True
     learned = agent.run(n_steps=3000, save_every=100)
     print("\n=== Learned value snapshot (state_bucket -> {action: value}) ===")
     for bucket, acts in learned.items():

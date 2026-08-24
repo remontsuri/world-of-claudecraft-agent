@@ -224,7 +224,15 @@ def main():
     from work_anchor import WorkAnchor
     anchor = WorkAnchor()
     brain = None
-    if os.environ.get("WOC_BRAIN", "off").lower() == "on":
+    # 2026-08-24 (аудит: HARMFUL): вызов LLM в горячем цикле замедлял шаг в 6
+    # раз (0.30с -> 1.80с; 75 мин чистой латентности на 3000 шагов), а её цели
+    # всё равно затирались фактами. Режимы теперь:
+    #   off      — по умолчанию, LLM не вызывается вовсе;
+    #   advisory — вызывается РЕДКО (BRAIN_EVERY шагов), пишет только СОВЕТ;
+    #   on       — устаревший синоним advisory (запись цели всё равно отключена).
+    BRAIN_EVERY = int(os.environ.get("WOC_BRAIN_EVERY", "200"))
+    _brain_mode = os.environ.get("WOC_BRAIN", "off").lower()
+    if _brain_mode in ("on", "advisory"):
         try:
             from llm_brain import LLMBrain
             from brain_glue import build_brain_payload, apply_decision
@@ -371,9 +379,10 @@ def main():
                 if brain is not None and goal_fsm is not None:
                     try:
                         new_qid = goal_fsm.quest_id
-                        if brain.should_consult(brain_last_goal, goal_fsm.goal, i,
-                                                brain_fail_streak,
-                                                new_qid != getattr(brain, "_last_qid", None)):
+                        # Только редкие консультации: раз в BRAIN_EVERY шагов.
+                        # Это и есть «убрать из горячего цикла» — латентность
+                        # 1-7с платится 15 раз на 3000 шагов, а не постоянно.
+                        if i > 0 and i % BRAIN_EVERY == 0:
                             from world_state import build_world_state as _bws
                             _live_info = getattr(env, "_last_info", None) or {}
                             _live_ws = _bws(_live_info)
