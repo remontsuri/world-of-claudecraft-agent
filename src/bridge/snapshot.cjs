@@ -39,6 +39,12 @@ const FARSHORE_QUEST_TURNIN = {
 // (the layout table drifted from the real world — e.g. apothecary_lin is at
 // (2.8, 9.7) live vs (11,-3) in the table), so resolveTurnIn prefers
 // sim.entities first.
+// Полная карта «квест -> NPC сдачи», сгенерированная из zone1.ts.
+// Нужна потому, что таблицы ниже покрывают только обычные квесты, а у
+// профессиональных (q_prof_*) turnInNpc оставался null -> агент не мог
+// дойти до гивера (замер 2026-08-24: loom 6/6, 14 шагов на месте).
+const { npcIdForQuest } = require('./quest_turnin.cjs');
+
 const EASTBROOK_NPC_POS = {
   the_merchant: { x: 0, z: 9.5 },
   marshal_redbrook: { x: 4.5, z: 5.5 },
@@ -243,16 +249,19 @@ function resolveTurnIn(r) {
       // LIVE entity position is authoritative: static layout tables drifted
       // from the real world (apothecary_lin table (11,-3) vs live (2.8,9.7)),
       // and walking to a stale spot = "Too far away" at the real NPC.
-      if (!pos) {
-        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
-        if (turnInId && r.npc_positions && r.npc_positions[turnInId]) {
-          pos = { x: r.npc_positions[turnInId].x, z: r.npc_positions[turnInId].z };
-        }
+      // id гивера: сначала сгенерированная из zone1.ts карта (покрывает
+      // профессиональные квесты), затем прежние статические таблицы.
+      const turnInId = npcIdForQuest(q.id)
+        || FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
+      // ЖИВАЯ позиция сущности авторитетна: статические таблицы дрейфуют
+      // (apothecary_lin в таблице (11,-3) против живых (2.8,9.7)), а поход в
+      // устаревшую точку = "Too far away." у настоящего NPC.
+      if (!pos && turnInId && r.npc_positions && r.npc_positions[turnInId]) {
+        pos = { x: r.npc_positions[turnInId].x, z: r.npc_positions[turnInId].z };
       }
-      if (!pos) {
-        const turnInId = FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
+      if (!pos && turnInId) {
         const npcTable = Object.assign({}, FARSHORE_NPC_POS, EASTBROOK_NPC_POS);
-        if (turnInId && npcTable[turnInId]) {
+        if (npcTable[turnInId]) {
           pos = { x: npcTable[turnInId].x, z: npcTable[turnInId].z };
         }
       }
