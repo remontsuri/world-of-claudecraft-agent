@@ -278,7 +278,19 @@ def build_world_state(info: Dict) -> Dict:
         "kills": info.get("kills", 0),
         "xp": info.get("xp", 0),
         "copper": info.get("copper", 0),
-        "quests_done": info.get("quests_done", 0),
+        # Честный счётчик сданных квестов (шаг 1 спеки от 2026-08-24).
+        # Раньше здесь стояло только info.get('quests_done'), которое в
+        # ОНЛАЙНЕ всегда было 0 (мост читал Set через typeof==='number').
+        # Из-за этого дельта награды за сдачу была всегда 0, и вся история
+        # обучения получала ложный сигнал «квесты сдавать бесполезно»
+        # (реально сдано 7 квестов при метрике 0).
+        # Теперь: берём максимум из поля снапшота и размера ведра done —
+        # в онлайне истину даёт поле (online.questsDone), в офлайн-симе
+        # ведро done.
+        "quests_done": max(
+            int(info.get("quests_done") or 0),
+            len((info.get("quests") or {}).get("done") or []),
+        ),
         "deaths": info.get("deaths", 0),
         "inv_slots": len(inv),
         "quest_progress": quest_progress,

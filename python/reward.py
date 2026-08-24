@@ -105,9 +105,21 @@ def outcome_reward(
             drift = (d_after - d_before)
             reward += max(c["drift_cap"], drift * c["drift_per_unit"])
 
+    # ШАГ 2 спеки (2026-08-24): success_bonus ТОЛЬКО при реальном изменении
+    # мира. Раньше он платился за ЛЮБОЙ вердикт SUCCESS, и это давало
+    # наградной тредмилл: измерено 200 из 226 очков за 1000 шагов (88%)
+    # приходили именно оттуда, тогда как сдача квеста стоила 5.0 — то есть
+    # 2.2% от рутины. Агент рационально выбирал крутиться на месте:
+    # return_to_giver, стоящий у гивера, и sell_junk без джанка возвращают
+    # SUCCESS, ничего не меняя в мире.
+    # Мировая дельта = всё, что уже начислено выше (xp/copper/прогресс/
+    # киллы/лут/дистанция/смерть). Если она нулевая, бонус не платим.
+    world_delta_seen = abs(reward) > 1e-9
     if verdict == "SUCCESS":
-        reward += c["success_bonus"]
+        if world_delta_seen:
+            reward += c["success_bonus"]
     elif verdict == "FAILURE":
+        # провал наказывается ВСЕГДА, независимо от дельты: попытка была
         reward += c["failure_penalty"]
 
     return round(reward, 4)
