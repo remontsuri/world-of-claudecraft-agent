@@ -249,7 +249,24 @@ class GoalManager:
             cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
-        if quest_npcs and not quest_accepted:
+        # ИСПРАВЛЕНО 2026-08-24 (жалоба пользователя «квесты не берёт»):
+        # раньше условием было `not quest_accepted`, где accepted — флаг ОДНОГО
+        # выбранного квеста. При 10 активных квестах он всегда True, поэтому
+        # accept_quest не предлагался НИКОГДА, даже когда рядом стояли NPC с
+        # невзятыми квестами (замер: Weaver Ottilie и Tinker Gizzel, 4 новых
+        # квеста, accept за 37 шагов — 0 раз).
+        # Правильное условие: у NPC рядом есть квест, которого НЕТ в нашем логе.
+        _quests = info.get("quests") or {}
+        _have_ids = {q.get("id") for q in (_quests.get("active") or []) if q.get("id")}
+        _have_ids |= {q.get("id") for q in (_quests.get("ready") or []) if q.get("id")}
+        _have_ids |= {q.get("id") for q in (_quests.get("done") or []) if q.get("id")}
+        has_new_quest_nearby = False
+        for e in quest_npcs:
+            ids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
+            if any(qid and qid not in _have_ids for qid in ids):
+                has_new_quest_nearby = True
+                break
+        if has_new_quest_nearby:
             cands.append(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
         # a single "do quest" button. turn_in only when ready (objectives done);

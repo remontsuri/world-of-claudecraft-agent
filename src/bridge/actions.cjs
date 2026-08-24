@@ -90,13 +90,16 @@ async function applyAction(idx, cmd, gameClient) {
           let off = desired - p.facing;
           off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
           if (d > 7) {
-            g.controller.move(__navDecide(off, true));
+            // курс на моба одним вызовом face() — без импульсного рыскания
+            try { g.controller.face(desired); } catch (_) {}
+            g.controller.move({ forward: true });
             return { d, phase: 'chase' };
           }
-          // в упор: доворачиваем БЕЗ движения вперёд, чтобы не толкать моба
-          const faceCmd = __navDecide(off, false);
-          if (faceCmd) {
-            g.controller.move(faceCmd);
+          // в упор: только доворот, вперёд не идём (иначе толкаем моба).
+          // Порог 0.12 рад (FACE_EPS), а не 0.25: при 14° удар мог не попасть.
+          if (Math.abs(off) > 0.12) {
+            try { g.controller.face(desired); } catch (_) {}
+            try { g.controller.stop(); } catch (_) {}
             return { d, phase: 'face' };
           }
           try { sim.targetEntity(id); } catch (_) {}
@@ -344,6 +347,22 @@ async function applyAction(idx, cmd, gameClient) {
             }
             if (best) sim.targetEntity(best.id);
           }
+          // 2026-08-24 (замечание пользователя «персонаж должен смотреть на цель
+          // чтобы атаковать»): раньше каст шёл БЕЗ доворота — спелл летел в
+          // сторону. Теперь перед кастом всегда доворачиваем на текущую цель
+          // одним controller.face(). Порог FACE_EPS=0.12 рад (~7°) — см.
+          // heading.cjs + test_face_target.cjs (6 тестов).
+          try {
+            const tgt = sim.entities.get(sim.player.targetId);
+            if (tgt && !tgt.dead) {
+              const p = sim.player;
+              const dx = tgt.pos.x - p.pos.x, dz = tgt.pos.z - p.pos.z;
+              const desired = Math.atan2(dx, dz);
+              let off = desired - p.facing;
+              off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+              if (Math.abs(off) > 0.12) window.__game.controller.face(desired);
+            }
+          } catch (_) {}
           sim.castAbility(aid);
           return { ok: true };
         } catch (e) {
@@ -422,16 +441,22 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
         if (nearest && nd < 25) {
           // run the OPPOSITE direction from the mob
           const flee = Math.atan2(p.pos.x - nearest.pos.x, p.pos.z - nearest.pos.z);
-          let off = flee - p.facing;
-          off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          g.controller.move(__navDecide(off));
+          try { g.controller.face(flee); } catch (_) {}
+          g.controller.move({ forward: true });
           return { arrived: false, d, x: p.pos.x, z: p.pos.z, fleeing: true };
         }
       }
+      // 2026-08-24 (зонд подтвердил рыскание 0.347 реверса/сэмпл при импульсном
+      // повороте): курс задаём ОДНИМ вызовом controller.face(desired), а не
+      // серией turnLeft/turnRight. face() проверен живьём: запрос +1.2 рад дал
+      // ровно +1.2 (facing -0.1 -> 1.1). Импульсы поворота порождали
+      // автоколебание, потому что доворот проскакивал цель и знак ошибки
+      // менялся; при face() камера доводится до курса и стоит.
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      g.controller.move(__navDecide(off));
+      try { g.controller.face(desired); } catch (_) {}
+      g.controller.move({ forward: true });
       return { arrived: false, d, x: p.pos.x, z: p.pos.z, off: Math.round(off * 100) / 100 };
     }, x, z);
     if (st && st.arrived) { arrived = true; break; }
@@ -496,9 +521,10 @@ async function exploreWalk(gameClient, steps) {
   await gameClient.evaluate(() => {
     try { window.__game.controller.stop(); } catch (_) {}
     try {
-      // случайная сторона, но ровно один импульс, без дрожания
-      const left = Math.random() < 0.5;
-      window.__game.controller.move(left ? { turnLeft: true } : { turnRight: true });
+      // один новый курс на весь отрезок через face() — камера не дрожит
+      const p = window.__game.sim.player;
+      const newFacing = p.facing + (Math.random() * 2 - 1) * 1.2;
+      window.__game.controller.face(newFacing);
     } catch (_) {}
   });
   await sleep(gameClient.tickMs);

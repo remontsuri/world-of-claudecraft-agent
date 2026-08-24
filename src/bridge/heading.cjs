@@ -43,4 +43,28 @@ function decideTurn(off, wasTurning) {
   };
 }
 
-module.exports = { decideTurn, normalizeAngle, TURN_START, TURN_STOP, TURN_ONLY };
+
+// ---- Доворот на цель перед атакой (2026-08-24) ----
+// Пользователь: «персонаж должен смотреть на цель чтобы атаковать».
+// Замер: касты (case 10/11) не доворачивали вовсе, farm доворачивал только при
+// |off| > 0.25 рад (~14°) — при таком отклонении удар/спелл может не попасть.
+// Порог для АТАКИ строже, чем для ходьбы: курс должен быть точным.
+const FACE_EPS = 0.12;            // рад (~7°) — допустимая ошибка прицела
+
+/**
+ * План доворота на цель.
+ * @param {{x:number,z:number}} me позиция игрока
+ * @param {{x:number,z:number}} target позиция цели
+ * @param {number} facing текущий курс (рад)
+ * @returns {{desired:number, off:number, needFace:boolean}}
+ */
+function faceTargetPlan(me, target, facing) {
+  const dx = target.x - me.x;
+  const dz = target.z - me.z;
+  const desired = normalizeAngle(Math.atan2(dx, dz));
+  const off = normalizeAngle(desired - facing);
+  return { desired, off, needFace: Math.abs(off) > FACE_EPS };
+}
+
+module.exports = { decideTurn, normalizeAngle, faceTargetPlan,
+                   TURN_START, TURN_STOP, TURN_ONLY, FACE_EPS };

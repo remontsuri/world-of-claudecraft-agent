@@ -178,15 +178,41 @@ def build_world_state(info: Dict) -> Dict:
         # quest_status is finalized below (after the chosen quest q / qcomplete
         # are computed) so it reflects the TRUTH, not a raw incomplete-scan.
 
-        # Prefer a quest that has a reachable giver (mirrors QuestCapability).
+        # Выбор ОДНОГО квеста для ws.quest.
+        # ИСПРАВЛЕНО 2026-08-24 (замер на живом мире): раньше брался первый
+        # квест с известным гивером, а готовность не учитывалась вовсе. Из-за
+        # этого при 10 активных и 1 ГОТОВОМ (q_prof_workorder_loom 6/6) выбирался
+        # q_greyjaw (0/1), FSM видел phase=ACTIVE и держал DO_OBJECTIVE —
+        # агент 37 шагов не шёл сдавать готовый квест, quests_turned_in=0.
+        # Теперь порядок приоритета:
+        #   1) ГОТОВЫЙ к сдаче с известным гивером (можно дойти и сдать),
+        #   2) любой ГОТОВЫЙ (гивера дозапросим из nearby/WorldMemory),
+        #   3) активный с известным гивером,
+        #   4) любой активный.
+        def _is_ready(cand):
+            if cand.get("state") == "ready":
+                return True
+            objs = cand.get("objectives") or []
+            return bool(objs) and all(
+                (o.get("current") or 0) >= (o.get("required") or 0) for o in objs)
+
+        def _giver_known(cand):
+            return (cand.get("turnInNpc") or {}).get("x") is not None
+
+        usable = [c for c in all_q
+                  if c.get("state") in ("active", "ready", "complete")
+                  or c.get("state") is None]
         q = None
-        for cand in all_q:
-            if cand.get("state") not in ("active", "ready", "complete"):
-                continue
-            if (cand.get("turnInNpc") or {}).get("x") is not None:
-                q = cand
+        for pred in (lambda c: _is_ready(c) and _giver_known(c),
+                     _is_ready,
+                     _giver_known,
+                     lambda c: True):
+            for cand in usable:
+                if pred(cand):
+                    q = cand
+                    break
+            if q is not None:
                 break
-            q = q or cand
         if q is not None:
             # aggregate objective progress across all objectives of this quest
             prog = 0
