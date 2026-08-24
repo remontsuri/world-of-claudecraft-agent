@@ -21,8 +21,40 @@ import math
 # закрытый enum фаз: Goal Manager не должен получать мусор
 PHASES = ("AVAILABLE", "COMPLETE_OBJECTIVE", "RETURN_TO_GIVER", "TURN_IN", "DONE")
 
-# сервер отклоняет turn_in дальше этой дистанции (INTERACT_RANGE + запас)
-INTERACT_RANGE = 7.0
+# ДИСТАНЦИИ ИЗ ИСХОДНИКОВ ИГРЫ (проверено 2026-08-24, не догадки):
+#   src/sim/types.ts:26              export const INTERACT_RANGE = 5;
+#   quests/quest_commands.ts:148     dist2d(...) <= INTERACT_RANGE + 2   -> квесты
+#   interaction.ts:304               dist2d(...) > INTERACT_RANGE        -> харвест
+# Раньше здесь стояло INTERACT_RANGE = 7.0: число для квестов угадано верно, но
+# имя неверное, и для харвеста/лута оно завышено на 2 ярда — агент считал
+# «в радиусе» трупы, которые сервер отвергает.
+INTERACT_RANGE = 5.0                      # сырая константа игры
+QUEST_INTERACT_RANGE = INTERACT_RANGE + 2  # accept и turn_in квестов = 7
+HARVEST_RANGE = INTERACT_RANGE             # harvestCorpse / лут = 5
+
+
+# --- Гейт identity-transition (quest_commands.ts:104-109) ---
+# Пока в логе есть ЛЮБОЙ attunePair/switchHobby квест, все остальные такие
+# квесты имеют состояние unavailable. Живой замер: у агента активен
+# q_prof_attune_smith, поэтому 9 квестов у окружающих NPC невозможно взять —
+# отсюда 7 вызовов accept_quest с вердиктом inconclusive.
+_IDENTITY_MARKERS = ("attune", "amends", "hobby_switch")
+
+
+def is_identity_transition(quest_id: str) -> bool:
+    qid = quest_id or ""
+    if not qid.startswith("q_prof"):
+        return False
+    if "workorder" in qid:
+        return False               # work-order — обычный повторяемый квест
+    return any(m in qid for m in _IDENTITY_MARKERS)
+
+
+def accept_blocked_by_identity(quest_id: str, active_quest_ids) -> bool:
+    """True, если взятие quest_id заблокировано уже активным identity-квестом."""
+    if not is_identity_transition(quest_id):
+        return False
+    return any(is_identity_transition(q) for q in (active_quest_ids or []))
 
 
 def _objectives_done(q: dict) -> bool:
@@ -93,7 +125,7 @@ class QuestTruth:
         if self.phase(quest_id) != "TURN_IN":
             return False
         d = self.giver_distance(quest_id)
-        return d is not None and d <= INTERACT_RANGE
+        return d is not None and d <= QUEST_INTERACT_RANGE
 
     # ---- выбор ОДНОЙ активной цели ----
 

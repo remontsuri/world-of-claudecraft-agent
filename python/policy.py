@@ -260,11 +260,26 @@ class GoalManager:
         _have_ids = {q.get("id") for q in (_quests.get("active") or []) if q.get("id")}
         _have_ids |= {q.get("id") for q in (_quests.get("ready") or []) if q.get("id")}
         _have_ids |= {q.get("id") for q in (_quests.get("done") or []) if q.get("id")}
+        # Гейт identity-transition из ИСХОДНИКОВ игры
+        # (quest_commands.ts:104-109): пока в логе есть attune/amends/hobby
+        # квест, остальные такие квесты имеют состояние unavailable. Без этой
+        # проверки агент 7 раз стучался в закрытую дверь (все inconclusive).
+        try:
+            from quest_truth import accept_blocked_by_identity
+        except Exception:
+            accept_blocked_by_identity = lambda q, a: False
+        _active_ids = [q.get("id") for q in (_quests.get("active") or []) if q.get("id")]
         has_new_quest_nearby = False
         for e in quest_npcs:
             ids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
-            if any(qid and qid not in _have_ids for qid in ids):
+            for qid in ids:
+                if not qid or qid in _have_ids:
+                    continue
+                if accept_blocked_by_identity(qid, _active_ids):
+                    continue          # игра не даст его взять
                 has_new_quest_nearby = True
+                break
+            if has_new_quest_nearby:
                 break
         if has_new_quest_nearby:
             cands.append(SKILL_ACCEPT)
@@ -469,9 +484,24 @@ class GoalManager:
         if goal == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
                 and SKILL_RETURN in cands:
             return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
-        if goal == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35 \
-                and SKILL_TURN_IN in cands:
-            return SKILL_TURN_IN, self._turn_ctx(info, SKILL_TURN_IN)
+        if goal == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35:
+            # КОРНЕВОЙ ФИКС 2026-08-24 (подтверждён верификатором по исходникам):
+            # сдача проходит ТОЛЬКО в пределах INTERACT_RANGE+2 = 7 ярдов
+            # (quests/quest_commands.ts:148). Замер: гиверы были в 59-65 yd,
+            # агент 67 шагов стоял в фазе TURN_IN, 7 раз вызвал turn_in_quest
+            # (все INCONCLUSIVE) и НИ РАЗУ не пошёл к гиверу. Никакая правка
+            # констант это не лечит — нужно ИДТИ.
+            try:
+                from quest_truth import QUEST_INTERACT_RANGE
+            except Exception:
+                QUEST_INTERACT_RANGE = 7.0
+            _d = (ws.get("quest") or {}).get("giver_distance")
+            if _d is None:
+                _d = ws.get("distance_to_giver")
+            if _d is not None and _d > QUEST_INTERACT_RANGE and SKILL_RETURN in cands:
+                return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
+            if SKILL_TURN_IN in cands:
+                return SKILL_TURN_IN, self._turn_ctx(info, SKILL_TURN_IN)
         if not cands:
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)

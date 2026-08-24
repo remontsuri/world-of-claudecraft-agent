@@ -207,7 +207,11 @@ async function applyAction(idx, cmd, gameClient) {
           const tags = e.componentTags || [];
           if (!tags.length) continue;
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
-          if (d <= 30 && d < bd) { bd = d; best = { id: e.id, tags }; }
+          // ПРАВИЛО ИГРЫ (interaction.ts:304): harvestCorpse требует
+          // dist <= INTERACT_RANGE = 5 (СЫРАЯ константа, без +2 как у квестов).
+          // Раньше здесь стояло 30 — мост находил труп, дёргал harvestCorpse,
+          // сервер отвечал 'Too far away.', шаг сгорал впустую.
+          if (d <= 5 && d < bd) { bd = d; best = { id: e.id, tags }; }
         }
         return best;
       });
