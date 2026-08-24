@@ -219,6 +219,10 @@ def main():
     # Failure of the brain at ANY point degrades to the plain FSM+Q behavior.
     from episodic import EpisodicLog
     episodes = EpisodicLog()
+    # Шаг #3 (Q6): домашний якорь рабочей зоны. Агент уходил на [-13, 275],
+    # где нет ни мобов, ни трупов, ни гиверов, и тратил там шаги впустую.
+    from work_anchor import WorkAnchor
+    anchor = WorkAnchor()
     brain = None
     if os.environ.get("WOC_BRAIN", "off").lower() == "on":
         try:
@@ -348,6 +352,20 @@ def main():
                 rec = dict(rec)
                 rec["verdict"] = (rec.get("verdict") or "") + " [MEASURE]"
             else:
+                # Шаг #3 (Q6): якорь рабочей зоны — наблюдаем и, если вокруг
+                # пусто, возвращаемся в последнюю точку, где были объекты
+                # действия. Без этого агент стоит в пустоте и жжёт шаги.
+                try:
+                    _live = getattr(env, "_last_info", None) or {}
+                    anchor.observe(_live)
+                    if anchor.needs_return(_live):
+                        tgt = anchor.return_target(_live)
+                        if tgt:
+                            print(f"[anchor] пусто вокруг -> возврат к {tgt}", flush=True)
+                            env._navigate_to_coord(tgt[0], tgt[1], max_steps=60)
+                            anchor.save()
+                except Exception:
+                    traceback.print_exc()
                 # LLM brain (spec 2026-08-23): consult on transitions only. The brain
                 # PROPOSES a goal; survival gates in policy still veto everything.
                 if brain is not None and goal_fsm is not None:
