@@ -22,10 +22,24 @@ import time
 from collections import Counter
 
 
+# Окно событий Event Bus (шаг 3 спеки 2026-08-24). Reflexion держит буфер
+# коротким (1-3 свежих вывода), иначе контекст растёт без пользы; события
+# копим чуть шире, чтобы видеть кластеры (например 2 смерти подряд).
+EVENT_WINDOW = 40
+
+
 class SelfReflection:
     """Rolling self-review over the recent step records + persistent journal."""
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, dirpath=None):
+        # dirpath: каталог для журнала (удобно в тестах); path имеет приоритет
+        if path is None and dirpath is not None:
+            import os as _os
+            path = _os.path.join(dirpath, "self_reflection.json")
+        # Событийная память (Event Bus -> рефлексия). До 2026-08-24 события
+        # вообще не доходили до обучения: модуль event_bus.py был мёртв,
+        # 9 типов событий не читал никто, кроме unit-теста.
+        self.recent_events = []
         self.path = path or os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "self_reflection.json")
         self.journal = []          # [{t, kind, detail}]
@@ -51,6 +65,71 @@ class SelfReflection:
             os.replace(tmp, self.path)
         except Exception:
             pass
+
+    def observe_events(self, events):
+        """Принять события Event Bus за шаг (QuestCompleted, PlayerDied,
+        NavigationStuck, InventoryFull, ObjectiveProgress и т.д.).
+
+        Хранится скользящее окно EVENT_WINDOW: выводы делаются по кластерам
+        (2 смерти подряд, застревание, полные сумки), а не по одному кадру.
+        """
+        if not events:
+            return
+        for e in events:
+            if isinstance(e, dict) and e.get("type"):
+                self.recent_events.append(e)
+        if len(self.recent_events) > EVENT_WINDOW:
+            self.recent_events = self.recent_events[-EVENT_WINDOW:]
+
+    def event_conclusions(self) -> list:
+        """Вербальные уроки из событий (Reflexion: событие -> урок -> правило).
+
+        Каждый вывод — dict {kind, key, detail, hint}. Ключ понимается
+        политикой: stuck:<action> и spin:<action> подавляют вес,
+        bags:full предпочитает продажу, quest:completed поощряет взять новый.
+        """
+        if not self.recent_events:
+            return []
+        out = []
+        types = [e.get("type") for e in self.recent_events]
+
+        # NAVIGATION_STUCK: путь не работает -> подавить текущую навигацию
+        if "NavigationStuck" in types:
+            out.append({
+                "kind": "NAVIGATION_STUCK",
+                "key": "stuck:return_to_giver",
+                "detail": "навигация стоит на месте — цель недостижима этим путём",
+                "hint": "reduce_weight",
+            })
+
+        # INVENTORY_FULL: полные сумки блокируют сдачу квеста (bagsFullError)
+        if "InventoryFull" in types:
+            out.append({
+                "kind": "INVENTORY_FULL",
+                "key": "bags:full",
+                "detail": "сумки полны — сдача квеста будет отклонена, надо продать",
+                "hint": "prefer_sell",
+            })
+
+        # DEATH_CLUSTER: две смерти в окне -> здесь опасно
+        if types.count("PlayerDied") >= 2:
+            out.append({
+                "kind": "DEATH_CLUSTER",
+                "key": "danger:zone",
+                "detail": "две смерти за короткое окно — зона не по силам",
+                "hint": "reduce_weight",
+            })
+
+        # QUEST_COMPLETED: закончил — бери следующий
+        if "QuestCompleted" in types:
+            out.append({
+                "kind": "QUEST_COMPLETED",
+                "key": "quest:completed",
+                "detail": "квест сдан — стоит взять следующий у ближайшего NPC",
+                "hint": "prefer_accept",
+            })
+
+        return out
 
     def observe(self, rec):
         """Feed one step record (autonomous_log-style dict)."""

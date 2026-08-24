@@ -1,0 +1,122 @@
+{
+ "quest_givers": {
+  "q_prof_attune_smith": {
+   "giver_id": "12",
+   "giver_pos": {
+    "x": 1.76,
+    "z": 16.12
+   },
+   "zone": "farshore",
+   "last_seen": 1787311375.8162124
+  },
+  "q_bones": {
+   "giver_id": "5",
+   "giver_pos": {
+    "x": -16.59,
+    "z": -1.4
+   },
+   "zone": "farshore",
+   "last_seen": 1787317788.7192776
+  },
+  "q_boars": {
+   "giver_id": "3",
+   "giver_pos": {
+    "x": -7.13,
+    "z": 0.81
+   },
+   "zone": "farshore",
+   "last_seen": 1787311946.8747451
+  },
+  "q_prof_attune_outfitter": {
+   "giver_id": "14",
+   "giver_pos": {
+    "x": -4.17,
+    "z": -18.02
+   },
+   "zone": "farshore",
+   "last_seen": 1787550305.276611
+  }
+ },
+ "vendors": {
+  "6": {
+   "pos": {
+    "x": 5.62,
+    "z": 15.07
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "15": {
+   "pos": {
+    "x": 7,
+    "z": -13.83
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "12": {
+   "pos": {
+    "x": 1.76,
+    "z": 16.12
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "14": {
+   "pos": {
+    "x": -4.17,
+    "z": -18.02
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "3": {
+   "pos": {
+    "x": -7.13,
+    "z": 0.81
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "13": {
+   "pos": {
+    "x": -12.78,
+    "z": 10.32
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "7": {
+   "pos": {
+    "x": -22,
+    "z": 4
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "1000000001": {
+   "pos": {
+    "x": -22.5,
+    "z": -7.5
+   },
+   "zone": "farshore",
+   "last_seen": 1787553451.5115108
+  },
+  "18": {
+   "pos": {
+    "x": -12.42,
+    "z": 314.95
+   },
+   "zone": "farshore",
+   "last_seen": 1787541004.4168415
+  },
+  "23": {
+   "pos": {
+    "x": 3.05,
+    "z": 315.56
+   },
+   "zone": "farshore",
+   "last_seen": 1787541004.4168415
+  }
+ }
+}

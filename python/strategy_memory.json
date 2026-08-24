@@ -1,0 +1,25 @@
+{
+ "strategies": {
+  "quest:q_prof_attune_smith": {
+   "success": 3871,
+   "fail": 4382,
+   "last_skill": "return_to_giver",
+   "best_skill": "return_to_giver",
+   "last_updated": 1787415665.8418148
+  },
+  "quest:q_greyjaw": {
+   "success": 12024,
+   "fail": 22237,
+   "last_skill": "cast_frostbolt",
+   "best_skill": "sell_junk",
+   "last_updated": 1787550103.0138474
+  },
+  "quest:q_prof_workorder_loom": {
+   "success": 0,
+   "fail": 456,
+   "last_skill": "return_to_giver",
+   "best_skill": null,
+   "last_updated": 1787553451.5105114
+  }
+ }
+}

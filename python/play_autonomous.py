@@ -209,6 +209,13 @@ def main():
     replay = ReplayBuffer(cap=20000)
     # StrategyMemory: which strategies worked (per quest/goal keys).
     strat_mem = StrategyMemory()
+    # ШАГ 4: раньше StrategyMemory была write-only (preference() читался
+    # только в смоук-тесте). Передаём её политике, чтобы доказанные
+    # стратегии реально влияли на выбор действия.
+    try:
+        agent.policy.strategy_memory = strat_mem
+    except Exception:
+        pass
     # SelfReflection: the 'делал выводы' loop — reviews recent steps every
     # SAVE_EVERY, draws conclusions (death clusters, action saturation, quest
     # stalls), persists them to self_reflection.json.
@@ -223,6 +230,11 @@ def main():
     # где нет ни мобов, ни трупов, ни гиверов, и тратил там шаги впустую.
     from work_anchor import WorkAnchor
     anchor = WorkAnchor()
+    # ШАГ 3 спеки (2026-08-24): Event Bus был мёртв — 9 типов событий не
+    # доходили ни до награды, ни до рефлексии. Теперь события каждого шага
+    # питают рефлексию, а завершения квестов — StrategyMemory.
+    from event_bus import EventBus
+    ebus = EventBus(spawn_points=[[0.0, 0.0]])
     brain = None
     # 2026-08-24 (аудит: HARMFUL): вызов LLM в горячем цикле замедлял шаг в 6
     # раз (0.30с -> 1.80с; 75 мин чистой латентности на 3000 шагов), а её цели
@@ -652,7 +664,32 @@ def main():
         })
         # strategy memory: record per-quest outcomes
         if _q.get("id"):
-            strat_mem.record_outcome(f"quest:{_q['id']}", a, verdict == "SUCCESS")
+            # шаговая статистика (НЕ определяет стратегию — именно смешение
+            # этих двух вещей дало 12024 ложных «успеха» у q_greyjaw)
+            strat_mem.record_step(f"quest:{_q['id']}", a, verdict == "SUCCESS")
+
+        # ШАГИ 3-4 спеки (2026-08-24): события мира -> рефлексия -> хинты, и
+        # ФАКТ завершения квеста -> StrategyMemory (а не вердикт шага).
+        try:
+            _events = ebus.observe(env._last_info or {})
+            if _events:
+                refl.observe_events(_events)
+                for _ev in _events:
+                    if _ev.get("type") == "QuestCompleted":
+                        _qid = _ev.get("quest_id")
+                        if _qid:
+                            # успех приписываем действию, которым дошли до сдачи
+                            strat_mem.record_completion(f"quest:{_qid}", a)
+                            strat_mem.save()
+                            print(f"[learn] квест {_qid} сдан навыком {a} -> стратегия сохранена",
+                                  flush=True)
+                # выводы из событий сразу становятся хинтами политики
+                _ev_hints = refl.event_conclusions()
+                if _ev_hints:
+                    for _h in _ev_hints:
+                        agent.policy.hints[_h["key"]] = _h
+        except Exception:
+            traceback.print_exc()
         # R2 FIX (2026-08-23): observe EVERY step. Previously observe() lived
         # inside `if i % SAVE_EVERY == 0`, so the 30-entry window needed ~3000
         # steps and the journal was never written in a 3000-step run — hints

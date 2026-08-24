@@ -45,16 +45,8 @@ SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
 SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
-REWARD = {
-    "quest_progress": 1.0,    # an objective count went up
-    "quest_done": 5.0,        # turn-in succeeded
-    "loot_gain": 0.5,         # inventory/copper increased via loot
-    "kill": 0.3,
-    "heal_ok": 0.2,
-    "waste": -0.2,            # action did nothing useful
-    "death": -5.0,            # agent died
-    "drift_far": -0.5,        # wandered far from quest giver (learned bad habit)
-}
+# (мёртвый словарь REWARD удалён 2026-08-24: reward.py имеет свой WEIGHTS,
+#  этот никогда не использовался — найдено аудитом обучающего контура)
 
 # Phase gate: when the GoalFSM has an explicit goal, the Policy may only pick
 # skills valid for that phase. This is what stops the agent from choosing a
@@ -176,8 +168,13 @@ def load_reflection_hints(dirpath: Optional[str] = None) -> dict:
 
 class GoalManager:
     def __init__(self, memory: ExperienceStore, temperature: float = 1.2, seed: int = None,
-                 reflection_hints: Optional[dict] = None):
+                 reflection_hints: Optional[dict] = None, strategy_memory=None):
         self.mem = memory
+        # StrategyMemory (шаг 4 спеки 2026-08-24). Раньше она была
+        # write-only: .preference() вызывался ТОЛЬКО в смоук-тесте, поэтому
+        # доказанные стратегии не влияли ни на одно решение. Теперь политика
+        # умножает вес доказанного навыка (мягкий prior, не override).
+        self.strategy_memory = strategy_memory
         self.temperature = temperature
         # Self-learning loop (user 2026-08-22): hints from the agent's own
         # self-reflection journal steer candidate selection:
@@ -416,6 +413,14 @@ class GoalManager:
             kind = (h.get("kind") or "").upper()
             if "ACTION_SATURATION" in kind and key.startswith("spin:"):
                 self._suppressed.add(key.split(":", 1)[1])
+            # ШАГ 5 спеки (2026-08-24): раньше политика понимала ТОЛЬКО
+            # spin: и death:, поэтому выводы рефлексии с ключами stall:/
+            # cycle: загружались и молча игнорировались. Теперь понимаются
+            # и событийные ключи от Event Bus.
+            if key.startswith("stuck:") or key.startswith("stall:"):
+                bad = key.split(":", 1)[1]
+                if bad:
+                    self._suppressed.add(bad)
             if ("DEATH" in kind and key.startswith("death:")
                     and ws.get("hp_frac", 1.0) < 0.6
                     and str(info.get("cell")) == key.split(":", 1)[1]):
@@ -465,6 +470,63 @@ class GoalManager:
             ctx["quest"] = preferred
         return ctx
 
+    def _preferred_from_hints(self) -> set:
+        """Навыки, которые рефлексия просит ПРЕДПОЧЕСТЬ (а не подавить).
+
+        Раньше выводов такого рода не существовало вовсе: все хинты только
+        душили действия. Полные сумки блокируют сдачу квеста (bagsFullError
+        в turnInQuest), поэтому продажу нужно поощрять, а не подавлять.
+        """
+        out = set()
+        for key, h in (self.hints or {}).items():
+            if not isinstance(h, dict):
+                continue
+            hint = (h.get("hint") or "").lower()
+            if hint == "prefer_sell" or key == "bags:full":
+                out.add(SKILL_SELL)
+            elif hint == "prefer_accept" or key == "quest:completed":
+                out.add(SKILL_ACCEPT)
+        return out
+
+    def _strategy_key(self, info: dict, ws: dict):
+        """Ключ стратегии = активный/готовый квест, к которому идёт работа."""
+        q = (ws or {}).get("quest") or {}
+        qid = q.get("id")
+        if qid:
+            return "quest:" + str(qid)
+        quests = (info or {}).get("quests") or {}
+        for bucket in ("ready", "active"):
+            for item in (quests.get(bucket) or []):
+                if item.get("id"):
+                    return "quest:" + str(item["id"])
+        return None
+
+    def _strategy_weighted(self, vals: dict, info: dict, ws: dict) -> dict:
+        """Умножить веса на множитель доказанной стратегии.
+
+        Приёмка A2 спеки: навык, которым квест РЕАЛЬНО завершался, получает
+        буст >=1.5x. Без StrategyMemory или без доказательств веса не меняются
+        (обратная совместимость).
+        """
+        sm = getattr(self, "strategy_memory", None)
+        if sm is None or not vals:
+            return vals
+        key = self._strategy_key(info, ws)
+        if not key:
+            return vals
+        out = dict(vals)
+        for action in list(out.keys()):
+            try:
+                mult = sm.boost(key, action)
+            except Exception:
+                mult = 1.0
+            if mult != 1.0:
+                v = out[action]
+                # положительные веса усиливаем, отрицательные ослабляем —
+                # буст не должен превращать плохой опыт в хороший
+                out[action] = v * mult if v > 0 else v / mult
+        return out
+
     # ---- main decision ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
                 goal: Optional[str] = None) -> Tuple[str, dict]:
@@ -505,6 +567,13 @@ class GoalManager:
         if not cands:
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)
+        # Доказанная стратегия (StrategyMemory) как мягкий prior над Q.
+        vals = self._strategy_weighted(vals, info, ws)
+        # Предпочтения из выводов рефлексии (полные сумки -> продать,
+        # квест сдан -> взять следующий). Мягкий prior, не override.
+        for _pref in self._preferred_from_hints():
+            if _pref in vals:
+                vals[_pref] = vals[_pref] * 1.6 if vals[_pref] > 0 else vals[_pref] + 0.4
         # Подавление залипших скиллов (spin:/death: хинты) — ЗДЕСЬ, в весах.
         # Скилл остаётся кандидатом, но его вес множится на SPIN_WEIGHT_MULT.
         for bad in getattr(self, "_suppressed", ()) or ():

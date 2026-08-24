@@ -1,0 +1,39 @@
+{
+ "journal": [
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'heal' took 144/150 steps with avg reward +0.002 - spinning",
+   "key": "spin:heal",
+   "hint": "reduce_weight",
+   "t": 1787494054.4037833
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'return_to_giver' took 150/150 steps with avg reward -0.300 - spinning",
+   "key": "spin:return_to_giver",
+   "hint": "reduce_weight",
+   "t": 1787506689.6517215
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'heal' took 137/150 steps with avg reward +0.004 - spinning",
+   "key": "spin:heal",
+   "hint": "reduce_weight",
+   "t": 1787508838.9187324
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'heal' took 141/150 steps with avg reward -0.036 - spinning",
+   "key": "spin:heal",
+   "hint": "reduce_weight",
+   "t": 1787511075.8370035
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'turn_in_quest' took 141/150 steps with avg reward +0.004 - spinning",
+   "key": "spin:turn_in_quest",
+   "hint": "reduce_weight",
+   "t": 1787551383.7394676
+  }
+ ]
+}

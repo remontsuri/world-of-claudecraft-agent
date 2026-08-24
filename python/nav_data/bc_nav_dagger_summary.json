@@ -1,0 +1,74 @@
+{
+  "B1": {
+    "train": {
+      "variant": "B1",
+      "eWkill": 6,
+      "n": 10,
+      "deaths": 1,
+      "death_rate": 10.0,
+      "dmg": 54.1,
+      "atk_pct": 89.4980694980695,
+      "min_d": 10.528,
+      "agreement": {
+        "NAV": 73.30279050395669,
+        "ACQUIRE": NaN,
+        "APPROACH": 63.63636363636363,
+        "COMBAT": 96.09432571849669
+      },
+      "gate": false
+    },
+    "held_out": {
+      "variant": "B1",
+      "eWkill": 13,
+      "n": 20,
+      "deaths": 0,
+      "death_rate": 0.0,
+      "dmg": 39.35,
+      "atk_pct": 89.28845949167558,
+      "min_d": 12.700500000000002,
+      "agreement": {
+        "NAV": 73.06997159824425,
+        "ACQUIRE": NaN,
+        "APPROACH": 65.83732057416269,
+        "COMBAT": 99.0914990266061
+      },
+      "gate": false
+    }
+  },
+  "B3": {
+    "train": {
+      "variant": "B3",
+      "eWkill": 9,
+      "n": 10,
+      "deaths": 1,
+      "death_rate": 10.0,
+      "dmg": 64.5,
+      "atk_pct": 75.70676583127974,
+      "min_d": 3.053,
+      "agreement": {
+        "NAV": 53.8866930171278,
+        "ACQUIRE": NaN,
+        "APPROACH": 89.79591836734694,
+        "COMBAT": 95.99224305106658
+      },
+      "gate": false
+    },
+    "held_out": {
+      "variant": "B3",
+      "eWkill": 16,
+      "n": 20,
+      "deaths": 6,
+      "death_rate": 30.0,
+      "dmg": 58.05,
+      "atk_pct": 74.20038961868484,
+      "min_d": 2.0315000000000003,
+      "agreement": {
+        "NAV": 38.74643874643874,
+        "ACQUIRE": NaN,
+        "APPROACH": 72.16374269005847,
+        "COMBAT": 96.23376623376623
+      },
+      "gate": false
+    }
+  }
+}
