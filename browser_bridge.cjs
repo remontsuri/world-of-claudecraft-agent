@@ -15,6 +15,7 @@ const fs = require('fs');
 const { GameClient } = require('./src/bridge/game_client.cjs');
 const { buildSnapshot } = require('./src/bridge/snapshot.cjs');
 const { createActions } = require('./src/bridge/actions.cjs');
+const { createCmdQueue } = require('./src/bridge/cmd_queue.cjs');
 
 const CDP = process.env.WOC_CDP || 'http://127.0.0.1:9222';
 const PORT = parseInt(process.env.WOC_PORT || '8791', 10);
@@ -61,10 +62,33 @@ async function dispatch(cmd) {
   }
 }
 
+// ---- bounded command queue (план 2026-08-24, пункт 2) ----
+// CMD_TIMEOUT_MS: каждая команда получает собственный watchdog. Зависший
+// handler (напр. farm застрял на мёртвой вкладке) отбрасывается, ответ
+// ok:false/timeout уходит питону, а очередь НЕ копится бесконечно.
+// Recovery использует СУЩЕСТВУЮЩИЙ механизм game_client: сброс кэша page
+// (следующий safeEval сам пере-приобретёт вкладку / переподключится).
+// Очередь продолжается только после успешной client.health().
+const CMD_TIMEOUT_MS = parseInt(process.env.WOC_CMD_TIMEOUT_MS || '90000', 10);
+function recoverAfterTimeout() {
+  console.error('[bridge] cmd timeout -> dropping cached page handle for re-acquire');
+  client.page = null; // существующий путь recovery: acquirePage/connect в safeEval
+}
+const queue = createCmdQueue({
+  cmdTimeoutMs: CMD_TIMEOUT_MS,
+  onTimeout: recoverAfterTimeout,
+  healthCheck: async () => {
+    try {
+      const h = await client.health();
+      return !!(h && h.bridge && h.page);
+    } catch (_) { return false; }
+  },
+});
+
 // ---- HTTP server ----
-// All mutations to the single live game tab run through ONE promise chain
+// All mutations to the single live game tab run through the bounded queue
 // (a farm() holds the tab ~17s; concurrent calls would corrupt the world).
-let cmdQueue = Promise.resolve();
+// See createCmdQueue above: per-command watchdog + freshPage-style recovery.
 
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' || req.method === 'HEAD') {
@@ -92,7 +116,7 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     let cmd;
     try { cmd = JSON.parse(body || '{}'); } catch (_) { cmd = {}; }
-    cmdQueue = cmdQueue.then(async () => {
+    queue.submit(async () => {
       const resp = await dispatch(cmd);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(resp));

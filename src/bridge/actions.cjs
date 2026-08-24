@@ -147,37 +147,36 @@ async function applyAction(idx, cmd, gameClient) {
       }
       break;
     }
-    case 4: { // sell: sellAllJunk + surplus materials when bags are crowded
-      const sold = await gameClient.evaluate(() => {
+    case 4: { // sell: умная продажа — только ненужное
+      const sold = await gameClient.evaluate((cmdJson) => {
         const sim = window.__game.sim;
-        let copper0 = 0;
+        const cmd = JSON.parse(cmdJson);
+        const keepIds = new Set(cmd.keepIds || []);
         try { sim.interact(); } catch (_) {}
-        try { sim.sellAllJunk && sim.sellAllJunk(); } catch (_) {}
-        // Free bag pressure: materials (hides/silk/glands) are common-quality so
-        // sellAllJunk skips them; but a FULL bag blocks quest turn-ins
-        // (bagsFullError in turnInQuest) and crafting. Sell surplus stacks down
-        // to a reserve when the bag is nearly full. Keep food/water/tools.
+        // Продаём только мусор (quality=0) и материалы, которые НЕ нужны
+        // для квестов и крафта. Иначе агент продаст quest_item и не сможет
+        // сдать квест.
         const KEEP = { baked_bread: 1, spring_water: 1, conjured_bread: 1, conjured_water: 1, copper_mining_pick: 1 };
         const slots = sim.inventory || [];
-        const used = slots.filter(Boolean).length;
-        if (used >= 13) {
-          const counts = {};
-          for (const s of slots) {
-            if (!s) continue;
-            const id = s.itemId || (s.def && s.def.id);
-            counts[id] = (counts[id] || 0) + (s.count || 1);
-          }
-          for (const id of Object.keys(counts)) {
-            if (KEEP[id]) continue;
-            if (!/hide|fang|silk|gland|leg|scrap|cloth|weave/i.test(id)) continue; // materials only
-            const excess = counts[id] - 5;               // keep a small reserve
-            if (excess >= 5) {
-              try { sim.sellItem(id, excess); } catch (_) {}
-            }
+        const counts = {};
+        for (const s of slots) {
+          if (!s) continue;
+          const id = s.itemId || (s.def && s.def.id);
+          if (!id) continue;
+          counts[id] = (counts[id] || 0) + (s.count || 1);
+        }
+        for (const id of Object.keys(counts)) {
+          if (KEEP[id]) continue;
+          if (keepIds.has(id)) continue; // нужен для квеста/крафта — не продавать
+          // Продаём мусор (quality=0) и излишки материалов
+          if (!/hide|fang|silk|gland|leg|scrap|cloth|weave|ore|bar|log|plank/i.test(id)) continue;
+          const excess = counts[id] - 3; // небольшой резерв
+          if (excess >= 3) {
+            try { sim.sellItem(id, excess); } catch (_) {}
           }
         }
         return true;
-      });
+      }, JSON.stringify(cmd));
       void sold;
       break;
     }
@@ -632,29 +631,53 @@ function createActions({ gameClient, buildSnapshot, tickMs = 220 }) {
   }
 
   async function respawnHandler() {
+    // ДВУХЭТАПНЫЙ respawn (план 2026-08-24, сверен с src/sim/spirit.ts):
+    //  Этап 1: resurrectAtCorpse() — дешёвая попытка. Работает ТОЛЬКО если
+    //          призрак уже в CORPSE_REZ_RANGE от тела (spirit.ts:316-331);
+    //          вне range это no-op, поэтому эффект проверяем по опросу.
+    //  Этап 2: если всё ещё мёртв — releaseSpirit() -> resurrectAtSpiritHealer().
+    //          Healer — основной рабочий путь (spirit.ts:334-349, возвращает bool).
+    //  Итог подтверждается только по живому опросу sim.player:
+    //  dead===false && hp>0. Никаких ложных ok:true.
     let revived = false;
     const deadBefore = await gameClient.evaluate(() =>
       !!(window.__game.sim.player && window.__game.sim.player.dead)).catch(() => false);
     if (deadBefore) {
+      // --- Этап 1: дешёвая попытка у трупа ---
       await gameClient.evaluate(() => {
         const sim = window.__game.sim;
-        try { sim.releaseSpirit(); } catch (_) {}
-      });
-      await gameClient.evaluate(() => {
-        const sim = window.__game.sim;
-        if (typeof sim.resurrectAtSpiritHealer === 'function') {
-          return sim.resurrectAtSpiritHealer().then(() => true).catch(() => false);
-        }
-        return false;
-      }).catch(() => false);
-      for (let i = 0; i < 30 && !revived; i++) {
+        try { if (typeof sim.resurrectAtCorpse === 'function') sim.resurrectAtCorpse(); } catch (_) {}
+      }).catch(() => null);
+      for (let i = 0; i < 12 && !revived; i++) {
         await sleep(tickMs);
         revived = await gameClient.evaluate(() => {
           const p = window.__game.sim.player;
           return !!(p && !p.dead && (p.hp ?? 0) > 0);
         }).catch(() => false);
       }
-      if (!revived) console.error('[actions] respawn: revival not confirmed');
+      // --- Этап 2: release + Spirit Healer ---
+      if (!revived) {
+        await gameClient.evaluate(() => {
+          const sim = window.__game.sim;
+          try { sim.releaseSpirit(); } catch (_) {}
+        });
+        await gameClient.evaluate(() => {
+          const sim = window.__game.sim;
+          if (typeof sim.resurrectAtSpiritHealer === 'function') {
+            return sim.resurrectAtSpiritHealer().then(() => true).catch(() => false);
+          }
+          return false;
+        }).catch(() => false);
+        // Опрос на ОБА этапа: полный бюджет после healer
+        for (let i = 0; i < 30 && !revived; i++) {
+          await sleep(tickMs);
+          revived = await gameClient.evaluate(() => {
+            const p = window.__game.sim.player;
+            return !!(p && !p.dead && (p.hp ?? 0) > 0);
+          }).catch(() => false);
+        }
+      }
+      if (!revived) console.error('[actions] respawn: revival not confirmed after corpse+healer chain');
     } else {
       revived = true; // not dead on entry — nothing to resurrect
     }
