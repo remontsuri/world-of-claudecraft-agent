@@ -8,6 +8,33 @@
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Анти-рыскание камеры (баг, замеченный пользователем 2026-08-24, повторно).
+// ПЕРВЫЙ фикс закрыл только navigateToCoord, но камерой дёргает в основном
+// case 0 (farm) — он крутится до 80 итераций и применял порог 0.2 рад дважды
+// (chase + face). Единый порог = автоколебание: курс проскакивает нуль, знак
+// ошибки меняется, камера ходит влево-вправо каждый тик.
+// Лечение: ГИСТЕРЕЗИС (вход 0.35 рад / выход 0.10 рад) + память состояния в
+// window.__navTurning. Логика продублирована в src/bridge/heading.cjs, где она
+// покрыта тестами (test_heading.cjs, 9 тестов) — пороги обязаны совпадать.
+// Этот код инлайнится в page.evaluate, поэтому живёт строкой.
+const TURN_HELPER = `
+  const __TURN_START = 0.35, __TURN_STOP = 0.10, __TURN_ONLY = 1.20;
+  const __navDecide = (off, allowForward) => {
+    const mag = Math.abs(off);
+    const wasTurning = !!window.__navTurning;
+    const threshold = wasTurning ? __TURN_STOP : __TURN_START;
+    if (mag <= threshold) {
+      window.__navTurning = false;
+      return allowForward === false ? {} : { forward: true };
+    }
+    window.__navTurning = true;
+    const left = off > 0;
+    const fwd = (allowForward !== false) && mag <= __TURN_ONLY;
+    return left ? { turnLeft: true, forward: fwd }
+                : { turnRight: true, forward: fwd };
+  };
+`;
+
 // Last accept_quest result (questId/giverPos), surfaced to Python so it can
 // persist the turn-in NPC in WorldMemory (the game does not return giverId).
 let lastAccept = null;
@@ -39,26 +66,37 @@ async function applyAction(idx, cmd, gameClient) {
       if (targetId == null) break; // no hostile mob in range: inconclusive, not an error
       for (let t = 0; t < 80; t++) {
         const st = await gameClient.evaluate((id) => {
+          // анти-рыскание: гистерезис + память поворота (см. TURN_HELPER выше)
+          const __TURN_START = 0.35, __TURN_STOP = 0.10, __TURN_ONLY = 1.20;
+          const __navDecide = (off, allowForward) => {
+            const mag = Math.abs(off);
+            const wasTurning = !!window.__navTurning;
+            const threshold = wasTurning ? __TURN_STOP : __TURN_START;
+            if (mag <= threshold) {
+              window.__navTurning = false;
+              return allowForward === false ? null : { forward: true };
+            }
+            window.__navTurning = true;
+            const left = off > 0;
+            const fwd = (allowForward !== false) && mag <= __TURN_ONLY;
+            return left ? { turnLeft: true, forward: fwd }
+                        : { turnRight: true, forward: fwd };
+          };
           const g = window.__game, sim = g.sim, p = sim.player;
           const e = sim.entities.get(id);
           if (!e || e.dead || (e.hp ?? 0) <= 0) return { gone: true };
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
-          if (d > 7) {
-            const desired = Math.atan2(dx, dz);
-            let off = desired - p.facing;
-            off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-            if (Math.abs(off) > 0.2) {
-              if (off > 0) g.controller.move({ turnLeft: true, forward: true });
-              else g.controller.move({ turnRight: true, forward: true });
-            } else { g.controller.move({ forward: true }); }
-            return { d, phase: 'chase' };
-          }
           const desired = Math.atan2(dx, dz);
           let off = desired - p.facing;
           off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          if (Math.abs(off) > 0.2) {
-            if (off > 0) g.controller.move({ turnLeft: true });
-            else g.controller.move({ turnRight: true });
+          if (d > 7) {
+            g.controller.move(__navDecide(off, true));
+            return { d, phase: 'chase' };
+          }
+          // в упор: доворачиваем БЕЗ движения вперёд, чтобы не толкать моба
+          const faceCmd = __navDecide(off, false);
+          if (faceCmd) {
+            g.controller.move(faceCmd);
             return { d, phase: 'face' };
           }
           try { sim.targetEntity(id); } catch (_) {}
@@ -448,16 +486,29 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
 // VERIFIED LIVE to make the agent jitter in place; plain forward actually
 // covers ground (raw_move moves ~13yd per 5 calls).
 async function exploreWalk(gameClient, steps) {
-  for (let i = 0; i < (steps || 10); i++) {
-    const turn = (i % 7 === 6);
-    await gameClient.evaluate((t) => {
-      try { window.__game.controller.stop(); } catch (_) {}
-      if (t) {
-        try { window.__game.controller.move({ turnLeft: true, forward: true }); } catch (_) {}
-      } else {
-        try { window.__game.controller.move({ forward: true }); } catch (_) {}
-      }
-    }, turn);
+  // 2026-08-24: раньше здесь стоял поворот каждый 7-й шаг (i % 7 === 6) и
+  // controller.stop() на КАЖДОМ тике. Это давало ровно то, что видел
+  // пользователь: агент идёт и постоянно вертит камерой, а из-за stop() ещё и
+  // теряет разгон. Теперь: один поворот в НАЧАЛЕ отрезка (выбираем новый курс),
+  // затем идём прямо, не трогая камеру и не сбрасывая ввод каждый тик.
+  const total = steps || 10;
+  // курс выбирается ОДИН раз на отрезок: короткий доворот, дальше только forward
+  await gameClient.evaluate(() => {
+    try { window.__game.controller.stop(); } catch (_) {}
+    try {
+      // случайная сторона, но ровно один импульс, без дрожания
+      const left = Math.random() < 0.5;
+      window.__game.controller.move(left ? { turnLeft: true } : { turnRight: true });
+    } catch (_) {}
+  });
+  await sleep(gameClient.tickMs);
+  await gameClient.evaluate(() => {
+    try { window.__game.controller.move({ forward: true }); } catch (_) {}
+  });
+  for (let i = 1; i < total; i++) {
+    // НЕ переотправляем команду каждый тик: ввод контроллера персистентный,
+    // повторный move() с тем же значением только мешает (и раньше здесь был
+    // stop(), который рвал движение).
     await sleep(gameClient.tickMs);
   }
   return true;

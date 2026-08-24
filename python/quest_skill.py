@@ -162,14 +162,13 @@ def return_to_giver(env, ctx: dict, world_mem=None) -> str:
     # 2026-08-23: primary walker = geometric raw_move legs (nav_policy) with
     # fence-hop pulses; the scripted bridge navigate stays as fallback when the
     # walker cannot run (no facing info).
-    try:
-        from nav_policy import execute as nav_execute
-        _facing = (env._last_info.get("player") or {}).get("facing", 0.0)
-        nav_execute(env, [px, pz], [giver_pos["x"], giver_pos["z"]],
-                    facing=_facing, legs=6)
-        arrived = False          # финальную дистанцию меряем ниже по d1
-    except Exception:
-        arrived = env._navigate_to_coord(giver_pos["x"], giver_pos["z"], max_steps=RETURN_STEP_BUDGET)
+    # 2026-08-24: nav_policy.execute шлёт СЕРИИ raw_move(turnLeft/turnRight), и
+    # каждый такой вызов — отдельный рывок камеры. Пользователь видел именно это
+    # («агент постоянно водит камерой из стороны в сторону»). Возвращаемся к
+    # мостовому navigateToCoord: там ОДИН персистентный ввод с гистерезисом
+    # (см. TURN_HELPER в actions.cjs), камера не дрожит.
+    arrived = env._navigate_to_coord(giver_pos["x"], giver_pos["z"],
+                                     max_steps=RETURN_STEP_BUDGET)
 
     px2, pz2 = env._last_info.get("player_pos", [0, 0])
     d1 = ((giver_pos["x"] - px2) ** 2 + (giver_pos["z"] - pz2) ** 2) ** 0.5
