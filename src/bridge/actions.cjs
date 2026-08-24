@@ -348,6 +348,27 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
     const st = await gameClient.evaluate((tx, tz) => {
       const g = window.__game, p = g.sim.player;
       const dx = tx - p.pos.x, dz = tz - p.pos.z, d = Math.hypot(dx, dz);
+      // Анти-рыскание камеры (баг, замеченный пользователем 2026-08-24):
+      // единый порог 0.2 рад заставлял агента дёргать камеру влево-вправо
+      // каждый тик (курс проскакивал мимо нуля, знак ошибки менялся).
+      // Логика и тесты: src/bridge/heading.cjs + test_heading.cjs (9 тестов).
+      // Здесь она инлайнится, потому что код исполняется ВНУТРИ страницы,
+      // куда require() не дотягивается. Пороги должны совпадать с модулем.
+      const __TURN_START = 0.35, __TURN_STOP = 0.10, __TURN_ONLY = 1.20;
+      const __navDecide = (off) => {
+        const mag = Math.abs(off);
+        const wasTurning = !!window.__navTurning;
+        const threshold = wasTurning ? __TURN_STOP : __TURN_START;
+        if (mag <= threshold) {
+          window.__navTurning = false;
+          return { forward: true };
+        }
+        window.__navTurning = true;
+        const left = off > 0;
+        const fwd = mag <= __TURN_ONLY;
+        return left ? { turnLeft: true, forward: fwd }
+                    : { turnRight: true, forward: fwd };
+      };
       if (d < 5) { try { g.controller.stop(); } catch (_) {} return { arrived: true, d, x: p.pos.x, z: p.pos.z }; }
       // FLEE: in combat at low HP, run AWAY from the nearest hostile instead of
       // toward the target. Leash mechanics drop aggro when far enough; walking
@@ -365,21 +386,15 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
           const flee = Math.atan2(p.pos.x - nearest.pos.x, p.pos.z - nearest.pos.z);
           let off = flee - p.facing;
           off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          if (Math.abs(off) > 0.2) {
-            if (off > 0) g.controller.move({ turnLeft: true, forward: true });
-            else g.controller.move({ turnRight: true, forward: true });
-          } else { g.controller.move({ forward: true }); }
+          g.controller.move(__navDecide(off));
           return { arrived: false, d, x: p.pos.x, z: p.pos.z, fleeing: true };
         }
       }
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      if (Math.abs(off) > 0.2) {
-        if (off > 0) g.controller.move({ turnLeft: true, forward: true });
-        else g.controller.move({ turnRight: true, forward: true });
-      } else { g.controller.move({ forward: true }); }
-      return { arrived: false, d, x: p.pos.x, z: p.pos.z };
+      g.controller.move(__navDecide(off));
+      return { arrived: false, d, x: p.pos.x, z: p.pos.z, off: Math.round(off * 100) / 100 };
     }, x, z);
     if (st && st.arrived) { arrived = true; break; }
     // stuck check
