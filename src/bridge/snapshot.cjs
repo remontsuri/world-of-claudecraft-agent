@@ -230,7 +230,33 @@ function readGameState() {
     xp: g.online ? g.online.xp : (p.xp || 0),
     copper: sim.copper || 0,
     deaths: (sim.deedStats && sim.deedStats.counters && sim.deedStats.counters.deaths) || p.deaths || 0,
-    quests_done: (typeof (g.online && g.online.questsDone) === 'number') ? g.online.questsDone : done.length,
+    // Честный счётчик сданных квестов (см. quests_done.cjs + тесты):
+    // online.questsDone — это Set, поэтому прежняя проверка
+    // `typeof === 'number'` всегда была ложной и счётчик вечно показывал 0,
+    // хотя квесты РЕАЛЬНО сдавались (замер: Set(7)). Верификатор считал
+    // каждую успешную сдачу провалом.
+    // ВНИМАНИЕ: этот блок исполняется ВНУТРИ страницы, require() здесь не
+    // работает (первая попытка через questsDoneCount() падала с
+    // "questsDoneCount is not defined"). Логика продублирована инлайном;
+    // источник истины и тесты — src/bridge/quests_done.cjs + test_quests_done.cjs.
+    quests_done: (function () {
+      const fallback = done.length;
+      const qd = g.online ? g.online.questsDone : undefined;
+      let fromOnline = null;
+      if (typeof qd === 'number') fromOnline = qd;
+      else if (qd && typeof qd.size === 'number') fromOnline = qd.size;   // Set
+      else if (Array.isArray(qd)) fromOnline = qd.length;
+      return fromOnline === null ? fallback : Math.max(fromOnline, fallback);
+    })(),
+    // Кулдаун повторяемых work-order квестов: сервер мирроринг через cprof.
+    // Без него агент пытается снова взять квест, который в кулдауне.
+    quest_cadence_blocked: (function () {
+      try {
+        const ci = g.online && g.online.craftingIdentity;
+        const set = ci && ci.cadenceBlockedQuests;
+        return set ? Array.from(set) : [];
+      } catch (_) { return []; }
+    })(),
     in_combat: !!p.inCombat,
   };
 }

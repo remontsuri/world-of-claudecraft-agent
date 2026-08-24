@@ -109,8 +109,26 @@ def verify_quest_accept(c):
     return 'inconclusive'
 
 def verify_quest_turn_in(c):
+    """Честный вердикт сдачи квеста.
+
+    ГЛАВНЫЙ СИГНАЛ (найден 2026-08-24 вместе с со-диагностом): рост счётчика
+    quests_done. В ОНЛАЙНЕ ведро `done` всегда пусто, потому что завершённый
+    квест УДАЛЯЕТСЯ из questLog (quest_commands.ts:432-433), а истина живёт в
+    online.questsDone (Set) — мост теперь отдаёт его размер (quests_done.cjs).
+
+    Раньше проверялось только ведро done и смена состояния, поэтому КАЖДАЯ
+    успешная сдача помечалась inconclusive: реально сдано 7 квестов (wolves,
+    boars, bandits, murlocs, spiders, kitchens, loom), а метрика показывала 0.
+    Агент учился, что сдавать квесты бесполезно.
+    """
+    d0 = c['before'].get('quests_done')
+    d1 = c['after'].get('quests_done')
+    if isinstance(d0, (int, float)) and isinstance(d1, (int, float)) and d1 > d0:
+        return 'success'
     if not c['handle']:
-        return 'inconclusive'
+        # без quest_id и без роста счётчика доказательств успеха нет, а
+        # действие было ПОПЫТКОЙ -> провал попытки, не неопределённость
+        return 'failure'
     qid = str(c['handle'])
     b_done = c['before'].get('quests', {}).get('done', [])
     a_done = c['after'].get('quests', {}).get('done', [])
@@ -120,6 +138,10 @@ def verify_quest_turn_in(c):
     s1 = _quest_state(c['after'], qid)
     if s0 in ('active', 'ready', 'complete') and s1 == 'done':
         return 'success'
+    # Квест ИСЧЕЗ из лога, но счётчик не вырос -> сервер отклонил либо ресинк.
+    # Это провал попытки: иначе агент бесконечно спамит сдачу без сигнала.
+    if s0 is not None and s1 is None:
+        return 'failure'
     # Fix2 (2026-08-23): the server REJECTS doomed turn-ins silently — no error
     # event reaches the client (probed live: quest stays ready, no events). A
     # rejected attempt left the world unchanged, which used to be

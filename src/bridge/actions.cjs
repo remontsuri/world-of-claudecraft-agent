@@ -460,7 +460,14 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
       try { g.controller.face(desired); } catch (_) {}
-      g.controller.move({ forward: true });
+      // Проактивный хоп: если прошлый тик почти не дал прогресса, а мы на
+      // земле — вероятен забор/бордюр впереди. Клик-мышью (main.ts:3959)
+      // ставит jump у каждого забора; мы делаем то же по наблюдаемому
+      // отсутствию прогресса, т.к. pathCrossesFence в страницу не экспонирован.
+      const slow = window.__navLastD !== undefined && (window.__navLastD - d) < 0.25;
+      window.__navLastD = d;
+      g.controller.move((slow && p.onGround) ? { forward: true, jump: true }
+                                            : { forward: true });
       return { arrived: false, d, x: p.pos.x, z: p.pos.z, off: Math.round(off * 100) / 100 };
     }, x, z);
     if (st && st.arrived) { arrived = true; break; }
@@ -471,6 +478,34 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
         stillTicks++;
         if (stillTicks >= STUCK_TICKS && unstickAttempts < MAX_UNSTICKS) {
           unstickAttempts++;
+          // ЛЕСТНИЦА РАСКЛИНИВАНИЯ (исправлено 2026-08-24).
+          // КОРНЕВАЯ ПРИЧИНА застревания: забор в этой игре проходится ТОЛЬКО
+          // в прыжке — src/sim/player_motion.ts:432
+          //   const clearFences = !p.onGround && p.jumping;
+          // а наш навигатор слова "jump" не содержал вовсе и сразу
+          // разворачивался на 120°, то есть уходил ВДОЛЬ забора, никогда его
+          // не преодолевая (пользователь: «упёрся в забор»).
+          // Рабочий образец — клик-мышью (src/main.ts:3959-3965): каждый кадр
+          // pathCrossesFence(pos, ahead) -> mi.jump = true.
+          // Порядок теперь: СНАЧАЛА 2 попытки перепрыгнуть по курсу, и только
+          // если забор непреодолим — старый обход поворотом.
+          if (unstickAttempts <= 2) {
+            const hop = await gameClient.evaluate(() => {
+              const g = window.__game, p = g.sim.player;
+              // прыжок работает только с земли (player_motion.ts:637:
+              // inp.jump && (p.onGround || coyote))
+              if (!p.onGround) return { skipped: 'airborne' };
+              try {
+                g.controller.move({ forward: true, jump: true });
+              } catch (_) { return { skipped: 'move-failed' }; }
+              return { jumped: true, y: +p.pos.y.toFixed(2) };
+            });
+            void hop;
+            // держим прыжок на протяжении дуги: клиренс действует всю дугу
+            await sleep(gameClient.tickMs * 3);
+            stillTicks = 0;
+            continue;
+          }
           // turn off-axis and push through: alternate left/right so repeated
           // wedges zigzag out instead of grinding one wall
           const dirSign = (unstickAttempts % 2 === 1) ? 1 : -1;
