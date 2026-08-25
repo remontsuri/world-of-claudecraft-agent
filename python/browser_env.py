@@ -351,3 +351,15 @@ class BrowserBase:
         else:
             self.env._raw_move("stop")
         return None, 0.0, False, False, self.env._last_info
+
+    def turn_in_quest(self, qid: str):
+        """Server-side turn-in via the bridge (2026-08-25).
+
+        quest_capability.turn_in() вызывает этот метод. Раньше его НЕ было
+        -> AttributeError -> except в capability -> FAILURE на КАЖДУЮ сдачу,
+        даже стоя в 4 yd от гивера с готовым квестом (замер: 1785 FAIL подряд,
+        ручной sim.turnInQuest тем же qid проходил мгновенно)."""
+        resp = self.env._require({"action": "step", "idx": 3, "questId": str(qid)},
+                                 timeout=60.0)
+        self.env._last_info = resp.get("info", {})
+        return self.env._last_info
