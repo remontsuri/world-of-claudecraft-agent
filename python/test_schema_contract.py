@@ -65,9 +65,9 @@ def test_quests_done_counter_present(snap):
 def test_world_state_needs_tool_respects_equipped_and_proficiency(snap):
     """needs_tool учитывает wield-гейт игры: инструмент в сумке + proficiency.
 
-    Живой замер (2026-08-25): copper_mining_pick В СУМКЕ, но needs_tool
-    возвращал его снова — has_tool не знал про wield gate. Инвариант:
-    если предмет в инвентаре, needs_tool не может предлагать его к покупке.
+    Инвариант (ужесточён по review): если предмет уже в инвентаре,
+    needs_tool НЕ имеет права предлагать его к покупке — это нарушение
+    контракта, а не «известное состояние». BUY и EQUIP — разные состояния.
     """
     from world_state import build_world_state
     info = _info_from_bridge(snap)
@@ -75,11 +75,10 @@ def test_world_state_needs_tool_respects_equipped_and_proficiency(snap):
     need = ws.get("needs_tool")
     if need:
         inv_ids = {s.get("itemId") for s in (info.get("inventory") or [])}
-        if need in inv_ids:
-            pytest.xfail(
-                f"needs_tool={need} при наличии в инвентаре — wield-gate "
-                f"(предмет есть, но не экипирован/proficiency). Требуется "
-                f"equip-действие перед покупкой.")
+        assert need not in inv_ids, (
+            f"НАРУШЕНИЕ ИНВАРИАНТА: needs_tool={need} при наличии в инвентаре. "
+            f"Если инструмент есть но не wield-ится — это состояние EQUIP, "
+            f"а не BUY. inv_ids={sorted(inv_ids)[:10]}")
 
 
 def test_policy_decision_runs_on_real_snapshot(snap):

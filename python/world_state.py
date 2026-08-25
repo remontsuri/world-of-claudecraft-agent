@@ -4,9 +4,14 @@ def _gather_tool_needed(info: dict):
     Имена сверены с ЖИВЫМ ассортиментом вендоров (probe 2026-08-25):
     logging_axe и herb_sack НЕ СУЩЕСТВУЮТ в игре — реальный axe называется
     handaxe (Trader Wilkes, Tinker Gizzel), травы собирают gathering_sickle
-    (Trader Wilkes, Weaver Ottilie)."""
+    (Trader Wilkes, Weaver Ottilie).
+
+    Инвариант (review): если инструмент УЖЕ в инвентаре, возвращаем None —
+    «есть, но не wield-ится» это состояние EQUIP, а не BUY. Иначе политика
+    уходит в бесконечный buy-spam предмета, который лежит в сумке."""
     TOOLS = {"mining": "copper_mining_pick", "logging": "handaxe", "herbalism": "gathering_sickle"}
     NODE_PROF = {"ore": "mining", "wood": "logging", "herb": "herbalism"}
+    inv_ids = {s.get("itemId") for s in (info.get("inventory") or []) if isinstance(s, dict)}
     for q in ((info.get("quests") or {}).get("active") or []):
         for o in (q.get("objectives") or []):
             if o.get("type") == "gather" and o.get("nodeType"):
@@ -14,7 +19,9 @@ def _gather_tool_needed(info: dict):
                 req = o.get("required") or 0
                 if cur < req:
                     prof = NODE_PROF.get(o["nodeType"])
-                    return TOOLS.get(prof)
+                    tool = TOOLS.get(prof)
+                    if tool and tool not in inv_ids:
+                        return tool
     return None
 
 """world_state.py — SINGLE source of truth for the agent's WorldState.
