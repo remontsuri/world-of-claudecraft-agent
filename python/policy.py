@@ -581,6 +581,18 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         cands = self._candidates(info, ws, goal=goal)
+        # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
+        # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
+        # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.
+        # Это превращает квест в транзакцию: [собрать] -> [дойти] -> [сдать].
+        if (ws.get("quest_status") == "READY_TO_TURN_IN"
+                and ws.get("quest", {}).get("giver_distance", 999) <= 6):
+            ctx = {}
+            qid = ws.get("quest", {}).get("id")
+            if qid:
+                ctx["questId"] = qid
+                ctx["quest"] = {"id": qid}
+            return SKILL_TURN_IN, ctx
         # ПРИОРИТЕТ: инструмент для gather-квеста (STATEFUL, P0 fix 2026-08-25).
         # Если нужен handaxe/gathering_sickle/copper_mining_pick и его нет —
         # форсируем buy, но с retry budget: после 3 неудачных попыток подряд

@@ -266,7 +266,11 @@ def build_world_state(info: Dict) -> Dict:
             # — that is either a not-yet-loaded objective or a degenerate quest;
             # treating 0/0 as READY made the agent run to the giver without doing
             # anything (user: "required == current == 0 must not mean READY").
-            qcomplete = bool(q.get("objectives")) and (not incomplete) and req > 0
+            # EXCEPTION (plan-stack fix 2026-08-25): server state=="ready" is
+            # AUTHORITATIVE — the game itself says the quest is turn-in-able
+            # (objectives may be empty in the snapshot after respawn). Trust it.
+            qcomplete = ((bool(q.get("objectives")) and (not incomplete) and req > 0)
+                         or q.get("state") == "ready")
             qphase = "READY" if qcomplete else "ACTIVE"
             # quest_status reflects the TRUTH: READY_TO_TURN_IN only when the
             # chosen quest actually reports complete (objectives present AND every
