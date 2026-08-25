@@ -329,6 +329,23 @@ class GoalManager:
         if quest_collect_pending and inv_map and (gather_object_near or probe_now):
             if SKILL_GATHER not in cands:
                 cands.append(SKILL_GATHER)
+        # 2026-08-25 (сбор ресурсов): gather-квесты (type:gather nodeType:X)
+        # теперь ВСЕГДА дают gather-кандидата — мост умеет идти к статическим
+        # узлам (EASTBROOK_GATHER_NODES), дальность больше не блокер.
+        # nodeType квеста кладём в ctx для приоритета типа узла.
+        self._gather_node_type = None
+        for qq in ((info.get("quests") or {}).get("active") or []):
+            for o in (qq.get("objectives") or []):
+                if o.get("type") == "gather" and o.get("nodeType"):
+                    cur = o.get("current") or 0
+                    req = o.get("required") or 0
+                    if cur < req:
+                        self._gather_node_type = o["nodeType"]
+                        if SKILL_GATHER not in cands:
+                            cands.append(SKILL_GATHER)
+                        break
+            if self._gather_node_type:
+                break
         # Do not send an incomplete quest back to its giver prematurely.
         # Bag pressure: a nearly-full bag blocks quest turn-ins (bagsFullError)
         # even with zero junk-quality items (materials are common). Offer
@@ -634,6 +651,8 @@ class GoalManager:
             craftable = ws.get("craftable_now") or []
             if craftable:
                 ctx["recipeId"] = craftable[0]["id"]
+        if action == SKILL_GATHER and getattr(self, "_gather_node_type", None):
+            ctx["nodeType"] = self._gather_node_type
         if action == SKILL_SELL:
             # Умная продажа: не продавать нужное для квестов и крафта
             keep = set(ws.get("quest_items_needed", set()))

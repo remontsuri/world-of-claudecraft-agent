@@ -46,6 +46,25 @@ function setLastAccept(v) { lastAccept = v; }
 // 0=farm 1=loot 2=accept_quest 3=turn_in_quest 4=sell_junk 5=gather 6=craft
 // 7=heal 8=equip 9=buy. Each case uses the REAL client API; unsupported
 // capabilities are honest no-ops with a console warning (no fake success).
+// Статические координаты gather-узлов Eastbrook (источник: gather_nodes.ts,
+// GATHER_NODES). Узлы — НЕ entities, в sim.entities их нет; harvestNode
+// требует d <= INTERACT_RANGE (5yd), поэтому без навигации к статической
+// точке дальние узлы недостижимы. Паттерн как EASTBROOK_NPC_POS.
+const EASTBROOK_GATHER_NODES = {
+  ore_eastbrook_1: { type: 'ore', x: -70, z: -53 },
+  ore_eastbrook_2: { type: 'ore', x: -73, z: -49 },
+  ore_eastbrook_3: { type: 'ore', x: -67, z: -57 },
+  ore_eastbrook_4: { type: 'ore', x: -92, z: -48 },
+  ore_eastbrook_5: { type: 'ore', x: -87, z: -45 },
+  ore_eastbrook_6: { type: 'ore', x: -65, z: -69 },
+  wood_eastbrook_1: { type: 'wood', x: -62, z: 8 },
+  wood_eastbrook_2: { type: 'wood', x: -57, z: -6 },
+  wood_eastbrook_3: { type: 'wood', x: -68, z: 18 },
+  herb_eastbrook_1: { type: 'herb', x: -59, z: 91 },
+  herb_eastbrook_2: { type: 'herb', x: -57, z: 82 },
+  herb_eastbrook_3: { type: 'herb', x: -58, z: 99 },
+};
+
 async function applyAction(idx, cmd, gameClient) {
   // handle: факты об исполнении, которые нужны верификаторам Python
   // (например gatherNoTarget: у gather не было ни узла, ни трупа).
@@ -215,22 +234,59 @@ async function applyAction(idx, cmd, gameClient) {
       void sold;
       break;
     }
-    case 5: { // gather: node first; else harvest a fresh beast/spider corpse
-      const nodeId = await gameClient.evaluate(() => {
+    case 5: {
+      // 2026-08-25: gather с НАВИГАЦИЕЙ. Прежняя версия искала узлы-entities
+      // только в 60 yd и звала harvestNode сразу — а узлы дальше 5 yd сервер
+      // отклоняет ('Too far away.', gathering.ts:646 INTERACT_RANGE), ближних
+      // же не было вовсе (квестовые узлы в 65-98 yd от города). Теперь:
+      //   1) cmd.nodeType — приоритет типа из квеста (ore/wood/herb);
+      //   2) цель ищется среди живых entities (120 yd) И статических узлов;
+      //   3) к цели идём navigateToCoord (существующий механизм), у узла
+      //      добываем harvestNode.
+      const wantType = (cmd && cmd.nodeType) || null;
+      // Живой entity-узел рядом (если движок их спавнит)
+      const liveNode = await gameClient.evaluate((wt) => {
         const g = window.__game, sim = g.sim, p = sim.player;
         let best = null, bd = Infinity;
         for (const e of sim.entities.values()) {
           const isNode = (e.kind === 'gather_node' || e.nodeType || e.gatherTier !== undefined);
           if (!isNode || e.dead || e.depleted) continue;
+          if (wt && e.nodeType && e.nodeType !== wt) continue;
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
-          if (d <= 60 && d < bd) { bd = d; best = e.id; }
+          if (d <= 120 && d < bd) { bd = d; best = { id: String(e.id), x: e.pos.x, z: e.pos.z }; }
         }
-        return best != null ? best : null;
-      });
-      if (nodeId != null) {
-        await gameClient.evaluate((id) => { try { window.__game.sim.harvestNode(String(id)); } catch (_) {} }, nodeId);
+        return best;
+      }, wantType);
+
+      let target = null;
+      if (liveNode) {
+        target = { id: liveNode.id, x: liveNode.x, z: liveNode.z };
+      } else {
+        // Статический справочник: ближайший узел нужного (или любого) типа
+        let bestId = null, bd = Infinity;
+        for (const [nid, n] of Object.entries(EASTBROOK_GATHER_NODES)) {
+          if (wantType && n.type !== wantType) continue;
+          const st = await gameClient.evaluate((tx, tz) => {
+            const p = window.__game.sim.player;
+            return Math.round(Math.hypot(tx - p.pos.x, tz - p.pos.z));
+          }, n.x, n.z);
+          if (st < bd) { bd = st; bestId = nid; }
+        }
+        if (bestId) {
+          const n = EASTBROOK_GATHER_NODES[bestId];
+          target = { id: bestId, x: n.x, z: n.z, static: true };
+        }
+      }
+
+      if (target) {
+        // Подход к узлу (harvestNode требует <=5 yd), затем добыча.
+        await navigateToCoord(gameClient, target.x, target.z, 120);
+        await gameClient.evaluate((id) => {
+          try { window.__game.sim.harvestNode(String(id)); } catch (_) {}
+        }, target.id);
         break;
       }
+      gatherNoTarget = true; // ни живых, ни статических узлов -> честный failure
       // 2026-08-23: no node -> corpse-harvest (spider_silk etc. come from
       // componentTagged corpses via sim.harvestCorpse, public on the sim).
       const corpseId = await gameClient.evaluate(() => {
@@ -253,6 +309,8 @@ async function applyAction(idx, cmd, gameClient) {
         await gameClient.evaluate((c) => {
           try { window.__game.sim.harvestCorpse(Number(c.id), c.tags); } catch (_) {}
         }, corpseId);
+      } else {
+        gatherNoTarget = true; // ни узла, ни трупа -> honest failure для верификатора
       }
       break;
     }

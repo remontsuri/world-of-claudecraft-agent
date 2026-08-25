@@ -254,6 +254,9 @@ class BrowserEnv:
             # неполную kill-цель активного квеста — policy кладёт её в ctx.
             if ctx.get("targetMobId"):
                 payload["targetMobId"] = str(ctx["targetMobId"])
+            # 2026-08-25 (сбор): тип узла из gather-квеста (ore/wood/herb)
+            if ctx.get("nodeType"):
+                payload["nodeType"] = str(ctx["nodeType"])
             # giver id (NPC entity id) — the bridge returns its live position so
             # Python can persist it in WorldMemory as the turn-in location.
             npc = ctx.get("npc") or {}
