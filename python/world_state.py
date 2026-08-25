@@ -1,7 +1,11 @@
 
 def _gather_tool_needed(info: dict):
-    """Инструмент, нужный для активных gather-квестов (gathering.ts)."""
-    TOOLS = {"mining": "copper_mining_pick", "logging": "logging_axe", "herbalism": "herb_sack"}
+    """Инструмент, нужный для активных gather-квестов (gathering.ts).
+    Имена сверены с ЖИВЫМ ассортиментом вендоров (probe 2026-08-25):
+    logging_axe и herb_sack НЕ СУЩЕСТВУЮТ в игре — реальный axe называется
+    handaxe (Trader Wilkes, Tinker Gizzel), травы собирают gathering_sickle
+    (Trader Wilkes, Weaver Ottilie)."""
+    TOOLS = {"mining": "copper_mining_pick", "logging": "handaxe", "herbalism": "gathering_sickle"}
     NODE_PROF = {"ore": "mining", "wood": "logging", "herb": "herbalism"}
     for q in ((info.get("quests") or {}).get("active") or []):
         for o in (q.get("objectives") or []):

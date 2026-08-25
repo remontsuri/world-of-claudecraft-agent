@@ -11,7 +11,7 @@ def test_policy_has_gather_skills():
     assert SKILL_BUY == "buy"
     assert SKILL_EQUIP == "equip"
 
-    # q_toolworks требует ironbark_log (wood → logging_axe)
+    # q_toolworks требует ironbark_log (wood → handaxe)
     info = {
         "player": {"hp": 164, "maxHp": 164, "dead": False},
         "mana": 700, "maxMana": 700, "abilities": [],
@@ -29,8 +29,8 @@ def test_policy_has_gather_skills():
     }
     gm = GoalManager(ExperienceStore(), reflection_hints={})
     ws = gm._world_state(info)
-    assert ws.get("needs_tool") == "logging_axe", \
-        f"для wood нужен logging_axe, получили: {ws.get('needs_tool')}"
+    assert ws.get("needs_tool") == "handaxe", \
+        f"для wood нужен handaxe, получили: {ws.get('needs_tool')}"
 
 
 def test_buy_forces_when_tool_missing():
@@ -56,6 +56,6 @@ def test_buy_forces_when_tool_missing():
     ws = gm._world_state(info)
     action, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
     assert action == SKILL_BUY, \
-        f"нет logging_axe для wood квеста → ожидал buy, получили {action}"
-    assert ctx.get("buyItemId") == "logging_axe", \
-        f"должны покупать logging_axe, получили: {ctx.get('buyItemId')}"
+        f"нет handaxe для wood квеста → ожидал buy, получили {action}"
+    assert ctx.get("buyItemId") == "handaxe", \
+        f"должны покупать handaxe, получили: {ctx.get('buyItemId')}"
