@@ -640,7 +640,6 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
       }
     }
     if (st) lastPos = { x: st.x, z: st.z };
-    await sleep(gameClient.tickMs);
   }
   if (!arrived) {
     await gameClient.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} });
