@@ -137,6 +137,10 @@ function readGameState() {
         const o = (def && Array.isArray(def.objectives)) ? def.objectives[i] : null;
         const resolved = qp.resolvedCounts ? qp.resolvedCounts[i] : undefined;
         objs.push({
+          type: o && o.type || null,
+          itemId: o && o.itemId || null,
+          nodeType: o && o.nodeType || null,
+          targetMobId: o && o.targetMobId || null,
           current: (qp.counts && qp.counts[i]) || 0,
           required: (resolved != null ? resolved : (o && (o.count != null ? o.count : o.required))) || 0,
         });
