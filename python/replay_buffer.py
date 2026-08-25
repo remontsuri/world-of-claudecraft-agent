@@ -23,6 +23,13 @@ from collections import deque
 from typing import Dict, List, Optional
 
 
+def set_to_list(o):
+    """JSON serializer для множеств (transition может нести set, напр. keepIds)."""
+    if isinstance(o, (set, frozenset)):
+        return list(o)
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+
 # Rare events that must not be drowned out by common steps.
 RARE_EVENTS = {
     "QUEST_ACCEPT_SUCCESS",
@@ -77,8 +84,10 @@ class ReplayBuffer:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 # Persist a bounded tail (full buffer can be large); the buffer
                 # itself is the source of truth at runtime, this is a warm restart.
+                # default=set: transitions содержат множества (напр. keepIds) —
+                # раньше TypeError ронял save и весь опыт терялся при рестарте.
                 json.dump({"buffer": list(self.buffer)[-5000:]}, f,
-                          ensure_ascii=False, indent=0)
+                          ensure_ascii=False, indent=0, default=set_to_list)
             os.replace(tmp, self.path)
         except Exception:
             traceback.print_exc()
