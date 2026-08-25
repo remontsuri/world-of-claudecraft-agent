@@ -238,6 +238,9 @@ def main():
     # Failure Analyzer (план 2026-08-24, п.4): структурированные причины неудач
     from failure_analyzer import FailureAnalyzer
     fail_analyzer = FailureAnalyzer()
+    # Navigation Memory (план 2026-08-24, п.5): статистика маршрутов A->B
+    from nav_memory import NavMemory
+    nav_memory = NavMemory()
     brain = None
     # 2026-08-24 (аудит: HARMFUL): вызов LLM в горячем цикле замедлял шаг в 6
     # раз (0.30с -> 1.80с; 75 мин чистой латентности на 3000 шагов), а её цели
@@ -561,6 +564,32 @@ def main():
             else:
                 m["giver_memory_misses"] += 1
         if a == "return_to_giver":
+            # Navigation Memory: маршрут «текущая позиция -> гивер»
+            try:
+                _ppos = env._last_info.get("player_pos") or [0, 0]
+                _gpos = (ws.get("quest") or {}).get("giver_id")
+                _gt = world_mem.giver_pos(str(_gpos)) if _gpos else None
+                if not _gt and ws.get("distance_to_giver", 999) < 999:
+                    # цель неизвестна точно — используем направление как ячейку
+                    _gt = {"x": _ppos[0], "z": _ppos[1]}
+                if _gt and _gt.get("x") is not None:
+                    if m.get("_nav_route_key") is None:
+                        m["_nav_route_key"] = nav_memory.record_attempt(_ppos, [_gt["x"], _gt["z"]])
+                    _d0 = m.get("_nav_dist0")
+                    _d1 = ws.get("distance_to_giver")
+                    if _d0 is None:
+                        m["_nav_dist0"] = _d1
+                    progress = (_d0 - _d1) if (_d0 is not None and _d1 is not None) else 0.0
+                    if verdict in ("SUCCESS", "FAILURE"):
+                        nav_memory.record_result(m["_nav_route_key"],
+                                                 success=(verdict == "SUCCESS"),
+                                                 dist_progress=progress or 0.0)
+                        m["_nav_route_key"] = None
+                        m["_nav_dist0"] = None
+                        if i % SAVE_EVERY == 0:
+                            nav_memory.save()
+            except Exception:
+                traceback.print_exc()
             if verdict == "SUCCESS":
                 m["navigation_success"] += 1
                 if m["_last_turnin_partial"]:
