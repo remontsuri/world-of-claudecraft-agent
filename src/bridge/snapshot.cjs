@@ -5,6 +5,7 @@
 // here — the caller (actions.js / dispatch) turns null into {ok:false,error}.
 
 const path = require('path');
+const { QUEST_OBJECTIVES } = require('./quest_objectives.cjs');
 const fs = require('fs');
 
 // Static Farshore NPC positions + quest -> turn-in NPC, sourced from
@@ -133,16 +134,18 @@ function readGameState() {
       const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
       const nObj = Math.max((qp.counts || []).length, (def && Array.isArray(def.objectives)) ? def.objectives.length : 0);
       const objs = [];
+      const fallback = QUEST_OBJECTIVES[qid] || null;
       for (let i = 0; i < nObj; i++) {
         const o = (def && Array.isArray(def.objectives)) ? def.objectives[i] : null;
+        const fb = (fallback && fallback[i]) || null;
         const resolved = qp.resolvedCounts ? qp.resolvedCounts[i] : undefined;
         objs.push({
-          type: o && o.type || null,
-          itemId: o && o.itemId || null,
-          nodeType: o && o.nodeType || null,
-          targetMobId: o && o.targetMobId || null,
+          type: (o && o.type) || (fb && fb.type) || null,
+          itemId: (o && o.itemId) || (fb && fb.itemId) || null,
+          nodeType: (o && o.nodeType) || (fb && fb.nodeType) || null,
+          targetMobId: (o && o.targetMobId) || (fb && fb.targetMobId) || null,
           current: (qp.counts && qp.counts[i]) || 0,
-          required: (resolved != null ? resolved : (o && (o.count != null ? o.count : o.required))) || 0,
+          required: (resolved != null ? resolved : ((o && o.count != null) ? o.count : (fb && fb.count) || 0)) || 0,
         });
       }
       const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
