@@ -250,6 +250,10 @@ class BrowserEnv:
             qid = ctx.get("questId") or q.get("id")
             if qid:
                 payload["questId"] = qid
+            # 2026-08-25 (таргетинг): квестовый моб для farm. Берём ПЕРВУЮ
+            # неполную kill-цель активного квеста — policy кладёт её в ctx.
+            if ctx.get("targetMobId"):
+                payload["targetMobId"] = str(ctx["targetMobId"])
             # giver id (NPC entity id) — the bridge returns its live position so
             # Python can persist it in WorldMemory as the turn-in location.
             npc = ctx.get("npc") or {}

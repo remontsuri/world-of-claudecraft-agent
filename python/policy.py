@@ -639,6 +639,24 @@ class GoalManager:
             keep = set(ws.get("quest_items_needed", set()))
             keep |= set(ws.get("craft_items_needed", set()))
             ctx["keepIds"] = list(keep)
+        if action == SKILL_FARM:
+            # Таргетинг (2026-08-25): первая неполная kill-цель активного квеста.
+            # Bridge фильтрует мобов по templateId — агент бьёт квестовых, а не
+            # ближайших чужих. Нет kill-цели -> ctx пуст -> fallback на nearest.
+            for qq in ((info.get("quests") or {}).get("active") or []):
+                _done_q = True
+                _mob = None
+                for o in (qq.get("objectives") or []):
+                    if o.get("type") == "kill" and o.get("targetMobId"):
+                        cur = o.get("current") or 0
+                        req = o.get("required") or 0
+                        if cur < req:
+                            _mob = o["targetMobId"]
+                            _done_q = False
+                            break
+                if _mob:
+                    ctx["targetMobId"] = _mob
+                    break
         if action in (SKILL_TURN_IN, SKILL_RETURN, SKILL_ACCEPT):
             quests = info.get("quests", {}) or {}
             active = quests.get("active") or []

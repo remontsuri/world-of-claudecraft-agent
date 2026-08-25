@@ -51,18 +51,29 @@ async function applyAction(idx, cmd, gameClient) {
   // (например gatherNoTarget: у gather не было ни узла, ни трупа).
   let gatherNoTarget = false;
   switch (idx) {
-    case 0: { // farm: chase + attack nearest HOSTILE living mob until it dies
-      const targetId = await gameClient.evaluate(() => {
+    case 0: { // farm: chase + attack HOSTILE living mob until it dies
+      // 2026-08-25 (план таргетинга): приоритет квестовой цели. cmd.targetMobId
+      // приходит из Python (первая неполная kill-цель активного квеста).
+      // Если такой моб есть в радиусе — атакуем ЕГО, а не ближайшего чужого.
+      // Нет квестового моба рядом -> fallback на ближайший hostile (как раньше),
+      // чтобы агент не столбился.
+      const questMobId = (cmd && cmd.targetMobId) || null;
+      const targetId = await gameClient.evaluate((qm) => {
         const g = window.__game, sim = g.sim, p = sim.player;
         let best = null, bd = Infinity;
+        let questBest = null, qbd = Infinity;
         for (const e of sim.entities.values()) {
           if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
           if (e.hostile === false) continue; // peaceful NPC (quest giver / villager)
+          const tid = e.templateId || e.mobId || null;
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
-          if (d <= 120 && d < bd) { bd = d; best = e; }
+          if (d > 120) continue;
+          if (d < bd) { bd = d; best = e; }
+          // квестовый приоритет: совпадение по templateId/mobId
+          if (qm && tid === qm && d < qbd) { qbd = d; questBest = e; }
         }
-        return best ? best.id : null;
-      });
+        return questBest ? questBest.id : (best ? best.id : null);
+      }, questMobId);
       if (targetId == null) break; // no hostile mob in range: inconclusive, not an error
       for (let t = 0; t < 80; t++) {
         const st = await gameClient.evaluate((id) => {
@@ -89,11 +100,35 @@ async function applyAction(idx, cmd, gameClient) {
           const desired = Math.atan2(dx, dz);
           let off = desired - p.facing;
           off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          if (d > 7) {
+          // 2026-08-25: per-class chase-дистанция (план таргетинга, п.2).
+          // Ranged-классы НЕ должны забегать в мили: mage wand maxRange=30,
+          // hunter auto shot maxRange=35 (classes.ts). Чейзим до RANGED_STOP,
+          // дальше стоим — автоатака/каст сами достают (auto_attack.ts:210
+          // бьёт ranged при d<=maxRange). Melee-классы ведут себя как раньше.
+          // Профиль резолвится из класса через rangedAutoProfile.
+          let chaseStopDist = 7; // melee default (MELEE_RANGE+запас)
+          try {
+            const cls = (g.online && g.online.ownPlayerClass) || null;
+            // RANGED_CLASSES: mage/hunter/priest/warlock/druid(caster)/shaman —
+            // у всех есть wand/auto-shot профиль в classes.ts с maxRange>=30.
+            // Warrior/rogue — melee, остаются на 7 yd.
+            const RANGED = new Set(['mage','hunter','priest','warlock','shaman']);
+            if (cls && RANGED.has(cls)) {
+              // стоп чуть внутри maxRange 30-35: запас на дрейф и поворот
+              chaseStopDist = 27;
+            }
+          } catch (_) {}
+          if (d > chaseStopDist) {
             // курс на моба одним вызовом face() — без импульсного рыскания
             try { g.controller.face(desired); } catch (_) {}
             g.controller.move({ forward: true });
             return { d, phase: 'chase' };
+          }
+          if (chaseStopDist > 7 && d > 7) {
+            // ranged-стойло: в радиусе атаки — СТОП, никакого подхода в мили
+            try { g.controller.face(desired); } catch (_) {}
+            try { g.controller.stop(); } catch (_) {}
+            return { d, phase: 'ranged_hold' };
           }
           // в упор: только доворот, вперёд не идём (иначе толкаем моба).
           // Порог 0.12 рад (FACE_EPS), а не 0.25: при 14° удар мог не попасть.
