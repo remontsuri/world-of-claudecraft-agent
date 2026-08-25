@@ -161,7 +161,6 @@ async function applyAction(idx, cmd, gameClient) {
           return { d, phase: 'attack', dead: !!p.dead };
         }, targetId);
         if (st && st.gone) break;
-        await sleep(gameClient.tickMs);
       }
       break;
     }
