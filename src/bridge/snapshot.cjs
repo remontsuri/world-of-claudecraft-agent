@@ -132,9 +132,12 @@ function readGameState() {
     qlog.forEach((qp, qid) => {
       const st = qp.state || 'active';
       const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
-      const nObj = Math.max((qp.counts || []).length, (def && Array.isArray(def.objectives)) ? def.objectives.length : 0);
-      const objs = [];
       const fallback = QUEST_OBJECTIVES[qid] || null;
+      // nObj ДОЛЖЕН учитывать fallback: игра не отдаёт questDefs, и если
+      // qp.counts пуст, без fallback.length цикл не создаст ни одного
+      // objective — агент не видит, что делать (корень «не понимает квесты»).
+      const nObj = Math.max((qp.counts || []).length, (def && Array.isArray(def.objectives)) ? def.objectives.length : 0, (fallback && fallback.length) || 0);
+      const objs = [];
       for (let i = 0; i < nObj; i++) {
         const o = (def && Array.isArray(def.objectives)) ? def.objectives[i] : null;
         const fb = (fallback && fallback[i]) || null;
