@@ -41,6 +41,34 @@
    "key": "spin:buy",
    "hint": "reduce_weight",
    "t": 1787676286.847003
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'buy' took 150/150 steps with avg reward +0.000 - spinning",
+   "key": "spin:buy",
+   "hint": "reduce_weight",
+   "t": 1787678106.6208827
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'buy' took 150/150 steps with avg reward +0.000 - spinning",
+   "key": "spin:buy",
+   "hint": "reduce_weight",
+   "t": 1787679235.5140674
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'buy' took 150/150 steps with avg reward +0.000 - spinning",
+   "key": "spin:buy",
+   "hint": "reduce_weight",
+   "t": 1787683460.5326858
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'buy' took 150/150 steps with avg reward +0.000 - spinning",
+   "key": "spin:buy",
+   "hint": "reduce_weight",
+   "t": 1787685174.1880658
   }
  ]
 }
