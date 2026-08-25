@@ -404,9 +404,11 @@ async function applyAction(idx, cmd, gameClient) {
             }
           }
           if (!best) return { none: true };
-          if (best.id) {
-            try { sim.buyItem(best.id, wanted); return { ok: best.id, d: bd }; } catch (_) {}
-          }
+          // ДИСТАНЦИЯ ПЕРЕД ПОКУПКОЙ: sim.buyItem у дальнего вендора не бросает
+          // exception, а тихо ничего не делает -> старый код возвращал ok на
+          // 100 yd и navigate никогда не срабатывал (review f1ce454).
+          if (bd > 5) return { far: true, x: best.x, z: best.z, d: bd };
+          try { sim.buyItem(best.id, wanted); return { ok: best.id, d: bd }; } catch (_) {}
           return { far: true, x: best.x, z: best.z, d: bd };
         }, itemId);
         if (v && v.none) break;                       // вендоров нет вообще
