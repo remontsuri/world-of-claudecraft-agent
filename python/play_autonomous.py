@@ -235,6 +235,9 @@ def main():
     # питают рефлексию, а завершения квестов — StrategyMemory.
     from event_bus import EventBus
     ebus = EventBus(spawn_points=[[0.0, 0.0]])
+    # Failure Analyzer (план 2026-08-24, п.4): структурированные причины неудач
+    from failure_analyzer import FailureAnalyzer
+    fail_analyzer = FailureAnalyzer()
     brain = None
     # 2026-08-24 (аудит: HARMFUL): вызов LLM в горячем цикле замедлял шаг в 6
     # раз (0.30с -> 1.80с; 75 мин чистой латентности на 3000 шагов), а её цели
@@ -698,6 +701,24 @@ def main():
             refl.observe(rec)
         except Exception:
             traceback.print_exc()
+        # Failure Analyzer (план 2026-08-24, п.4): каждая FAILURE ->
+        # структурированная причина {failure, cause, fix, retry}.
+        try:
+            _fa_rec = fail_analyzer.observe_step({
+                "step": i, "action": a, "verdict": rec["verdict"],
+                "kind": rec["outcome_kind"], "hp": ws.get("hp_frac"),
+                "dist": ws.get("distance_to_giver"), "goal": goal_fsm.goal,
+                "quest_status": ws.get("quest_status"),
+                "cell": cell, "deaths": ws.get("deaths"),
+                "error": rec.get("error") or "",
+            })
+            if i % SAVE_EVERY == 0:
+                fail_analyzer.save()
+            if _fa_rec and i % 500 == 0:
+                print(f"[failures] {_fa_rec['action']}: {_fa_rec['cause']} -> {_fa_rec['fix']}",
+                      flush=True)
+        except Exception:
+            traceback.print_exc()
         # periodic replay buffer flush (cheap, atomic) + training pass
         if i % SAVE_EVERY == 0:
             replay.save()
@@ -795,6 +816,7 @@ def _summary(m, i, start, logf, final=False):
            f"  quest_turnin_failures={m['quest_turnin_failures']} programming_errors={m['programming_errors']} bridge_errors={m['bridge_errors']} episodes={m['episodes']}\n"
            f"  neg_lessons={m['neg_lessons']} repeated_mistakes={m['repeated_mistakes']} "
            f"recovery_after_neg={m['recovery_after_neg']} goal_switches={m['goal_switches']}\n"
+           f"  {fail_analyzer.summary_line()} | top_fixes={dict(fail_analyzer.fixes.most_common(3))}\n"
            f"  reward_mean={m['reward_mean']:+.3f} actions={dict(m['action_counts'])}\n")
     print(msg)
     if logf is not None:
