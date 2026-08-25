@@ -147,9 +147,29 @@ class Agent:
             if action == "sell_junk":
                 # atomic economy capability: use a live vendor when present or a
                 # persistent vendor location learned from prior observations.
+                # P1 №7 fix (2026-08-25, regression run PID 8356): SUCCESS ставился
+                # по факту вызова env.step(4), без проверки продажи. 2000/2000
+                # sell_junk SUCCESS при reward=0.000 -> вырожденная политика.
+                # Теперь верифицируем copper-delta как любую мутацию.
+                import verifiers_py as _vp
+                before_inv = [dict(s) for s in (self.env._last_info or {}).get("inventory", []) or []]
+                before_copper = (self.env._last_info or {}).get("copper", 0)
                 res = quest_skill.sell_junk(self.env, self.world_mem)
                 after = self.env._last_info
-                verdict = "SUCCESS" if res == "SUCCESS" else ("INCONCLUSIVE" if res == "PARTIAL" else "FAILURE")
+                if res == "SUCCESS":
+                    v = _vp.verify_skill("sell_junk", {
+                        "before": {"player": {"copper": before_copper}, "inventory": before_inv},
+                        "after": after,
+                    })
+                    verdict = v if isinstance(v, str) else str(v)
+                    # пустой junk-набор: команда прошла, продавать было нечего ->
+                    # это FAILURE выбора (нечего продавать), не inconclusive
+                    if verdict == "inconclusive":
+                        verdict = "failure"
+                elif res == "PARTIAL":
+                    verdict = "INCONCLUSIVE"
+                else:
+                    verdict = "FAILURE"
                 return after, verdict, "OK"
             if action == "turn_in_quest":
                 # atomic: walk back (short nav) + turn_in. Use QuestCapability path
