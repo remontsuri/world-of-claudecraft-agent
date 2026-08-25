@@ -60,7 +60,8 @@ PHASE_ALLOWED = {
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
     "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
-                        SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT],
+                        SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT,
+                        SKILL_SELL],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
     "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
@@ -575,14 +576,12 @@ class GoalManager:
         cands = self._candidates(info, ws, goal=goal)
         # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
         # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
-        # крафт и лут. Если сумки полные и есть вендор — форсируем sell_junk.
-        import re as _re
-        _mat_re = _re.compile(r'hide|fang|silk|gland|leg|scrap|cloth|weave|ore|bar|log|plank')
+        # крафт и лут. Форсируем sell независимо от cands и фазы — skill
+        # сам дойдёт до вендора через navigate.
         inv_sell = info.get("inventory") or []
         bag_slots_sell = len([s for s in inv_sell if s])
         bag_capacity = ws.get("bag_capacity", 16)
-        # Форсируем продажу когда сумки полные (остаётся < 3 слотов)
-        if bag_slots_sell >= bag_capacity - 3 and SKILL_SELL in cands:
+        if bag_slots_sell >= bag_capacity - 3:
             keep_sell = set(ws.get("quest_items_needed", set()))
             keep_sell |= set(ws.get("craft_items_needed", set()))
             keep_sell |= {"baked_bread", "spring_water", "conjured_bread", "conjured_water", "copper_mining_pick"}
@@ -594,9 +593,8 @@ class GoalManager:
                 counts_sell[iid] = counts_sell.get(iid, 0) + (s.get("count") or 1)
             for iid, cnt in counts_sell.items():
                 if iid in keep_sell: continue
-                if not _mat_re.search(iid): continue
                 if cnt - 3 >= 3:
-                    return SKILL_SELL, {}
+                    return SKILL_SELL, {"keepIds": list(keep_sell)}
         # Ruling (2026-08-23): inside RETURN_TO_GIVER / TURN_IN phases the correct
         # skill is deterministic — navigate toward the giver, then turn in. Leaving
         # the choice to softmax let Q-values re-derive a farm/heal loop while the
