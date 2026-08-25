@@ -37,7 +37,7 @@ SKILL_RETURN = "return_to_giver"
 SKILL_HEAL = "heal"
 SKILL_SELL = "sell_junk"
 SKILL_GATHER = "gather"
-SKILL_EQUIP = "equip"      # unequipped gear item in bag -> bridge equipItem
+SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
 SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
 SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
 SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
@@ -574,6 +574,14 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         cands = self._candidates(info, ws, goal=goal)
+        # ПРИОРИТЕТ: инструмент для gather-квеста.
+        # Если нужен logging_axe / herb_sack и его нет — форсируем buy.
+        # Мост сам дойдёт до вендора (navigate к vendorPos из WorldMemory).
+        need = ws.get("needs_tool")
+        if need:
+            has_tool = any(s.get("itemId") == need for s in (info.get("inventory") or []))
+            if not has_tool:
+                return SKILL_BUY, {"buyItemId": need}
         # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
         # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
         # крафт и лут. Форсируем sell независимо от cands и фазы — skill
@@ -656,6 +664,15 @@ class GoalManager:
             keep = set(ws.get("quest_items_needed", set()))
             keep |= set(ws.get("craft_items_needed", set()))
             ctx["keepIds"] = list(keep)
+        if action == SKILL_BUY:
+            # Покупка инструмента для gather-квеста (2026-08-25)
+            need = ws.get("needs_tool")
+            if need:
+                ctx["buyItemId"] = need
+                # Вендор из WorldMemory (Trader Wilkes и др.)
+                vendor = world_mem.vendor_pos("trader_wilkes") if world_mem else None
+                if vendor:
+                    ctx["vendorPos"] = vendor
         if action == SKILL_FARM:
             # Таргетинг (2026-08-25): первая неполная kill-цель активного квеста.
             # Bridge фильтрует мобов по templateId — агент бьёт квестовых, а не

@@ -1,3 +1,18 @@
+
+def _gather_tool_needed(info: dict):
+    """Инструмент, нужный для активных gather-квестов (gathering.ts)."""
+    TOOLS = {"mining": "copper_mining_pick", "logging": "logging_axe", "herbalism": "herb_sack"}
+    NODE_PROF = {"ore": "mining", "wood": "logging", "herb": "herbalism"}
+    for q in ((info.get("quests") or {}).get("active") or []):
+        for o in (q.get("objectives") or []):
+            if o.get("type") == "gather" and o.get("nodeType"):
+                cur = o.get("current") or 0
+                req = o.get("required") or 0
+                if cur < req:
+                    prof = NODE_PROF.get(o["nodeType"])
+                    return TOOLS.get(prof)
+    return None
+
 """world_state.py — SINGLE source of truth for the agent's WorldState.
 
 Why this file exists (bug found 2026-08-17, measured by _diag_bucket.py):
@@ -328,4 +343,7 @@ def build_world_state(info: Dict) -> Dict:
         # продаст quest_item и не сможет сдать квест.
         "quest_items_needed": quest_items_needed,
         "craft_items_needed": craft_items_needed,
+        # Сбор ресурсов: какой инструмент нужен для активных gather-квестов.
+        # ore→mining(copper_mining_pick), wood→logging(logging_axe), herb→herbalism(herb_sack)
+        "needs_tool": _gather_tool_needed(info) or None,
     }
