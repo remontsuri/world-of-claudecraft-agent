@@ -62,7 +62,7 @@ PHASE_ALLOWED = {
     "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
                         SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
-    "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN],
+    "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
     "HEAL":            [SKILL_HEAL],
 }
@@ -344,14 +344,32 @@ class GoalManager:
             # never reach the vendor because navigate_to_vendor does not exist.
             # Mirror the SKILL_BUY distance gate.
             ppos = info.get("player_pos") or [0, 0]
+            # ИСПРАВЛЕНО 2026-08-24: радиус увеличен до 18 yd (было 12).
+            # Агент застревал с полными сумками (26/16), потому что вендоры
+            # были в 10-12 yd — чуть дальше порога. Сервер отклоняет сдачу
+            # квеста (bagsFullError в quest_commands.ts:367-394), если награда
+            # не влезает. Теперь агент видит вендора и может продать мусор.
             vendor_near = any(
                 (e.get("kind") == "npc" or e.get("type") == "npc")
                 and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
-                and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+                and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 18
                 for e in near
             )
             if vendor_near:
                 cands.append(SKILL_SELL)
+        # ИСПРАВЛЕНО 2026-08-24: форсированный sell_junk при критически полных сумках.
+        # Сервер отклоняет сдачу квеста (bagsFullError), если награда не влезает.
+        # Просто добавить sell_junk в кандидаты недостаточно — Q-table выбирает farm.
+        # Теперь при >=16 слотов sell_junk добавляется с приоритетом (в начало списка).
+        bag_critical = bag_slots >= 16
+        if bag_critical and vendor_near:
+            # Форсируем sell_junk — добавляем в начало, чтобы softmax выбрал его
+            if SKILL_SELL not in cands:
+                cands.insert(0, SKILL_SELL)
+            else:
+                # Перемещаем в начало списка — выше приоритет
+                cands.remove(SKILL_SELL)
+                cands.insert(0, SKILL_SELL)
         # gather: a harvestable node within reach (bridge harvestNode picks nearest
         # in radius 60). Only a candidate when such a node exists nearby.
         if any((e.get("kind") == "gather_node" or e.get("nodeType") or e.get("gatherTier") is not None)
@@ -538,6 +556,30 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         cands = self._candidates(info, ws, goal=goal)
+        # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
+        # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
+        # крафт и лут. Если сумки полные и есть вендор — форсируем sell_junk.
+        import re as _re
+        _mat_re = _re.compile(r'hide|fang|silk|gland|leg|scrap|cloth|weave|ore|bar|log|plank')
+        inv_sell = info.get("inventory") or []
+        bag_slots_sell = len([s for s in inv_sell if s])
+        bag_capacity = ws.get("bag_capacity", 16)
+        # Форсируем продажу когда сумки полные (остаётся < 3 слотов)
+        if bag_slots_sell >= bag_capacity - 3 and SKILL_SELL in cands:
+            keep_sell = set(ws.get("quest_items_needed", set()))
+            keep_sell |= set(ws.get("craft_items_needed", set()))
+            keep_sell |= {"baked_bread", "spring_water", "conjured_bread", "conjured_water", "copper_mining_pick"}
+            counts_sell = {}
+            for s in inv_sell:
+                if not s: continue
+                iid = s.get("itemId") or (s.get("def") or {}).get("id")
+                if not iid: continue
+                counts_sell[iid] = counts_sell.get(iid, 0) + (s.get("count") or 1)
+            for iid, cnt in counts_sell.items():
+                if iid in keep_sell: continue
+                if not _mat_re.search(iid): continue
+                if cnt - 3 >= 3:
+                    return SKILL_SELL, {}
         # Ruling (2026-08-23): inside RETURN_TO_GIVER / TURN_IN phases the correct
         # skill is deterministic — navigate toward the giver, then turn in. Leaving
         # the choice to softmax let Q-values re-derive a farm/heal loop while the
@@ -547,6 +589,7 @@ class GoalManager:
                 and SKILL_RETURN in cands:
             return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
         if goal == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35:
+
             # КОРНЕВОЙ ФИКС 2026-08-24 (подтверждён верификатором по исходникам):
             # сдача проходит ТОЛЬКО в пределах INTERACT_RANGE+2 = 7 ярдов
             # (quests/quest_commands.ts:148). Замер: гиверы были в 59-65 yd,
@@ -591,6 +634,11 @@ class GoalManager:
             craftable = ws.get("craftable_now") or []
             if craftable:
                 ctx["recipeId"] = craftable[0]["id"]
+        if action == SKILL_SELL:
+            # Умная продажа: не продавать нужное для квестов и крафта
+            keep = set(ws.get("quest_items_needed", set()))
+            keep |= set(ws.get("craft_items_needed", set()))
+            ctx["keepIds"] = list(keep)
         if action in (SKILL_TURN_IN, SKILL_RETURN, SKILL_ACCEPT):
             quests = info.get("quests", {}) or {}
             active = quests.get("active") or []

@@ -65,6 +65,10 @@ def build_world_state(info: Dict) -> Dict:
     )
 
     inv = info.get("inventory") or []
+    # Вместимость сумок: реальная из игры (BACKPACK_SLOTS + сумки)
+    bag_capacity = info.get("bagCapacity") or 16
+    bag_slots_used = len([s for s in inv if s])
+    bag_full = bag_slots_used >= bag_capacity
     has_junk = any((i.get("quality") or 0) == 0 for i in inv)
 
     # vendor proximity: is a vendor NPC within interact range? Drives sell_junk
@@ -254,6 +258,20 @@ def build_world_state(info: Dict) -> Dict:
     dead = bool(p.get("dead"))
     danger = dead or (hp_frac < 0.3) or in_combat
 
+    # Умная продажа: какие предметы НУЖНЫ для квестов и крафта.
+    # Продавать только то, чего нет в этих множествах — иначе агент
+    # продаст quest_item и не сможет сдать квест.
+    quest_items_needed = set()
+    craft_items_needed = set()
+    for q in all_q:
+        for o in (q.get("objectives") or []):
+            if o.get("type") == "collect" and o.get("itemId"):
+                quest_items_needed.add(o["itemId"])
+    for rec in (info.get("recipes_known") or []):
+        for rg in (rec.get("reagents") or []):
+            if rg.get("itemId"):
+                craft_items_needed.add(rg["itemId"])
+
     # has_ready: a turn-in-ready quest exists in the log (any). The FSM keeps a
 
     return {
@@ -293,6 +311,8 @@ def build_world_state(info: Dict) -> Dict:
         ),
         "deaths": info.get("deaths", 0),
         "inv_slots": len(inv),
+        "bag_capacity": bag_capacity,
+        "bag_full": bag_full,
         "quest_progress": quest_progress,
         # structured quest view (numbers, not bits) — see task 2
         "quest": quest_struct,
@@ -303,4 +323,9 @@ def build_world_state(info: Dict) -> Dict:
         # economy view: inventory by id, recipes craftable right now
         "inv_by_id": inv_by_id,
         "craftable_now": craftable_now,
+        # Умная продажа: какие предметы НУЖНЫ для квестов и крафта.
+        # Продавать только то, чего нет в этих множествах — иначе агент
+        # продаст quest_item и не сможет сдать квест.
+        "quest_items_needed": quest_items_needed,
+        "craft_items_needed": craft_items_needed,
     }

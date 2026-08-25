@@ -209,6 +209,9 @@ function readGameState() {
     mana: p.resource, maxMana: p.maxResource,
     abilities,
     player_pos: [p.pos.x, p.pos.z],
+    // Сумки: реальная вместимость из игры (BACKPACK_SLOTS + сумки)
+    bags: sim.bags || [],
+    bagCapacity: (typeof sim.bagCapacity === 'number') ? sim.bagCapacity : 16,
     nearby,
     // live NPC positions by templateId — the AUTHORITATIVE turn-in source
     // (static layout tables drifted from the real world). Collected for every

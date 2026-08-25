@@ -803,7 +803,7 @@ def main():
         brain_fail_streak = brain_fail_streak + 1 if rec["verdict"] == "FAILURE" else 0
         if i % SAVE_EVERY == 0:
             mem.save()
-            _summary(m, i, start, logf)
+            _summary(m, i, start, logf, fail_analyzer=fail_analyzer)
         if (i + 1) % WINDOW == 0:
             _window_summary(m, i, logf)
             m["win_reward"] = 0.0
@@ -815,7 +815,7 @@ def main():
     mem.save()
     logf.close()
     env.close()
-    _summary(m, m["steps"], start, None, final=True)
+    _summary(m, m["steps"], start, None, final=True, fail_analyzer=fail_analyzer)
     print(f"\n[autonomous] done. log -> {LOG_PATH}, memory -> {EXP_PATH}")
     # release the single-instance lock so a future launch can start cleanly
     try:
@@ -825,7 +825,7 @@ def main():
         pass
 
 
-def _summary(m, i, start, logf, final=False):
+def _summary(m, i, start, logf, final=False, fail_analyzer=None):
     el = time.time() - start
     # главный показатель долгосрочной автономности
     qtr = (m["quests_turned_in"] / m["quests_completed"]) if m["quests_completed"] else 0.0
@@ -845,7 +845,8 @@ def _summary(m, i, start, logf, final=False):
            f"  quest_turnin_failures={m['quest_turnin_failures']} programming_errors={m['programming_errors']} bridge_errors={m['bridge_errors']} episodes={m['episodes']}\n"
            f"  neg_lessons={m['neg_lessons']} repeated_mistakes={m['repeated_mistakes']} "
            f"recovery_after_neg={m['recovery_after_neg']} goal_switches={m['goal_switches']}\n"
-           f"  {fail_analyzer.summary_line()} | top_fixes={dict(fail_analyzer.fixes.most_common(3))}\n"
+           f"  {(fail_analyzer.summary_line() if fail_analyzer else 'failures=n/a')}"
+           f" | top_fixes={(dict(fail_analyzer.fixes.most_common(3)) if fail_analyzer else {})}\n"
            f"  reward_mean={m['reward_mean']:+.3f} actions={dict(m['action_counts'])}\n")
     print(msg)
     if logf is not None:
