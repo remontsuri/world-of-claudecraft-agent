@@ -174,7 +174,10 @@ function readGameState() {
     // предмете -> бесконечный buy-saturation.
     itemId: slot.itemId || (slot.def && slot.def.id) || null,
     name: slot.name || (slot.def && slot.def.name) || null,
-    quality: slot.quality ?? (slot.def ? slot.def.quality : undefined) ?? 0,
+    // quality: НЕ выдумываем 0. Живой замер — поле undefined у всех слотов;
+    // прежний `?? 0` генерировал фейковое quality:0 (== junk в старом
+    // детекте). Отдаём null когда игра не даёт данных.
+    quality: slot.quality ?? (slot.def ? slot.def.quality : undefined) ?? null,
     count: slot.count || 1,
   }));
   let knownIds = [];

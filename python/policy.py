@@ -776,13 +776,19 @@ class GoalManager:
         """
         self.mem.update(ws, action, reward, next_state=next_state, outcome_kind=outcome_kind, candidates=candidates)
         # P0 №5 (stateful buy): считаем неудачи покупки -> cooldown 30 шагов
-        # после 3 неудач подряд. Успех (инструмент появился) сбрасывает.
+        # после 3 неудач ПО ОДНОМУ И ТОМУ ЖЕ предмету. Успех сбрасывает.
+        # Fix (review 1d4cceb): last_item устанавливается при КАЖДОЙ попытке,
+        # раньше оставался None и счётчик никогда не инкрементировался.
         if action == SKILL_BUY:
             item = ws.get("needs_tool")
             if reward > 0:
                 self._buy_state["fails"] = 0
                 self._buy_state["last_item"] = None
-            elif item and item == self._buy_state.get("last_item", item):
-                self._buy_state["fails"] += 1
+            elif item:
+                if self._buy_state["last_item"] == item:
+                    self._buy_state["fails"] += 1
+                else:
+                    self._buy_state["last_item"] = item
+                    self._buy_state["fails"] = 1
                 if self._buy_state["fails"] >= 3:
                     self._buy_state["cooldown_until_step"] = (self.step_idx or 0) + 30
