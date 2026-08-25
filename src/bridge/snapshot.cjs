@@ -97,6 +97,11 @@ function loadWorldMemory() {
 // The in-page reader: extracts raw game state. Throws on dead context (caller
 // catches via safeEval). Returns a flat object or throws.
 function readGameState() {
+  // QUEST_OBJECTIVES инлайнятся в тело функции: readGameState сериализуется
+  // через .toString() и исполняется ВНУТРИ страницы, где Node-require
+  // недоступен (баг 2026-08-25: "QUEST_OBJECTIVES is not defined" ронял
+  // весь snapshot -> агент не запускался).
+  const QUEST_OBJECTIVES = {"q_prof_intro":[{"type":"gather","nodeType":"ore","count":5}],"q_wolves":[{"type":"kill","targetMobId":"forest_wolf","count":8}],"q_greyjaw":[{"type":"collect","itemId":"greyjaw_fang","count":1}],"q_boars":[{"type":"collect","itemId":"boar_hide","count":5}],"q_spiders":[{"type":"kill","targetMobId":"webwood_spider","count":6},{"type":"collect","itemId":"webwood_silk","count":4}],"q_murlocs":[{"type":"kill","targetMobId":"mudfin_murloc","count":8}],"q_bandits":[{"type":"kill","targetMobId":"vale_bandit","count":10}],"q_prof_workorder_kitchens":[{"type":"collect","itemId":"game_meat","count":8}],"q_prof_workorder_loom":[{"type":"collect","itemId":"spider_silk","count":6}],"q_prof_attune_smith":[{"type":"gather","nodeType":"ore","count":3}],"q_prof_workorder_forge":[{"type":"collect","itemId":"copper_ore","count":8}],"q_prof_workorder_toolworks":[{"type":"collect","itemId":"ironbark_log","count":8}]};
   const g = window.__game, sim = g.sim, p = sim.player;
   const nearby = [];
   for (const e of sim.entities.values()) {
