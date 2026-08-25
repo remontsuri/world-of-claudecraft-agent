@@ -1,6 +1,6 @@
 {
- "goal": "TURN_IN",
- "quest_id": "q_prof_workorder_loom",
+ "goal": "DO_OBJECTIVE",
+ "quest_id": "q_prof_attune_smith",
  "pre_death_goal": null,
- "updated_at": 1787551941.9629211
+ "updated_at": 1787676221.350933
 }

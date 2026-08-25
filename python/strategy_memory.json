@@ -5,7 +5,12 @@
    "fail": 4382,
    "last_skill": "return_to_giver",
    "best_skill": "return_to_giver",
-   "last_updated": 1787415665.8418148
+   "last_updated": 1787676285.4404356,
+   "completions": {},
+   "steps": {
+    "success": 0,
+    "fail": 201
+   }
   },
   "quest:q_greyjaw": {
    "success": 12024,

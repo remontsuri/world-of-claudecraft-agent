@@ -34,6 +34,13 @@
    "key": "spin:turn_in_quest",
    "hint": "reduce_weight",
    "t": 1787551383.7394676
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'buy' took 150/150 steps with avg reward +0.000 - spinning",
+   "key": "spin:buy",
+   "hint": "reduce_weight",
+   "t": 1787676286.847003
   }
  ]
 }
