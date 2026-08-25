@@ -16,7 +16,10 @@ def _player_hp_max(w):
     # bridge snapshot emits player.maxHp; tolerate hpMax too for forward-compat
     return (w.get('player') or {}).get('maxHp') or (w.get('player') or {}).get('hpMax') or 1
 def _junk_items(w):
-    return [i for i in (w.get('inventory') or []) if (i.get('quality') or 0) == 0]
+    # quality отсутствует в живом инвентаре (замер 2026-08-25) — junk по
+    # quality не определить. Возвращаем пусто; sell-верификация идёт по
+    # copper delta (verify_sell_junk), а не по составу хлама.
+    return []
 def _item_count(w, item_id=None):
     items = w.get('inventory') or []
     if not item_id:
@@ -223,6 +226,9 @@ def verify_equip(c):
     return 'inconclusive'
 
 def verify_buy(c):
+    # P1 №8 fix (2026-08-25): мутационное действие обязано давать
+    # SUCCESS/FAILURE, а не вечный inconclusive — иначе нет negative signal
+    # и политика не учится (замер: 300/300 buy inconclusive).
     h = c.get('handle') or {}
     item_id = h.get('itemId')
     c0 = _player_copper(c['before']); c1 = _player_copper(c['after'])
@@ -230,7 +236,7 @@ def verify_buy(c):
     i1 = _item_count(c['after'], item_id) if item_id else _inv_total(c['after'])
     if i1 > i0 and c1 < c0:
         return 'success'
-    return 'inconclusive'
+    return 'failure'
 
 
 VERIFIERS = {

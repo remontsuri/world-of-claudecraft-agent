@@ -69,6 +69,9 @@ class Agent:
             load_reflection_hints(base_dir)
         self.policy = GoalManager(memory, temperature=1.2, seed=seed,
                                   reflection_hints=hints)
+        # P0 №5 / P1 №11 fix: политика получает WorldMemory (vendor positions)
+        # и счётчик шагов для stateful buy (cooldown после неудач).
+        self.policy.world_mem = self.world_mem
         self.cap = QuestCapability(env)
         # GoalFSM: explicit current_goal, persisted to goal_state.json so an
         # infra restart resumes the in-progress quest instead of NO_QUEST.

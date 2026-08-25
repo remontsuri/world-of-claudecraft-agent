@@ -168,7 +168,11 @@ function readGameState() {
   // g.online.craftingIdentity.knownRecipes (verified live); recipes with full
   // reagent data on sim.recipeList.
   const invFull = inv.map((slot) => ({
-    id: slot.itemId || (slot.def && slot.def.id) || null,
+    // CANONICAL SCHEMA (P0 fix 2026-08-25): Python consumers (world_state,
+    // policy needs_tool, verify_buy) читают slot.itemId. Раньше отдавали
+    // "id" -> все проверки has_tool/junk/buy видели None при реальном
+    // предмете -> бесконечный buy-saturation.
+    itemId: slot.itemId || (slot.def && slot.def.id) || null,
     name: slot.name || (slot.def && slot.def.name) || null,
     quality: slot.quality ?? (slot.def ? slot.def.quality : undefined) ?? 0,
     count: slot.count || 1,
@@ -240,7 +244,7 @@ function readGameState() {
       return m;
     })(),
     inventory: invFull,
-    inventory_by_id: invFull.reduce((m, s) => { if (s.id) m[s.id] = (m[s.id] || 0) + (s.count || 1); return m; }, {}),
+    inventory_by_id: invFull.reduce((m, s) => { if (s.itemId) m[s.itemId] = (m[s.itemId] || 0) + (s.count || 1); return m; }, {}),
     recipes_known: recipesKnown,
     stations,
     quests: { active, ready, done },

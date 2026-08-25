@@ -176,6 +176,11 @@ class GoalManager:
         # доказанные стратегии не влияли ни на одно решение. Теперь политика
         # умножает вес доказанного навыка (мягкий prior, не override).
         self.strategy_memory = strategy_memory
+        # P1 №11 fix (2026-08-25): world_mem передаётся Agent'ом; раньше код
+        # в decide() ссылался на несуществующее имя -> latent NameError.
+        self.world_mem = None
+        self._buy_state = {"fails": 0, "cooldown_until_step": -1, "last_item": None}
+        self.step_idx = 0
         self.temperature = temperature
         # Self-learning loop (user 2026-08-22): hints from the agent's own
         # self-reflection journal steer candidate selection:
@@ -208,7 +213,9 @@ class GoalManager:
                    and not e.get("looted")]
         mobs = [e for e in near if (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable")]
         inv = info.get("inventory") or []
-        junk = [i for i in inv if (i.get("quality") or 0) == 0]
+        # quality отсутствует в живом инвентаре (замер 2026-08-25) —
+        # junk-детект по quality==0 помечал ВСЁ как хлам. Не используем.
+        junk = []
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []
 
@@ -574,14 +581,26 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         cands = self._candidates(info, ws, goal=goal)
-        # ПРИОРИТЕТ: инструмент для gather-квеста.
-        # Если нужен logging_axe / herb_sack и его нет — форсируем buy.
-        # Мост сам дойдёт до вендора (navigate к vendorPos из WorldMemory).
+        # ПРИОРИТЕТ: инструмент для gather-квеста (STATEFUL, P0 fix 2026-08-25).
+        # Если нужен handaxe/gathering_sickle/copper_mining_pick и его нет —
+        # форсируем buy, но с retry budget: после 3 неудачных попыток подряд
+        # cooldown 30 шагов, иначе бесконечный BUY-спам (замер: 300/300).
         need = ws.get("needs_tool")
         if need:
             has_tool = any(s.get("itemId") == need for s in (info.get("inventory") or []))
             if not has_tool:
-                return SKILL_BUY, {"buyItemId": need}
+                state = getattr(self, "_buy_state", None)
+                if state is None:
+                    state = self._buy_state = {"fails": 0, "cooldown_until_step": -1}
+                step_idx = getattr(self, "step_idx", 0) or 0
+                if step_idx < state["cooldown_until_step"]:
+                    pass  # cooldown: не форсируем buy, работаем по обычной политике
+                else:
+                    ctx = {"buyItemId": need}
+                    vendor = world_mem.vendor_pos("trader_wilkes") if getattr(self, "world_mem", None) else None
+                    if vendor:
+                        ctx["vendorPos"] = vendor
+                    return SKILL_BUY, ctx
         # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
         # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
         # крафт и лут. Форсируем sell независимо от cands и фазы — skill
@@ -670,7 +689,7 @@ class GoalManager:
             if need:
                 ctx["buyItemId"] = need
                 # Вендор из WorldMemory (Trader Wilkes и др.)
-                vendor = world_mem.vendor_pos("trader_wilkes") if world_mem else None
+                vendor = self.world_mem.vendor_pos("trader_wilkes") if getattr(self, "world_mem", None) else None
                 if vendor:
                     ctx["vendorPos"] = vendor
         if action == SKILL_FARM:
@@ -756,3 +775,14 @@ class GoalManager:
         bootstrap so it maxes only over reachable actions.
         """
         self.mem.update(ws, action, reward, next_state=next_state, outcome_kind=outcome_kind, candidates=candidates)
+        # P0 №5 (stateful buy): считаем неудачи покупки -> cooldown 30 шагов
+        # после 3 неудач подряд. Успех (инструмент появился) сбрасывает.
+        if action == SKILL_BUY:
+            item = ws.get("needs_tool")
+            if reward > 0:
+                self._buy_state["fails"] = 0
+                self._buy_state["last_item"] = None
+            elif item and item == self._buy_state.get("last_item", item):
+                self._buy_state["fails"] += 1
+                if self._buy_state["fails"] >= 3:
+                    self._buy_state["cooldown_until_step"] = (self.step_idx or 0) + 30

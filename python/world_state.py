@@ -88,7 +88,13 @@ def build_world_state(info: Dict) -> Dict:
     bag_capacity = info.get("bagCapacity") or 16
     bag_slots_used = len([s for s in inv if s])
     bag_full = bag_slots_used >= bag_capacity
-    has_junk = any((i.get("quality") or 0) == 0 for i in inv)
+    # quality: живой замер 2026-08-25 — поле ОТСУТСТВУЕТ у всех предметов
+    # (undefined). Junk-детект по quality==0 помечал ВСЁ как хлам.
+    # Пока игра не отдаёт quality, junk = расходники/мусор по whitelist
+    # отсутствует; считаем junk только предметы без квестовой ценности,
+    # которые политика и так продаёт через keepIds-фильтр. Ставим False:
+    # sell_junk вызывается по bag_full, а не по has_junk.
+    has_junk = False
 
     # vendor proximity: is a vendor NPC within interact range? Drives sell_junk
     # candidacy in policy (no point offering sell_junk when the vendor is far,

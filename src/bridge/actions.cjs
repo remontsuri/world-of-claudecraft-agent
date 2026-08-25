@@ -280,7 +280,14 @@ async function applyAction(idx, cmd, gameClient) {
 
       if (target) {
         // Подход к узлу (harvestNode требует <=5 yd), затем добыча.
-        await navigateToCoord(gameClient, target.x, target.z, 120);
+        const arrived = await navigateToCoord(gameClient, target.x, target.z, 120);
+        // P1 №15 fix (2026-08-25): не дошли -> НЕ зовём harvestNode ("Too far
+        // away" давал вечный inconclusive и бесплатный цикл). Честный failure.
+        if (!arrived) {
+          console.warn('[actions] gather: navigation failed to reach node ' + target.id);
+          gatherNoTarget = true;
+          break;
+        }
         // harvestNode запускает каст (~2.5с), ждём завершения, иначе агент
         // уходит сразу и руды не получает.
         await gameClient.evaluate((id) => {

@@ -129,10 +129,24 @@ class QuestCapability:
     def turn_in(self, q: dict) -> str:
         qid = str(q.get("id"))
         try:
+            # TRUTH CONTRACT (P0 fix 2026-08-25): игра после успешной сдачи
+            # ДЕЛАЕТ questLog.delete(qid) + questsDone.add(qid) — квест
+            # исчезает из quests.done в снапшоте. Прежняя проверка
+            # `qid in out["quests"]["done"]` была всегда False для успешной
+            # сдачи -> SUCCESS классифицировался как PARTIAL/INCONCLUSIVE.
+            # Источник истины — счётчик quests_done (Set.size из online).
+            before = (self.env._last_info or {}).get("quests_done", 0)
             out = self.env.base.turn_in_quest(qid)
             self.env._last_info = out
-            in_done = qid in (out.get("quests", {}).get("done", []) or [])
-            return "SUCCESS" if in_done else "PARTIAL"
+            after = (out or {}).get("quests_done", 0)
+            if after > before:
+                return "SUCCESS"
+            # квест мог уйти из log без роста счётчика -> проверяем отсутствие
+            log_quests = ((out or {}).get("quests") or {})
+            in_log = any(str(x.get("id")) == qid for x in (log_quests.get("active", []) + log_quests.get("ready", [])))
+            if not in_log and (out or {}).get("quests_done", 0) >= before:
+                return "SUCCESS"
+            return "PARTIAL"
         except Exception:
             return "FAILURE"
 
