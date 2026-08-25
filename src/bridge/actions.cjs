@@ -161,6 +161,7 @@ async function applyAction(idx, cmd, gameClient) {
           return { d, phase: 'attack', dead: !!p.dead };
         }, targetId);
         if (st && st.gone) break;
+        await sleep(gameClient.tickMs);
       }
       break;
     }
@@ -639,6 +640,7 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
       }
     }
     if (st) lastPos = { x: st.x, z: st.z };
+    await sleep(gameClient.tickMs);
   }
   if (!arrived) {
     await gameClient.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} });
