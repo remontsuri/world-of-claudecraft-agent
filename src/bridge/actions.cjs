@@ -281,9 +281,19 @@ async function applyAction(idx, cmd, gameClient) {
       if (target) {
         // Подход к узлу (harvestNode требует <=5 yd), затем добыча.
         await navigateToCoord(gameClient, target.x, target.z, 120);
+        // harvestNode запускает каст (~2.5с), ждём завершения, иначе агент
+        // уходит сразу и руды не получает.
         await gameClient.evaluate((id) => {
           try { window.__game.sim.harvestNode(String(id)); } catch (_) {}
         }, target.id);
+        for (let i = 0; i < 20; i++) {
+          await sleep(gameClient.tickMs);
+          const done = await gameClient.evaluate(() => {
+            const p = window.__game.sim.player;
+            return !p.castingAbility;
+          }).catch(() => true);
+          if (done) break;
+        }
         break;
       }
       gatherNoTarget = true; // ни живых, ни статических узлов -> честный failure
