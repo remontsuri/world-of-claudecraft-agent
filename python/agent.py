@@ -200,6 +200,11 @@ class Agent:
                         self.env._last_handle_no_target = False
                     except Exception:
                         pass
+                elif action == "buy":
+                    # 2026-08-25 (buy saturation fix): verify_buy требует itemId
+                    # из handle. Без него i0/i1 считались по всей сумке и вердикт
+                    # был всегда 'inconclusive' -> 150/150 спамов без урока.
+                    handle = {"itemId": ctx.get("buyItemId")}
                 v = verify_skill(action, {"before": before, "after": after, "handle": handle})
                 verdict = v if isinstance(v, str) else str(v)
                 return after, verdict, "OK"

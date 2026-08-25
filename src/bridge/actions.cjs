@@ -391,19 +391,33 @@ async function applyAction(idx, cmd, gameClient) {
     case 9: { // buy: buy cmd.buyItemId (default minor_healing_potion) from a nearby vendor
       const DEFAULT_BUY = 'minor_healing_potion';
       const itemId = (cmd && (cmd.buyItemId || cmd.itemId)) || DEFAULT_BUY;
-      const v = await gameClient.evaluate((wanted) => {
-        const sim = window.__game.sim, p = sim.player;
-        for (const e of sim.entities.values()) {
-          if ((e.kind === 'npc' || e.type === 'npc') && (e.vendor || e.isVendor || e.vendorItems)) {
-            const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
-            if (Math.hypot(dx, dz) <= 12) {
-              try { sim.buyItem(e.id, wanted); return e.id; } catch (_) { return null; }
+      let v = null;
+      for (let attempt = 0; attempt < 3 && v == null; attempt++) {
+        v = await gameClient.evaluate((wanted) => {
+          const sim = window.__game.sim, p = sim.player;
+          let best = null, bd = Infinity;
+          for (const e of sim.entities.values()) {
+            if ((e.kind === 'npc' || e.type === 'npc') && (e.vendor || e.isVendor || (Array.isArray(e.vendorItems) && e.vendorItems.length > 0))) {
+              const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+              const d = Math.hypot(dx, dz);
+              if (d < bd) { bd = d; best = { id: e.id, x: e.pos.x, z: e.pos.z }; }
             }
           }
+          if (!best) return { none: true };
+          if (best.id) {
+            try { sim.buyItem(best.id, wanted); return { ok: best.id, d: bd }; } catch (_) {}
+          }
+          return { far: true, x: best.x, z: best.z, d: bd };
+        }, itemId);
+        if (v && v.none) break;                       // вендоров нет вообще
+        if (v && v.far) {
+          // вендор дальше INTERACT_RANGE -> ДОЙТИ и повторить (fix buy saturation:
+          // раньше тихий no-op давал 150/150 спамов без урока)
+          await navigateToCoord(gameClient, v.x, v.z, 60);
         }
-        return null;
-      }, itemId);
-      if (v == null) console.warn('[actions] buy ' + itemId + ': no vendor in range -> no-op');
+      }
+      if (!v || v.none) gatherNoTarget = true;        // честный failure для верификатора
+      else if (v.far) console.warn('[actions] buy ' + itemId + ': vendor too far after nav');
       break;
     }
     case 12: { // craft_item: sim.craftItem(recipeId); Craft Cast System runs a cast
