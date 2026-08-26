@@ -26,6 +26,25 @@ import traceback
 from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
+# Extended replay buffer (Task 8): carries the full autonomy context per
+# transition (goal/subgoal/skill/skill_result/progress_delta/episode_id).
+# Imported here so the learning loop can build one without reaching into a
+# sibling module; memory.ExperienceStore.train_from_replay already accepts any
+# replay exposing .sample() and state/action/reward/next_state, so an
+# ExtendedReplayBuffer is a drop-in replacement for the legacy ReplayBuffer.
+from replay import create_transition, ExtendedReplayBuffer
+
+
+def make_extended_replay(cap: int = 20000, path: Optional[str] = None) -> "ExtendedReplayBuffer":
+    """Build an ExtendedReplayBuffer for this store's learning loop.
+
+    Defaults to a distinct on-disk file (replay_extended.json) so it never
+    clobbers the legacy replay_buffer.json used by play_autonomous.py.
+    """
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), "replay_extended.json")
+    return ExtendedReplayBuffer(cap=cap, path=path)
+
 
 # ---- state discretization ----------------------------------------------------
 def _bucket(state: dict) -> str:
