@@ -86,7 +86,8 @@ def build_world_state(info: Dict) -> Dict:
     nearby = info.get("nearby") or []
     # player_class: the game's own template for the self player entity
     # (sim.entities -> kind == 'player' -> templateId). No hardcoded default.
-    player_class = p.get("templateId") or p.get("classId") or None
+    player_class = (info.get("player_class")
+                    or p.get("templateId") or p.get("classId") or None)
     if player_class is None:
         _self_ents = [e for e in nearby
                       if isinstance(e, dict) and (e.get("kind") == "player" or e.get("type") == "player")]
