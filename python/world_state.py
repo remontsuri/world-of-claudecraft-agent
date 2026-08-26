@@ -1,28 +1,43 @@
 
 def _gather_tool_needed(info: dict):
-    """Инструмент, нужный для активных gather-квестов (gathering.ts).
-    Имена сверены с ЖИВЫМ ассортиментом вендоров (probe 2026-08-25):
-    logging_axe и herb_sack НЕ СУЩЕСТВУЮТ в игре — реальный axe называется
-    handaxe (Trader Wilkes, Tinker Gizzel), травы собирают gathering_sickle
-    (Trader Wilkes, Weaver Ottilie).
+    """Tool id required by an active gather objective — READ FROM THE GAME.
 
-    Инвариант (review): если инструмент УЖЕ в инвентаре, возвращаем None —
-    «есть, но не wield-ится» это состояние EQUIP, а не BUY. Иначе политика
-    уходит в бесконечный buy-spam предмета, который лежит в сумке."""
-    TOOLS = {"mining": "copper_mining_pick", "logging": "handaxe", "herbalism": "gathering_sickle"}
-    NODE_PROF = {"ore": "mining", "wood": "logging", "herb": "herbalism"}
+    Canonical (2026-08-26): the tool item id must come from the snapshot
+    objective itself (`toolItemId` / `requiredToolId` / `toolId`). No static
+    profession->item table lives here any more: hardcoded names drifted from
+    the live item list twice already.
+
+    Invariant kept: if the tool is ALREADY in the bag we return None — that is
+    an EQUIP state, not a BUY state (otherwise the policy buy-spams forever).
+    """
     inv_ids = {s.get("itemId") for s in (info.get("inventory") or []) if isinstance(s, dict)}
     for q in ((info.get("quests") or {}).get("active") or []):
         for o in (q.get("objectives") or []):
-            if o.get("type") == "gather" and o.get("nodeType"):
-                cur = o.get("current") or 0
-                req = o.get("required") or 0
-                if cur < req:
-                    prof = NODE_PROF.get(o["nodeType"])
-                    tool = TOOLS.get(prof)
-                    if tool and tool not in inv_ids:
-                        return tool
+            if o.get("type") != "gather":
+                continue
+            if (o.get("current") or 0) >= (o.get("required") or 0):
+                continue
+            tool = o.get("toolItemId") or o.get("requiredToolId") or o.get("toolId")
+            if tool and tool not in inv_ids:
+                return tool
     return None
+
+
+def _objectives_view(quest: dict):
+    """Objectives exactly as the game reports them (sim.questLog objectives)."""
+    out = []
+    for o in (quest.get("objectives") or []):
+        if not isinstance(o, dict):
+            continue
+        out.append({
+            "type": o.get("type"),
+            "targetMobId": o.get("targetMobId") or o.get("mobId") or o.get("targetId"),
+            "itemId": o.get("itemId"),
+            "nodeType": o.get("nodeType"),
+            "current": o.get("current") or 0,
+            "required": o.get("required") or 0,
+        })
+    return out
 
 """world_state.py — SINGLE source of truth for the agent's WorldState.
 
@@ -69,6 +84,18 @@ def build_world_state(info: Dict) -> Dict:
     hp_frac = (hp / maxhp) if hp is not None else 1.0
 
     nearby = info.get("nearby") or []
+    # player_class: the game's own template for the self player entity
+    # (sim.entities -> kind == 'player' -> templateId). No hardcoded default.
+    player_class = p.get("templateId") or p.get("classId") or None
+    if player_class is None:
+        _self_ents = [e for e in nearby
+                      if isinstance(e, dict) and (e.get("kind") == "player" or e.get("type") == "player")]
+        _self = next((e for e in _self_ents if e.get("self") or e.get("isSelf")), None)
+        if _self is None and len(_self_ents) == 1:
+            _self = _self_ents[0]
+        if _self is not None:
+            player_class = _self.get("templateId") or _self.get("classId") or None
+    player_facing = p.get("facing") if p.get("facing") is not None else info.get("facing")
     pmax = maxhp  # player's own max HP, used to judge mob strength
     # Mob strength: a mob is "strong" if its max HP exceeds the player's by a
     # meaningful margin (can kill the player). This is an OBSERVATION the policy
@@ -119,8 +146,8 @@ def build_world_state(info: Dict) -> Dict:
     # melee-tanks like a warrior and never uses the kit it actually has.
     # mana_frac sentinel -1.0 = "no mana info" (non-caster / older bridge):
     # policy treats it as "cannot cast" without crashing.
-    mana = info.get("mana")
-    max_mana = info.get("maxMana")
+    mana = p.get("mana") if p.get("mana") is not None else info.get("mana")
+    max_mana = p.get("maxMana") if p.get("maxMana") is not None else info.get("maxMana")
     if isinstance(mana, (int, float)) and isinstance(max_mana, (int, float)) and max_mana > 0:
         mana_frac = round(max(0.0, min(1.0, mana / max_mana)), 4)
     else:
@@ -194,6 +221,7 @@ def build_world_state(info: Dict) -> Dict:
         "giver_id": None,
         "giver_known": False,
         "giver_distance": 999.0,
+        "objectives": [],
     }
     if all_q:
         any_incomplete = False
@@ -288,6 +316,7 @@ def build_world_state(info: Dict) -> Dict:
                 "giver_id": str(tNpc.get("id")) if tNpc.get("id") is not None else None,
                 "giver_known": tNpc.get("x") is not None,
                 "giver_distance": distance_to_giver,
+                "objectives": _objectives_view(q),
             }
 
     in_combat = bool(info.get("in_combat"))
@@ -310,7 +339,58 @@ def build_world_state(info: Dict) -> Dict:
 
     # has_ready: a turn-in-ready quest exists in the log (any). The FSM keeps a
 
+    # ---- canonical inventory / world blocks (all values from the snapshot) ----
+    inventory_block = {
+        "capacity": bag_capacity,
+        "used_slots": bag_slots_used,
+        "free_slots": max(0, bag_capacity - bag_slots_used),
+        "quest_items": {
+            iid: cnt for iid, cnt in inv_by_id.items() if iid in quest_items_needed
+        },
+        "by_id": inv_by_id,
+    }
+
+    def _ent(e):
+        return {
+            "id": e.get("id"),
+            "templateId": e.get("templateId"),
+            "name": e.get("name"),
+            "hp": e.get("hp"),
+            "maxHp": e.get("maxHp"),
+            "x": e.get("x"),
+            "z": e.get("z"),
+            "nodeType": e.get("nodeType"),
+            "lootable": bool(e.get("lootable")),
+            "distance": round((((e.get("x") or 0) - ppos[0]) ** 2
+                               + ((e.get("z") or 0) - ppos[1]) ** 2) ** 0.5, 3),
+        }
+
+    nearby_mobs, gather_nodes, vendors = [], [], []
+    for e in nearby:
+        if not isinstance(e, dict):
+            continue
+        kind = e.get("kind") or e.get("type")
+        if kind == "mob" and not e.get("lootable"):
+            nearby_mobs.append(_ent(e))
+        elif kind == "node":
+            gather_nodes.append(_ent(e))
+        elif kind == "npc" and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor")):
+            vendors.append(_ent(e))
+    world_block = {
+        "nearby_mobs": nearby_mobs,
+        "gather_nodes": gather_nodes,
+        "vendors": vendors,
+    }
+
     return {
+        # canonical player facts straight from sim.player / sim.entities
+        "player_class": player_class,
+        "player_facing": player_facing,
+        "player_level": p.get("level"),
+        "mana": mana,
+        "max_mana": max_mana,
+        "inventory": inventory_block,
+        "world": world_block,
         # has_ready: a turn-in-ready quest exists (any). The FSM keeps
         # RETURN_TO_GIVER alive while this is true.
         "has_ready": bool(ready),
@@ -364,7 +444,7 @@ def build_world_state(info: Dict) -> Dict:
         # продаст quest_item и не сможет сдать квест.
         "quest_items_needed": quest_items_needed,
         "craft_items_needed": craft_items_needed,
-        # Сбор ресурсов: какой инструмент нужен для активных gather-квестов.
-        # ore→mining(copper_mining_pick), wood→logging(logging_axe), herb→herbalism(herb_sack)
+        # Сбор ресурсов: id инструмента берётся ИЗ ИГРЫ (objective.toolItemId),
+        # без статических таблиц профессий.
         "needs_tool": _gather_tool_needed(info) or None,
     }

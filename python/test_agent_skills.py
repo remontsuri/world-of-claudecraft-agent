@@ -21,6 +21,7 @@ def test_policy_has_gather_skills():
         "quests": {"active": [
             {"id": "q_toolworks", "state": "active",
              "objectives": [{"type": "gather", "nodeType": "wood",
+                             "toolItemId": "handaxe",
                              "current": 0, "required": 8}]},
         ], "ready": [], "done": []},
         "recipes_known": [], "stations": [],
@@ -46,6 +47,7 @@ def test_buy_forces_when_tool_missing():
         "quests": {"active": [
             {"id": "q_toolworks", "state": "active",
              "objectives": [{"type": "gather", "nodeType": "wood",
+                             "toolItemId": "handaxe",
                              "current": 0, "required": 8}]},
         ], "ready": [], "done": []},
         "recipes_known": [], "stations": [],
