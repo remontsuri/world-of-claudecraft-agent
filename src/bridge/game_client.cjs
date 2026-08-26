@@ -9,10 +9,24 @@ const puppeteer = require('puppeteer-core');
 const DEFAULT_CDP = 'http://127.0.0.1:9222';
 const DEFAULT_TICK_MS = 220;
 
+// Какая вкладка считается игровой. Онлайн — worldofclaudecraft, офлайн-дев —
+// localhost:5173 (vite). Настраивается через WOC_TAB_MATCH (список через
+// запятую), чтобы НЕ держать второй форк моста ради одной строки фильтра.
+const DEFAULT_TAB_MATCH = (process.env.WOC_TAB_MATCH
+  || 'worldofclaudecraft,localhost:5173').split(',')
+  .map((s) => s.trim()).filter(Boolean);
+
+function tabMatches(url, patterns) {
+  const u = url || '';
+  return (patterns || DEFAULT_TAB_MATCH).some((p) => u.includes(p));
+}
+
 class GameClient {
-  constructor({ cdpUrl = DEFAULT_CDP, tickMs = DEFAULT_TICK_MS } = {}) {
+  constructor({ cdpUrl = DEFAULT_CDP, tickMs = DEFAULT_TICK_MS,
+                tabMatch = DEFAULT_TAB_MATCH } = {}) {
     this.cdpUrl = cdpUrl;
     this.tickMs = tickMs;
+    this.tabMatch = tabMatch;
     this.browser = null;
     this.page = null;
   }
@@ -42,7 +56,7 @@ class GameClient {
     }
     for (const p of pages) {
       const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
-      if (!u.includes('worldofclaudecraft')) continue;
+      if (!tabMatches(u, this.tabMatch)) continue;
       try {
         const live = await p.evaluate(() =>
           !!(window.__game && window.__game.sim && window.__game.sim.player &&
@@ -89,7 +103,7 @@ class GameClient {
       const pages = await this.browser.pages();
       for (const p of pages) {
         const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
-        if (!u.includes('worldofclaudecraft')) continue;
+        if (!tabMatches(u, this.tabMatch)) continue;
         out.page = true;
         try {
           out.game = !!(await p.evaluate(() =>
@@ -108,7 +122,7 @@ class GameClient {
       const pages = await this.browser.pages();
       for (const p of pages) {
         const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
-        if (!u.includes('worldofclaudecraft')) continue;
+        if (!tabMatches(u, this.tabMatch)) continue;
         try { await p.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} }); } catch (_) {}
       }
     } catch (_) {}

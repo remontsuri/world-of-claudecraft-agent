@@ -283,6 +283,18 @@ function readGameState() {
       } catch (_) { return []; }
     })(),
     in_combat: !!p.inCombat,
+    // Класс персонажа ИЗ ИГРЫ (sim.entities -> kind==='player' -> templateId).
+    // Нужен политике: warrior бьётся вплотную, mage/hunter кайтят. Без этого
+    // агент играл магом за воина (probe 2026-08-26: templateId === 'warrior').
+    player_class: (function () {
+      try {
+        if (p.templateId) return p.templateId;
+        for (const e of sim.entities.values()) {
+          if (e && e.kind === 'player') return e.templateId || e.class || null;
+        }
+      } catch (_) {}
+      return null;
+    })(),
   };
 }
 
