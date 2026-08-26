@@ -204,7 +204,8 @@ class GoalManager:
         return build_world_state(info)
 
     # ---- candidate skills from current world ----
-    def _candidates(self, info: dict, ws: dict, goal: Optional[str] = None) -> List[str]:
+    def _candidates(self, info: dict, ws: dict, goal: str = None,
+                    class_cfg: dict = None, playstyle: str = None) -> List[str]:
         near = info.get("nearby") or []
         quest_npcs = [e for e in near
                       if (e.get("kind") == "npc" or e.get("type") == "npc")
@@ -595,7 +596,8 @@ class GoalManager:
                         or "mage")  # fallback
         class_cfg = get_class_config(player_class)
         playstyle = get_playstyle(player_class)
-        cands = self._candidates(info, ws, goal=goal)
+        cands = self._candidates(info, ws, goal=goal,
+                                  class_cfg=class_cfg, playstyle=playstyle)
         # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
         # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
         # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.
