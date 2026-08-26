@@ -217,6 +217,28 @@ class NavigationController:
                 "target": self.target, "steps": self.steps}
 
     # ------------------------------------------------------------------ recovery
+    # ------------------------------------------------------------- разведка
+    def explore_command(self, obs):
+        """Куда идти, когда цели нужного типа НЕ ВИДНО.
+
+        FIND_MOB / GO_TO_* при пустом окружении раньше давали nav_command=None,
+        и агент стоял на месте, «исследуя» ноль ярдов. Здесь — реальный поиск:
+        сектор меняется каждые несколько попыток, радиус растёт, так что
+        персонаж расходится по спирали вокруг стартовой точки.
+        """
+        px, pz = ((obs.get("player") or {}).get("position") or [0.0, 0.0])[:2]
+        self._search_step = getattr(self, "_search_step", 0) + 1
+        # 8 направлений, радиус 60 -> 180 ярдов
+        leg = self._search_step // 3
+        ang = (leg % 8) * (math.pi / 4.0)
+        radius = 60.0 + 30.0 * min(4, leg // 8)
+        return {
+            "action": "navigate",
+            "x": round(px + radius * math.cos(ang), 2),
+            "z": round(pz + radius * math.sin(ang), 2),
+            "max_steps": 40,
+        }
+
     def recovery_for(self, status: str) -> Optional[str]:
         """Что делать при плохом статусе (имена как в recovery.py)."""
         if status == STUCK:

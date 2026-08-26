@@ -162,6 +162,7 @@ class AutonomyLoop:
         elif forced is None:
             self.last["loop"] = None
             sg_skill = (subgoal or {}).get("skill")
+            kind = target_kind_for_subgoal(subgoal)
             if sg_skill:
                 pre = check_preconditions(sg_skill, obs)
                 if pre["ok"]:
@@ -172,21 +173,21 @@ class AutonomyLoop:
                     # (живой баг: subgoal ACCEPT, гивер 9 yd, агент ушёл).
                     dist_only = [f for f in pre["failed"]
                                  if f in DISTANCE_PRECONDITIONS]
-                    if dist_only and len(dist_only) == len(pre["failed"]):
-                        kind = target_kind_for_subgoal(subgoal)
-                        if kind:
-                            nav_command, nav_status = self._nav_to(
-                                obs, kind, (subgoal or {}).get("target_mob_id"))
-                            if nav_command:
-                                forced = "explore"
-            # навигационный шаг плана (explore с целью) — всегда через навигацию
-            if (subgoal or {}).get("subgoal", "").startswith(("GO_TO", "RETURN")):
-                kind = target_kind_for_subgoal(subgoal)
-                if kind and nav_command is None:
-                    nav_command, nav_status = self._nav_to(
-                        obs, kind, (subgoal or {}).get("target_mob_id"))
-                    if nav_command:
-                        forced = "explore"
+                    if dist_only and len(dist_only) == len(pre["failed"]) and kind:
+                        nav_command, nav_status = self._nav_to(
+                            obs, kind, (subgoal or {}).get("target"))
+                        if nav_command:
+                            forced = "explore"
+            # Подцель, у которой ЕСТЬ цель перемещения, обязана идти через
+            # навигацию. Раньше условие смотрело на имя (GO_TO*/RETURN*), и
+            # FIND_MOB с skill=explore проваливался мимо: у explore нет
+            # предусловий -> forced=explore -> шаг на месте, pos не менялась
+            # (живой замер: 8 шагов FIND_MOB, pos=(0,0), nav_commands=0).
+            if kind and nav_command is None and (subgoal or {}).get("skill") == "explore":
+                nav_command, nav_status = self._nav_to(
+                    obs, kind, (subgoal or {}).get("target"))
+                if nav_command:
+                    forced = "explore"
 
         if forced and forced not in masked:
             # форсируем только исполнимое
@@ -209,6 +210,14 @@ class AutonomyLoop:
     def _nav_to(self, obs, kind, hint=None):
         """Поставить цель навигации и вернуть (команда моста, статус)."""
         if not self.nav.set_target(obs, kind, hint):
+            # Цели нужного типа в зоне видимости НЕТ. Для FIND_* это значит
+            # «искать», а не «стоять»: без этого агент топчется на месте,
+            # пока квестовый моб живёт в 200 ярдах (живой замер: FIND_MOB,
+            # _entities без мобов, nav_command=None, 0 прогресса).
+            cmd = self.nav.explore_command(obs)
+            if cmd:
+                self.stats["nav_explore"] = self.stats.get("nav_explore", 0) + 1
+                return cmd, "SEARCHING"
             return None, "NO_TARGET"
         st = self.nav.observe(obs)
         self.nav_target_before = dict(self.nav.target or {})

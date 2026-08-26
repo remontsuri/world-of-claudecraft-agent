@@ -11,7 +11,8 @@ from planner import (plan_subgoals, current_subgoal, required_tool, Planner,
 
 def _obs(hp=1.0, dead=False, free=5, junk=0, missing_tool=None,
          active=0, ready=0, nxt=None, giver_dist=999.0, givers=0,
-         quest_available=False, mobs=0, nodes=0, vendor_dist=999.0):
+         quest_available=False, mobs=0, nodes=0, vendor_dist=999.0,
+         items=None):
     # quest_available подразумевает, что гивер есть и он в радиусе
     if quest_available:
         givers = max(1, givers)
@@ -22,7 +23,10 @@ def _obs(hp=1.0, dead=False, free=5, junk=0, missing_tool=None,
         "quest": {"active": active, "ready": ready, "next_objective": nxt,
                   "giver_distance": giver_dist},
         "inventory": {"free_slots": free, "junk_count": junk,
-                      "missing_tool": missing_tool},
+                      "missing_tool": missing_tool,
+                      # чем лечиться: без еды/зелий heal — no-op, и план
+                      # уходит в REGEN вместо бесполезного SURVIVE
+                      "items": items if items is not None else {"baked_bread": 2}},
         "world": {"nearby_mobs": mobs, "gather_nodes": nodes,
                   "quest_givers": givers, "quest_available": quest_available,
                   "vendor_distance": vendor_dist, "vendors": 1 if vendor_dist < 999 else 0},
@@ -193,6 +197,9 @@ def test_planner_urgent_low_hp_ignores_dwell():
     p = Planner(min_dwell=100)
     p.step(_obs(mobs=1))
     assert p.step(_obs(hp=0.15))["subgoal"] == "SURVIVE"
+    # нечем лечиться -> ждать реген, но всё равно НЕ квест
+    assert p.step(_obs(hp=0.15, items={"rough_hide": 3}),
+                  force=True)["subgoal"] == "REGEN"
 
 
 def test_planner_advances_to_next_step_on_done():

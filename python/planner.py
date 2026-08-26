@@ -10,6 +10,7 @@ PPO не должен с нуля выучивать смысл игры. Planne
 План — данные (список шагов). Planner не трогает игру и не решает,
 какое действие послать в мост: он говорит, какой шаг сейчас актуален.
 """
+import re
 from typing import Any, Dict, List, Optional
 
 # Соответствие nodeType/itemId -> инструмент. Имена сверены с ЖИВЫМ
@@ -60,6 +61,22 @@ def _has_tool(obs: Dict[str, Any], tool: str) -> bool:
     return not missing
 
 
+# Чем в этой игре можно вылечиться: зелья и еда. game_meat/rough_hide — это
+# сырьё профессий (src/sim/content/profession_items.ts), а НЕ еда: спамить
+# ими heal бессмысленно.
+_HEAL_PAT = re.compile(r"potion|draught|tonic|elixir|heal|bread|water|jerky"
+                       r"|roasted|cooked|meal|ration|cheese|apple", re.I)
+
+
+def _can_heal(obs) -> bool:
+    """Есть ли в сумках то, чем heal реально сработает."""
+    inv = (obs or {}).get("inventory") or {}
+    items = inv.get("items")
+    if not isinstance(items, dict):
+        return False                      # состав сумок неизвестен -> не врём
+    return any(_HEAL_PAT.search(str(k)) for k, v in items.items() if (v or 0) > 0)
+
+
 def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Разложить текущее состояние в последовательность subgoal-ов.
 
@@ -85,7 +102,21 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
     # 2. критический HP
     hp = player.get("hp_fraction")
     if hp is not None and hp < 0.35:
-        return [{"subgoal": "SURVIVE", "skill": "heal", "reason": "hp_critical"}]
+        # heal имеет смысл, только если есть ЧЕМ лечиться (зелье/еда). Иначе
+        # это no-op, и агент застревает в SURVIVE, пока реген идёт сам собой
+        # (живой замер: hp 29%, ни зелий, ни еды, 5 шагов heal подряд впустую).
+        if _can_heal(obs):
+            return [{"subgoal": "SURVIVE", "skill": "heal",
+                     "reason": "hp_critical"}]
+        # лечиться нечем: уходим от опасности, реген сделает своё.
+        # Отдельного «сесть» в игре нет (sitting включается только едой,
+        # src/sim/items.ts:791), поэтому вне боя просто ждём — noop лучше,
+        # чем спам heal, который ничего не делает и засоряет replay.
+        if (world.get("nearby_mobs") or 0) > 0:
+            return [{"subgoal": "RETREAT", "skill": "explore",
+                     "reason": "hp_critical_no_heal"}]
+        return [{"subgoal": "REGEN", "skill": "noop",
+                 "reason": "hp_critical_no_heal"}]
 
     # 3. сумки полны -> продать (иначе gather/loot не смогут ничего дать)
     if (inv.get("free_slots") or 0) <= 0 and (inv.get("junk_count") or 0) > 0:
