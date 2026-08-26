@@ -27,13 +27,25 @@ TOLERANCE = {
     "quest_giver": 6.0,     # чуть строже гейта 7, чтобы не зависать на границе
     "vendor": 10.0,         # гейт покупки 12
     "node": 4.0,            # гейт harvest 5
-    "mob": 25.0,            # достаточно чтобы сагрить/кастовать
+    "mob": 25.0,            # переопределяется по классу (см. tolerance_for)
     "corpse": 4.0,
 }
 DEFAULT_TOLERANCE = 5.0
 
+# Дальность боя по классу (src/sim/content/classes.ts). Воину нужно подойти
+# вплотную; магу/хантеру достаточно встать в радиус каста.
+MOB_TOLERANCE_BY_CLASS = {
+    "warrior": 5.0, "rogue": 5.0,
+    "mage": 25.0, "priest": 25.0, "warlock": 25.0,
+    "hunter": 30.0,
+}
 
-def tolerance_for(kind: str) -> float:
+
+def tolerance_for(kind: str, player_class: str = None) -> float:
+    """Допуск «дошли» для типа цели. Для моба зависит от класса."""
+    if kind == "mob":
+        cls = str(player_class or "").lower()
+        return MOB_TOLERANCE_BY_CLASS.get(cls, TOLERANCE["mob"])
     return TOLERANCE.get(kind, DEFAULT_TOLERANCE)
 
 
@@ -67,16 +79,34 @@ def _matches(e: Dict[str, Any], kind: str, name_hint: str = None) -> bool:
         if e.get("dead") or (e.get("hp") or 1) <= 0:
             return False
         if name_hint:
-            tid = str(e.get("templateId") or e.get("mobId") or "").lower()
-            if tid and str(name_hint).lower() not in tid:
+            # id мобов в снапшоте бывает и templateId ('forest_wolf'), и
+            # человекочитаемым name ('Forest Wolf') — сравниваем нормализованно,
+            # иначе цель квеста не находится и навигация молчит.
+            hint = str(name_hint).lower().replace("_", " ").strip()
+            cand = " ".join(str(e.get(k) or "") for k in
+                            ("templateId", "mobId", "name")).lower().replace("_", " ")
+            if hint and hint not in cand:
                 return False
-        return e.get("kind") == "mob"
+        return e.get("kind") == "mob" or e.get("type") == "mob"
     return False
 
 
 def find_target(obs: Dict[str, Any], kind: str,
                 name_hint: str = None) -> Optional[Dict[str, Any]]:
-    """Ближайшая сущность нужного типа с координатами ИЗ ИГРЫ."""
+    """Ближайшая сущность нужного типа с координатами ИЗ ИГРЫ.
+
+    Если по name_hint ничего нет, ищем без него: цель квеста может быть
+    вне зоны видимости, но идти к ближайшему мобу того же типа лучше,
+    чем стоять на месте.
+    """
+    found = _find_matching(obs, kind, name_hint)
+    if found is None and name_hint:
+        found = _find_matching(obs, kind, None)
+    return found
+
+
+def _find_matching(obs: Dict[str, Any], kind: str,
+                   name_hint: str = None) -> Optional[Dict[str, Any]]:
     best, bd = None, float("inf")
     for e in (obs.get("_entities") or []):
         if not isinstance(e, dict) or not _matches(e, kind, name_hint):
@@ -144,7 +174,7 @@ class NavigationController:
         self.dist_history.append(d)
         self.pos_history.append((px, pz))
 
-        tol = tolerance_for(self.kind)
+        tol = tolerance_for(self.kind, (player.get("player_class")))
         if d <= tol:
             return {"status": ARRIVED, "distance": d, "tolerance": tol,
                     "target": self.target, "steps": self.steps}

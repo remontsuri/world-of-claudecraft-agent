@@ -56,13 +56,15 @@ def detect_progress(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, 
         "position_delta": pos_delta,
         "equipment_changed": (_g(after, "inventory", "equipment_rev")
                               != _g(before, "inventory", "equipment_rev")),
+        "became_alive": (bool(_g(before, "player", "dead", default=False))
+                         and not bool(_g(after, "player", "dead", default=False))),
     }
     prog["any_progress"] = any(
         (v > 0 if isinstance(v, (int, float)) else bool(v))
         for k, v in prog.items()
         if k in ("quest_progress", "quests_done_delta", "inventory_delta",
                  "xp_delta", "kills_delta", "level_delta", "distance_delta",
-                 "equipment_changed")
+                 "equipment_changed", "became_alive")
     )
     return prog
 

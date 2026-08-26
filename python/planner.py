@@ -80,7 +80,7 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 1. смерть
     if player.get("dead"):
-        return [{"subgoal": "RESPAWN", "skill": "heal", "reason": "player_dead"}]
+        return [{"subgoal": "RESPAWN", "skill": "respawn", "reason": "player_dead"}]
 
     # 2. критический HP
     hp = player.get("hp_fraction")

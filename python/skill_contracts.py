@@ -79,6 +79,12 @@ SKILL_CONTRACTS: Dict[str, Dict[str, Any]] = {
         "postconditions": ["inventory_changed"],
         "failure_reasons": ["no_recipe", "no_reagents", "no_station", "bags_full"],
     },
+    "respawn": {
+        "preconditions": ["is_dead"],
+        "action": "releaseSpirit -> resurrectAtSpiritHealer -> wait_alive",
+        "postconditions": ["is_alive"],
+        "failure_reasons": ["not_dead", "respawn_unavailable"],
+    },
     "explore": {
         "preconditions": [],
         "action": "walk_forward",
@@ -128,7 +134,14 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "mob_exists":
         return (world.get("nearby_mobs") or 0) > 0
     if name == "mob_reachable":
-        return (target.get("distance") or 999) <= 45.0
+        # Дальность боя зависит от КЛАССА (src/sim/content/classes.ts):
+        # warrior бьёт вплотную (~5 yd), mage кастует до 30, hunter до 35.
+        # Единый порог 45 давал ложное «моб достижим» воину при мобе в 32 yd,
+        # farm возвращал NO_OP и агент топтался (живой замер 2026-08-26).
+        cls = str(player.get("player_class") or "").lower()
+        reach = {"warrior": 6.0, "rogue": 6.0, "mage": 30.0,
+                 "hunter": 35.0, "priest": 30.0, "warlock": 30.0}.get(cls, 30.0)
+        return (target.get("distance") or 999) <= reach
     if name == "hp_sufficient":
         return (player.get("hp_fraction") or 0.0) >= 0.35
     if name == "corpse_exists":
@@ -147,6 +160,10 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
         return False
     if name == "hp_not_full":
         return (player.get("hp_fraction") or 1.0) < 1.0
+    if name == "is_dead":
+        return bool(player.get("dead"))
+    if name == "is_alive":
+        return not player.get("dead")
     if name == "item_in_bags":
         return bool(inv.get("equippable_item"))
     if name == "item_equippable":
@@ -190,6 +207,7 @@ def verify_postconditions(skill: str, progress: Dict[str, Any]) -> Dict[str, Any
         "quests_done_increased": lambda p: (p.get("quests_done_delta") or 0) > 0,
         "quests_active_increased": lambda p: (p.get("quests_active_delta") or 0) > 0,
         "hp_increased": lambda p: (p.get("hp_delta") or 0.0) > 0,
+        "is_alive": lambda p: bool(p.get("became_alive")),
         "equipment_changed": lambda p: bool(p.get("equipment_changed")),
         "position_changed": lambda p: (p.get("position_delta") or 0.0) > 0.1,
     }

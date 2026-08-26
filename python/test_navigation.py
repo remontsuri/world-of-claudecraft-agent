@@ -82,6 +82,30 @@ def test_vendor_tolerance_inside_buy_gate():
     assert tolerance_for("vendor") < 12.0
 
 
+def test_mob_tolerance_is_class_dependent():
+    # воин бьёт вплотную, хантер стреляет далеко (src/sim/content/classes.ts)
+    assert tolerance_for("mob", "warrior") <= 6.0
+    assert tolerance_for("mob", "mage") >= 20.0
+    assert tolerance_for("mob", "hunter") > tolerance_for("mob", "warrior")
+
+
+def test_warrior_must_close_in_on_mob():
+    """Живой баг: моб в 32 yd, farm возвращал NO_OP, агент топтался."""
+    nav = NavigationController()
+    obs = _obs(ents=[_mob(0, 32)])
+    obs["player"]["player_class"] = "warrior"
+    nav.set_target(obs, "mob")
+    assert nav.observe(obs)["status"] == MOVING     # надо подойти
+
+
+def test_mage_can_cast_from_the_same_distance():
+    nav = NavigationController()
+    obs = _obs(ents=[_mob(0, 22)])
+    obs["player"]["player_class"] = "mage"
+    nav.set_target(obs, "mob")
+    assert nav.observe(obs)["status"] == ARRIVED    # уже в радиусе каста
+
+
 # ------------------------------------------------------------ status machine
 
 def test_no_target_status():

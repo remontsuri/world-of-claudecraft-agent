@@ -65,7 +65,8 @@ def test_vendor_and_giver_detected_separately():
     assert obs["world"]["vendor_distance"] == 8.0
     assert obs["world"]["quest_givers"] == 1
     assert obs["quest"]["giver_distance"] == 4.0
-    assert obs["world"]["quest_available"] is True   # 4.0 <= 7
+    # quest_available = квест ЕСТЬ (дистанцию проверяет giver_reachable)
+    assert obs["world"]["quest_available"] is True
 
 
 def test_next_objective_is_first_incomplete():
@@ -144,7 +145,10 @@ def _obs(**over):
 
 
 def test_mask_length_matches_bridge_indices():
-    assert len(get_action_mask(_obs())) == len(SKILL_INDEX) == 10
+    # порядок индексов — истина из hierarchical_env.SKILLS (её ждёт мост)
+    from hierarchical_env import SKILLS
+    assert list(SKILL_INDEX) == list(SKILLS)
+    assert len(get_action_mask(_obs())) == len(SKILLS)
 
 
 def test_buy_masked_without_vendor():

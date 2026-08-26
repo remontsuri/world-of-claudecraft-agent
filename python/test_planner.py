@@ -12,6 +12,11 @@ from planner import (plan_subgoals, current_subgoal, required_tool, Planner,
 def _obs(hp=1.0, dead=False, free=5, junk=0, missing_tool=None,
          active=0, ready=0, nxt=None, giver_dist=999.0, givers=0,
          quest_available=False, mobs=0, nodes=0, vendor_dist=999.0):
+    # quest_available подразумевает, что гивер есть и он в радиусе
+    if quest_available:
+        givers = max(1, givers)
+        if giver_dist >= 999.0:
+            giver_dist = 4.0
     return {
         "player": {"hp_fraction": hp, "dead": dead, "level": 1},
         "quest": {"active": active, "ready": ready, "next_objective": nxt,
@@ -144,6 +149,11 @@ def test_idle_farms_when_mob_near_else_explores():
 
 def test_current_subgoal_returns_first_step():
     assert current_subgoal(_obs(ready=1, giver_dist=2.0))["skill"] == "turn_in_quest"
+
+
+def test_death_uses_respawn_skill_not_heal():
+    # воскрешение — отдельный навык с контрактом is_dead -> is_alive
+    assert plan_subgoals(_obs(dead=True))[0]["skill"] == "respawn"
 
 
 # ------------------------------------------------------------ Planner dwell
