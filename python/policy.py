@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from memory import ExperienceStore, _bucket
 from world_state import build_world_state
+from class_config import get_class_config, get_playstyle, get_ability_for_class
 
 # Skill names (must align with hierarchical_env.SKILLS indices)
 SKILL_FARM = "farm"
@@ -236,14 +237,22 @@ class GoalManager:
         # "never farm" rule; the agent can still learn to farm when safe.
         if ws.get("weak_mob_near"):
             cands.append(SKILL_FARM)
-        # Mage kit: ranged nukes. Offered only when a hostile mob is within
-        # spell range (30yd, classes.ts) AND the spell is ready AND mana covers
-        # the cost (world_state already folds both into abilities[].ready).
-        # This is how the agent discovers it is a mage: the candidate exists,
-        # the Q-table learns the rest (ranged kill before melee reach).
-        if ws.get("has_ready_damage_spell"):
-            cands.append(SKILL_CAST_FROSTBOLT)   # slow -> kiting possible
-            cands.append(SKILL_CAST_FIREBALL)    # bigger hit + DoT
+        # Классовые способности (warrior/mage/hunter)
+        # Вместо хардкод-магии — используем class_config
+        if class_cfg["resource"] == "ranged" and playstyle == "ranged_kite":
+            # Дальний бой: mage/hunter
+            primary = get_ability_for_class(player_class, "primary")
+            ranged = get_ability_for_class(player_class, "ranged")
+            if ws.get("has_ready_damage_spell") and primary:
+                cands.append("cast_" + primary)
+            if ws.get("has_ready_damage_spell") and ranged and ranged != primary:
+                cands.append("cast_" + ranged)
+        elif class_cfg["resource"] == "ranged" and playstyle == "melee":
+            # Ближний бой: warrior — кастов нет, только farm (melee)
+            # Но добавляем charge если враг далеко
+            gap_closer = get_ability_for_class(player_class, "gap_closer")
+            if gap_closer and ws.get("far_mob"):
+                cands.append("cast_" + gap_closer)
         # Economy: craft a recipe whose reagents are satisfied (and the required
         # station is in range for station-bound recipes). world_state already
         # computed ws["craftable_now"]; ctx carries the chosen recipeId.
@@ -580,6 +589,12 @@ class GoalManager:
         (removes the exploration/visit-count confound)."""
         if ws is None:
             ws = self._world_state(info)
+        # Определяем класс игрока (warrior/mage/hunter)
+        player_class = (info.get("player_class")
+                        or (ws or {}).get("player_class")
+                        or "mage")  # fallback
+        class_cfg = get_class_config(player_class)
+        playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, goal=goal)
         # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
         # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
