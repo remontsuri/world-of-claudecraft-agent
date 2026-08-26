@@ -214,7 +214,12 @@ def encode_observation(ws: Dict[str, Any],
         rec["_dist"] = d
         if _is_kind(e, "mob") and not e.get("dead") and _num(e.get("hp"), 1.0) > 0:
             mobs.append(rec)
-        elif _is_kind(e, "corpse") or e.get("lootable") or e.get("dead"):
+        elif (_is_kind(e, "corpse")
+              or (_is_kind(e, "mob") and (e.get("dead") or e.get("lootable")))):
+            # Труп = мёртвый МОБ (или явный corpse). Раньше сюда попадал любой
+            # объект с lootable/dead, а в этой игре lootable стоит и у декораций
+            # мира (Ogre War Totem, Grave of..., Warded Shore-Rock — живой
+            # замер), из-за чего world.corpses всегда >0 и loot зациклился.
             corpses.append(rec)
         elif _is_kind(e, "npc"):
             npcs.append(rec)

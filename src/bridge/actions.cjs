@@ -165,9 +165,39 @@ async function applyAction(idx, cmd, gameClient) {
       }
       break;
     }
-    case 1: // loot: interact() loots the targeted lootable corpse in this client
+    case 1: { // loot: lootCorpse(mobId) на КОНКРЕТНЫЙ труп рядом
+      // Раньше здесь был безадресный sim.interact(): он работает по текущему
+      // таргету, а его никто не ставил -> лут «ничего не сделал» на каждом
+      // шаге (живой замер: 34 loot -> inconclusive из 69 шагов).
+      // sim.lootCorpse(mobId, pid) — публичный метод (sim.ts:9727), возвращает
+      // bool, поэтому результат честно проверяем, а не угадываем.
+      const looted = await gameClient.evaluate(() => {
+        const sim = window.__game.sim;
+        const p = sim.player;
+        if (!p) return { ok: false, why: 'no_player' };
+        const ents = (typeof sim.entitiesNear === 'function')
+          ? sim.entitiesNear(p.pos, 12)
+          : Array.from(sim.entities ? sim.entities.values() : []);
+        let best = null, bestD = 1e9;
+        for (const e of (ents || [])) {
+          if (!e || !e.pos) continue;
+          const lootable = !!e.lootable || (!!e.dead && e.kind === 'mob');
+          if (!lootable || e.looted) continue;
+          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+          const d = Math.sqrt(dx * dx + dz * dz);
+          if (d < bestD) { bestD = d; best = e; }
+        }
+        if (!best) return { ok: false, why: 'no_corpse' };
+        try {
+          const r = sim.lootCorpse(best.id, p.id);
+          return { ok: r !== false, id: best.id, dist: Math.round(bestD * 10) / 10 };
+        } catch (e) { return { ok: false, why: (e.message || '').slice(0, 40) }; }
+      }).catch(() => ({ ok: false, why: 'eval_failed' }));
+      if (looted && looted.ok) break;
+      // труп не найден/недостижим — пробуем безадресный interact как раньше
       await gameClient.evaluate(() => { try { window.__game.sim.interact(); } catch (_) {} });
       break;
+    }
     case 2: { // accept_quest: accept the SPECIFIC quest via sim.acceptQuest(qid)
       const qid = (cmd && cmd.questId) || null;
       // Capture the giver (NPC id + live position) so Python can persist it in

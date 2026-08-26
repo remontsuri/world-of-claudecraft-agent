@@ -113,7 +113,9 @@ def build_world_state(info: Dict) -> Dict:
                 weak_mob_near = True
     has_mob = strong_mob_near or weak_mob_near
     has_corpse = any(
-        (e.get("type") == "corpse" or e.get("kind") == "corpse" or e.get("lootable"))
+        ((e.get("type") == "corpse" or e.get("kind") == "corpse")
+         or ((e.get("kind") == "mob" or e.get("type") == "mob")
+             and (e.get("dead") or e.get("lootable"))))
         and not e.get("looted")
         for e in nearby
     )

@@ -82,7 +82,15 @@ def _matches(e: Dict[str, Any], kind: str, name_hint: str = None) -> bool:
                 return False
         return bool(e.get("nodeType")) or e.get("kind") == "node"
     if kind == "corpse":
-        return bool(e.get("lootable")) or bool(e.get("dead"))
+        # Труп = мёртвый МОБ. lootable в этой игре стоит и у декораций мира
+        # (Ogre War Totem, Grave of..., Warded Shore-Rock — живой замер): они
+        # никогда не лутаются, и агент 153 шага звал loot впустую.
+        k = e.get("kind") or e.get("type")
+        if k in ("corpse",):
+            return True
+        if k in ("mob",):
+            return bool(e.get("dead")) or bool(e.get("lootable"))
+        return False
     if kind == "mob":
         if e.get("dead") or (e.get("hp") or 1) <= 0:
             return False

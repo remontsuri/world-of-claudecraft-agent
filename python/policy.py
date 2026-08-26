@@ -23,6 +23,7 @@ SUCCESS/PARTIAL/FAILURE; the policy reacts to that next step.
 import math
 import os
 import random
+import re
 from typing import Dict, List, Optional, Tuple
 
 from memory import ExperienceStore, _bucket
@@ -36,6 +37,19 @@ SKILL_ACCEPT = "accept_quest"
 SKILL_TURN_IN = "turn_in_quest"
 SKILL_RETURN = "return_to_giver"
 SKILL_HEAL = "heal"
+
+# Чем в этой игре реально лечатся: зелья и еда. game_meat/rough_hide — сырьё
+# профессий (src/sim/content/profession_items.ts), heal на них — no-op.
+_HAS_HEAL_PAT = re.compile(r"potion|draught|tonic|elixir|heal|bread|water|jerky"
+                           r"|roasted|cooked|meal|ration|cheese|apple", re.I)
+
+
+def _has_healing(info: dict, ws: dict) -> bool:
+    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет."""
+    items = (info or {}).get("inventory_by_id") or (ws or {}).get("inventory_by_id")
+    if not isinstance(items, dict) or not items:
+        return False
+    return any(_HAS_HEAL_PAT.search(str(k)) for k, v in items.items() if (v or 0) > 0)
 SKILL_SELL = "sell_junk"
 SKILL_GATHER = "gather"
 SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
@@ -224,9 +238,17 @@ class GoalManager:
         quest_npcs = [e for e in near
                       if (e.get("kind") == "npc" or e.get("type") == "npc")
                       and (e.get("questIds") or e.get("questId"))]
+        # ЛУТ — это труп МОБА в радиусе взаимодействия, а не любой объект с
+        # lootable. В этой игре lootable стоит и у декораций/сундуков мира
+        # (Ogre War Totem, Grave of..., Warded Shore-Rock — живой замер), они
+        # лежат в 25-66 ярдах и никогда не лутаются: политика 153 шага подряд
+        # звала loot -> inconclusive. Требуем kind=mob + dead + дистанцию.
         corpses = [e for e in near
-                   if (e.get("type") == "corpse" or e.get("kind") == "corpse" or e.get("lootable"))
-                   and not e.get("looted")]
+                   if (e.get("type") == "corpse" or e.get("kind") == "corpse"
+                       or ((e.get("kind") == "mob" or e.get("type") == "mob")
+                           and (e.get("dead") or e.get("lootable"))))
+                   and not e.get("looted")
+                   and (e.get("dist") is None or (e.get("dist") or 0) <= 12.0)]
         mobs = [e for e in near if (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable")]
         inv = info.get("inventory") or []
         # quality отсутствует в живом инвентаре (замер 2026-08-25) —
@@ -244,8 +266,11 @@ class GoalManager:
         quest_accepted = bool(qstruct.get("accepted"))
         quest_complete = bool(qstruct.get("complete"))
         cands = []
-        if ws["hp_frac"] < 1.0:
-            cands.append(SKILL_HEAL)           # always available, agent may or may not pick it
+        if ws["hp_frac"] < 1.0 and _has_healing(info, ws):
+            # РАНЬШЕ heal предлагался всегда ("always available"), и при пустых
+            # сумках это давало гарантированный failure на каждом шаге
+            # (живой замер: 34 heal -> failure из 69 шагов). Реген работает сам.
+            cands.append(SKILL_HEAL)
         # FARM only when a WEAK mob is near. Strong mobs (maxHp > player*1.3) would
         # kill the agent — offering farm on them just teaches a suicidal habit.
         # This is observation-driven (mob strength from world state), not a hard
@@ -274,8 +299,19 @@ class GoalManager:
         if ws.get("craftable_now"):
             cands.append(SKILL_CRAFT)
         if ws.get("has_mob") and info.get("targetId") is not None:
-            # already in combat with something — allow finishing it even if strong
-            cands.append(SKILL_FARM)
+            # already in combat with something — allow finishing it even if
+            # strong, НО не самоубийственно: цель с 1500 HP против воина
+            # 1-го уровня с 29 HP не «дожимается», это гарантированная смерть
+            # (живой замер: deaths=55, kills=1, зона Warlord Drogmar 1564 HP).
+            # Безнадёжный бой -> farm не предлагаем, пусть работает отступление.
+            _tgt_max = 0.0
+            for _e in near:
+                if _e.get("id") == info.get("targetId"):
+                    _tgt_max = float(_e.get("maxHp") or 0)
+                    break
+            _pmax = float((info.get("player") or {}).get("maxHp") or 0) or 1.0
+            if _tgt_max <= _pmax * 3.0:
+                cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
         # ИСПРАВЛЕНО 2026-08-24 (жалоба пользователя «квесты не берёт»):
@@ -457,7 +493,8 @@ class GoalManager:
                 cands = gated
             # else: no candidate matched the phase (e.g. giver not yet in range
             # for accept) -> fall back to the full list so the agent can act.
-        if ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands:
+        if (ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands
+                and _has_healing(info, ws)):
             cands.append(SKILL_HEAL)
         # SELF-LEARNING LOOP (closes the reflection cycle): the agent's own
         # conclusions change tomorrow's behavior.
@@ -553,6 +590,15 @@ class GoalManager:
                 out.add(SKILL_SELL)
             elif hint == "prefer_accept" or key == "quest:completed":
                 out.add(SKILL_ACCEPT)
+            elif key == "autonomy_subgoal":
+                # Подсказка автономного контура: планировщик знает, какой шаг
+                # ведёт к цели активного квеста. Это ПРЕДПОЧТЕНИЕ, не приказ —
+                # выбор остаётся за политикой, но без этого канала контур
+                # считал шаги, а поведение не менялось (живой замер: 69 шагов,
+                # только heal/loot, ни одного farm/explore).
+                sk = h.get("skill") or h.get("hint")
+                if sk:
+                    out.add(sk)
         return out
 
     def _strategy_key(self, info: dict, ws: dict):
