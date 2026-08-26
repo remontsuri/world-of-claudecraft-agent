@@ -196,9 +196,64 @@ powershell -File D:\world-of-claudecraft\start_offline.ps1
 | Агент не пишет в лог сразу | Нужно подождать 60-120с |
 | Офлайн-мир ≠ онлайн (другие координаты) | Нормально для обучения |
 
-## 8. Следующие шаги
+## 8. Автономный контур (Plan 2026-08-26)
 
-- [ ] Интеграция `cast_*` способностей в мост
-- [ ] Полная поддержка warrior (melee) в policy
-- [ ] Интеграция LLM как советника (WOC_BRAIN=advisory)
-- [ ] Длинный прогон 1000+ шагов с метриками
+**План:** `docs/superpowers/plans/2026-08-26-autonomous-agent.md`
+
+| # | Задача | Модуль | Тесты | Статус |
+|---|--------|--------|-------|--------|
+| 1 | Canonical World State | `world_state.py` | 16 | ✅ `7f76928` |
+| 2 | Observation Encoder | `observation.py` | 12 | ✅ `b8b6986` |
+| 3 | Skill Contracts | `skill_contracts.py` | 7 | ✅ `5b6b783` |
+| 4 | Action Mask | `action_mask.py` | 10 | ✅ `b8b6986` |
+| 5 | Progress Detector | `progress.py` | 7 | ✅ `5b6b783` |
+| 6 | Recovery Manager | `recovery.py` | 5 | ✅ `5b6b783` |
+| 7 | Anti-Loop System | `anti_loop.py` | 8 | ✅ `5b6b783` |
+| 8 | Extended Replay | `replay.py` | — | 🔄 |
+| 9 | Planner | `planner.py` | 26 | ✅ `d932963` |
+| 10 | Evaluation Suite | `evaluation.py` | — | 🔄 |
+| 11 | Wire into agent.py | `agent.py` | — | ⏳ |
+
+**Итого тестов: 91 green** (65 + 26).
+
+### 8.1. Контракты модулей
+
+```
+info (bridge snapshot)
+  ↓ build_world_state()          world_state.py   — единственный источник истины
+ws
+  ↓ encode_observation(ws, info) observation.py   — 6 блоков для решения
+obs
+  ↓ plan_subgoals(obs)           planner.py       — objective → subgoals
+subgoal
+  ↓ mask_candidates(cands, obs)  action_mask.py   — выводится из контрактов
+candidates
+  ↓ policy.decide()              policy.py        — Q-table выбирает КАК
+action
+  ↓ bridge step                                    — исполнение
+info_after
+  ↓ detect_progress(before,after) progress.py     — дельты
+progress
+  ↓ verify_postconditions()      skill_contracts.py — SUCCESS/FAILURE/NO_OP
+result
+  ↓ get_recovery(reason)         recovery.py      — лестница восстановления
+  ↓ LoopGuard.observe()          anti_loop.py     — цикл = повтор БЕЗ прогресса
+```
+
+### 8.2. Ключевые инварианты
+
+- **Action mask выводится из `skill_contracts`** — нет второго набора правил, который разъедется.
+- **`NO_OP` ≠ `SUCCESS`** — действие выполнилось, но мир не изменился, это не успех.
+- **Цикл = повтор БЕЗ прогресса** — `farm × 20` с киллами это работа, а не цикл.
+- **Инструмент покупается ДО выхода из города** — структурно в плане, а не в reward.
+- **Имена инструментов из живой игры**: `handaxe`, `gathering_sickle`, `copper_mining_pick`. `logging_axe` / `herb_sack` в игре НЕ существуют (проверено тестом).
+- **`min_dwell=20`** — цель не дёргается каждый шаг; `force` только на смерть/критический HP.
+- **Лестница восстановления всегда заканчивается `abandon_objective`** — цикл не зависает.
+
+## 9. Известные проблемы
+
+| Проблема | Статус |
+|----------|--------|
+| Мост падает при background-запуске через Hermes | Обход: `start_offline.ps1` |
+| Офлайн-мир ≠ онлайн (другие координаты) | Нормально для обучения |
+| Автономный контур ещё не подключён к `agent.py` | Task 11 |
