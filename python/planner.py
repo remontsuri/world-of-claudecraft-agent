@@ -221,6 +221,15 @@ class Planner:
         return self.current or {"subgoal": "EXPLORE", "skill": "explore",
                                 "reason": "empty_plan"}
 
+    def force_replan(self) -> None:
+        """Сбросить удержание цели: следующий step обязан перепланировать.
+
+        Нужно recovery-ветке abandon/next/replan — иначе min_dwell держал
+        отвергнутую цель ещё десятки шагов (P0.7).
+        """
+        self.current = None
+        self.dwell = 0
+
     def on_subgoal_done(self) -> None:
         """Шаг выполнен: снять его с плана, следующий станет текущим."""
         if self.plan:

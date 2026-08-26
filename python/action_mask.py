@@ -15,12 +15,10 @@ from typing import Any, Dict, List
 
 from skill_contracts import check_preconditions
 
-try:                                   # истина о порядке — у среды
-    from hierarchical_env import SKILLS as SKILL_INDEX
-except Exception:                      # безопасный дубль, если импорт недоступен
-    SKILL_INDEX = ["farm", "loot", "accept_quest", "turn_in_quest", "sell_junk",
-                   "gather", "craft", "heal", "equip", "buy",
-                   "cast_frostbolt", "cast_fireball", "craft_item"]
+# ЕДИНСТВЕННЫЙ источник порядка навыков — среда. Silent fallback здесь был бы
+# худшим вариантом: один сдвиг (BUY -> index 9 вместо 10) превращает BUY в HEAL,
+# и весь replay после этого испорчен, причём молча. Лучше не стартовать.
+from hierarchical_env import SKILLS as SKILL_INDEX
 
 # Навыки, которые мост исполняет НЕ через step idx, а отдельным action.
 BRIDGE_ENDPOINT_SKILLS = {

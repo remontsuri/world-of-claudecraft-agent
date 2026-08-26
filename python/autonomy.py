@@ -18,7 +18,10 @@ from action_mask import mask_candidates, why_blocked, index_of
 from planner import Planner
 from progress import detect_progress, classify_outcome
 from skill_contracts import check_preconditions, verify_postconditions
-from recovery import RecoveryTracker
+from navigation import (NavigationController, DISTANCE_PRECONDITIONS,
+                        target_kind_for_subgoal)
+from recovery import (RecoveryTracker, ObjectiveBlacklist,
+                      plan_recovery, assert_recovery_executable)
 from anti_loop import LoopGuard
 
 # recovery_action -> навык, которым он исполняется.
@@ -67,6 +70,15 @@ class AutonomyLoop:
         self.planner = Planner(min_dwell=min_dwell)
         self.guard = LoopGuard(window=loop_window)
         self.recovery = RecoveryTracker(max_attempts=max_recovery_attempts)
+        # P0.7: отказ от цели должен РЕАЛЬНО менять поведение, а не быть
+        # сигналом «пусть policy решит» (она выбирала то же самое снова).
+        self.blacklist = ObjectiveBlacklist(cooldown_steps=60)
+        # P0.6: падаем на старте, если какая-то ветка recovery неисполнима
+        assert_recovery_executable()
+        # что контур обязан сделать на следующем шаге по итогам recovery
+        self.pending_recovery = None
+        self.nav = NavigationController()
+        self.nav_target_before = None
         self.obs_before: Optional[Dict[str, Any]] = None
         self.last: Dict[str, Any] = {}
         self.stats = {
@@ -76,6 +88,17 @@ class AutonomyLoop:
         }
 
     # ------------------------------------------------------------ pre-action
+    @staticmethod
+    def _objective_key(obs):
+        """Стабильный ключ текущей цели для блеклиста."""
+        q = (obs or {}).get("quest") or {}
+        nxt = q.get("next_objective") or {}
+        if nxt:
+            return "%s:%s:%s" % (nxt.get("quest_id"), nxt.get("type"),
+                                 nxt.get("target_mob_id") or nxt.get("item_id")
+                                 or nxt.get("node_type") or "")
+        return None
+
     def before_action(self, info: Dict[str, Any], ws: Dict[str, Any],
                       candidates: List[str]) -> Dict[str, Any]:
         """Что политике разрешено делать сейчас и зачем.
@@ -86,9 +109,18 @@ class AutonomyLoop:
         """
         obs = encode_observation(ws, info)
         self.obs_before = obs
+        self.blacklist.tick()
 
         urgent = bool((obs.get("player") or {}).get("dead"))
         subgoal = self.planner.step(obs, force=urgent)
+
+        # Цель под отказом (P0.7): не берём её снова, пока не истёк cooldown.
+        # Раньше abandon_objective ничего не менял, и policy выбирала ту же
+        # цель: failure -> abandon -> policy -> тот же навык -> failure.
+        if subgoal and self.blacklist.is_blocked(self._objective_key(obs)):
+            self.planner.force_replan()
+            self.stats["blacklist_skips"] = self.stats.get("blacklist_skips", 0) + 1
+            subgoal = self.planner.step(obs, force=True)
 
         # 1. отсечь то, чьи предусловия не выполнены
         masked = mask_candidates(list(candidates or []), obs)
@@ -101,18 +133,60 @@ class AutonomyLoop:
         # 2. снять действия на cooldown-е после зафиксированного цикла
         masked = self.guard.filter_candidates(masked)
 
-        # 3. форс: сначала цикл, потом subgoal
+        # 3. форс: recovery -> цикл -> subgoal
         forced = None
-        if self.guard.is_looping():
+        nav_command = None
+        nav_status = None
+
+        # 3a. P0.6: незакрытая стратегия восстановления имеет приоритет —
+        # иначе «recovery» остаётся строчкой в логе, а поведение не меняется.
+        pend = self.pending_recovery
+        if pend:
+            self.pending_recovery = None
+            self.stats["recoveries_executed"] = self.stats.get(
+                "recoveries_executed", 0) + 1
+            if pend["kind"] == "navigate":
+                nav_command, nav_status = self._nav_to(obs, pend["target"])
+                if nav_command:
+                    forced = "explore"
+            elif pend["kind"] == "skill":
+                sk = pend["skill"]
+                if sk == "explore" or check_preconditions(sk, obs)["ok"]:
+                    forced = sk
+
+        if forced is None and self.guard.is_looping():
             trip = self.guard.trip()
             self.stats["loops_tripped"] += 1
             forced = RECOVERY_TO_SKILL.get(trip["recovery_action"])
             self.last["loop"] = trip
-        else:
+        elif forced is None:
             self.last["loop"] = None
             sg_skill = (subgoal or {}).get("skill")
-            if sg_skill and check_preconditions(sg_skill, obs)["ok"]:
-                forced = sg_skill
+            if sg_skill:
+                pre = check_preconditions(sg_skill, obs)
+                if pre["ok"]:
+                    forced = sg_skill
+                else:
+                    # Навык блокирован ТОЛЬКО дистанцией -> это работа
+                    # навигации, а не повод бросить цель и уйти фармить
+                    # (живой баг: subgoal ACCEPT, гивер 9 yd, агент ушёл).
+                    dist_only = [f for f in pre["failed"]
+                                 if f in DISTANCE_PRECONDITIONS]
+                    if dist_only and len(dist_only) == len(pre["failed"]):
+                        kind = target_kind_for_subgoal(subgoal)
+                        if kind:
+                            nav_command, nav_status = self._nav_to(
+                                obs, kind, (subgoal or {}).get("target_mob_id"))
+                            if nav_command:
+                                forced = "explore"
+            # навигационный шаг плана (explore с целью) — всегда через навигацию
+            if (subgoal or {}).get("subgoal", "").startswith(("GO_TO", "RETURN")):
+                kind = target_kind_for_subgoal(subgoal)
+                if kind and nav_command is None:
+                    nav_command, nav_status = self._nav_to(
+                        obs, kind, (subgoal or {}).get("target_mob_id"))
+                    if nav_command:
+                        forced = "explore"
 
         if forced and forced not in masked:
             # форсируем только исполнимое
@@ -126,9 +200,27 @@ class AutonomyLoop:
             "candidates": masked,
             "subgoal": subgoal,
             "forced_skill": forced,
+            "nav_command": nav_command,
+            "nav_status": nav_status,
             "obs": obs,
             "blocked": self.guard.blocked_actions(),
         }
+
+    def _nav_to(self, obs, kind, hint=None):
+        """Поставить цель навигации и вернуть (команда моста, статус)."""
+        if not self.nav.set_target(obs, kind, hint):
+            return None, "NO_TARGET"
+        st = self.nav.observe(obs)
+        self.nav_target_before = dict(self.nav.target or {})
+        if st["status"] in ("ARRIVED",):
+            self.stats["nav_arrived"] = self.stats.get("nav_arrived", 0) + 1
+            return None, st["status"]
+        if st["status"] in ("STUCK", "BLOCKED"):
+            self.stats["nav_stuck"] = self.stats.get("nav_stuck", 0) + 1
+        cmd = self.nav.nav_command()
+        if cmd:
+            self.stats["nav_commands"] = self.stats.get("nav_commands", 0) + 1
+        return cmd, st["status"]
 
     # ----------------------------------------------------------- post-action
     def after_action(self, action: str, info_after: Dict[str, Any],
@@ -160,8 +252,28 @@ class AutonomyLoop:
             rec = self.recovery.next_action(action, failure_reason, obs_after)
             recovery = rec
             self.stats["recoveries"] += 1
+            # P0.6: стратегия восстановления ИСПОЛНЯЕТСЯ, а не только пишется
+            # в лог. Транслируем её в конкретное действие следующего шага.
+            plan = plan_recovery(rec.get("recovery_action"))
+            recovery["plan"] = plan
+            if plan["kind"] == "control":
+                op = plan["op"]
+                if op == "abandon":
+                    # P0.7: отказ реально блокирует цель на cooldown, иначе
+                    # policy выбирает ту же самую и цикл повторяется
+                    objective = self._objective_key(obs_before)
+                    self.blacklist.abandon(objective, failure_reason)
+                    self.stats["abandoned"] = self.stats.get("abandoned", 0) + 1
+                    self.planner.force_replan()
+                elif op in ("next", "replan"):
+                    self.planner.force_replan()
+                self.pending_recovery = None
+            else:
+                # навык или навигация — применим на следующем before_action
+                self.pending_recovery = plan
         else:
             self.recovery.on_success(action)
+            self.pending_recovery = None
 
         made_progress = bool(progress.get("any_progress")) or result == "SUCCESS"
         self.guard.observe(action, made_progress,

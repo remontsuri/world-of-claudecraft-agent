@@ -136,6 +136,59 @@ def _buy_available(ws, info):
         return None
 
 
+# ------------------------------------------------- выбор цели боя (P0.5)
+
+def _mob_matches(mob, mob_id):
+    """Совпадает ли моб с id квестовой цели.
+
+    В снапшоте id бывает и templateId ('forest_wolf'), и человекочитаемым
+    name ('Forest Wolf') — сравниваем нормализованно.
+    """
+    if not mob or not mob_id:
+        return False
+    want = str(mob_id).lower().replace("_", " ").strip()
+    if not want:
+        return False
+    have = " ".join(str(mob.get(k) or "") for k in
+                    ("templateId", "mobId", "name")).lower().replace("_", " ")
+    return want in have
+
+
+def _quest_target_mob_id(ws, info):
+    """id моба, который нужен активному kill-объективу (из игры)."""
+    for src in (ws or {}, info or {}):
+        objs = src.get("quest_objectives") or src.get("objectives")
+        if isinstance(objs, list):
+            for o in objs:
+                if not isinstance(o, dict):
+                    continue
+                if (o.get("type") or "").lower() != "kill":
+                    continue
+                if (o.get("remaining") is not None and o.get("remaining") <= 0):
+                    continue
+                mid = o.get("targetMobId") or o.get("target_mob_id")
+                if mid:
+                    return mid
+    return None
+
+
+def _pick_target(mobs, quest_mob_id):
+    """Квестовый моб приоритетнее ближайшего; среди квестовых — ближайший.
+
+    Не полагаемся на предсортировку входа: полагаться на неё значило бы
+    «побежать к дальнему квестовому мобу, когда рядом есть такой же».
+    """
+    if not mobs:
+        return None
+    by_dist = sorted(mobs, key=lambda m: (m.get("_dist") if m.get("_dist")
+                                          is not None else m.get("dist") or 1e9))
+    if quest_mob_id:
+        for m in by_dist:
+            if _mob_matches(m, quest_mob_id):
+                return m
+    return by_dist[0]
+
+
 def encode_observation(ws: Dict[str, Any],
                        info: Dict[str, Any] = None) -> Dict[str, Any]:
     """Собрать observation из WorldState (+ сырой info как fallback)."""
@@ -178,11 +231,22 @@ def encode_observation(ws: Dict[str, Any],
     vendors.sort(key=lambda r: r["_dist"])
     givers.sort(key=lambda r: r["_dist"])
 
-    target = mobs[0] if mobs else None
+    # ЦЕЛЬ выбирается ПОСЛЕ расчёта объектива (см. ниже, после _next_objective):
+    # квестовый моб приоритетнее ближайшего (P0.5).
     p_level = _num(player.get("level"), 1.0)
 
     active, ready, done = _quest_lists(ws, info)
     nxt = _next_objective(active)
+
+    # Выбор цели боя: квестовый моб приоритетнее ближайшего (P0.5).
+    # Раньше стояло target = mobs[0]: при квесте «убей волка», кабане в 4 yd
+    # и волке в 12 yd observation указывал на кабана, а planner — на волка.
+    # Политика била не того моба: прогресс квеста не шёл, но обучение
+    # получало положительный сигнал за kills.
+    quest_mob = (nxt or {}).get("target_mob_id") if (
+        (nxt or {}).get("type") == "kill") else None
+    target = _pick_target(mobs, quest_mob)
+    target_is_quest = bool(target) and _mob_matches(target, quest_mob)
 
     inv = ws.get("inventory") or info.get("inventory") or []
     junk = 0
@@ -224,6 +288,9 @@ def encode_observation(ws: Dict[str, Any],
             "level_diff": (_num(target.get("level"), p_level) - p_level) if target else 0.0,
             "mob_id": (target.get("templateId") or target.get("mobId")) if target else None,
             "in_melee_range": bool(target) and target["_dist"] <= INTERACT_RANGE,
+            # цель выбрана ПО КВЕСТУ, а не просто ближайшая
+            "is_quest_target": target_is_quest,
+            "quest_mob_id": quest_mob,
         },
         "quest": {
             "active": len(active),

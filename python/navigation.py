@@ -23,6 +23,14 @@ TIMEOUT = "TIMEOUT"
 NO_TARGET = "NO_TARGET"
 
 # Гейты из src/sim: INTERACT_RANGE=5, accept/turn-in = INTERACT_RANGE+2
+# Предусловия, которые означают ТОЛЬКО «далеко» — их закрывает навигация,
+# а не отказ от цели. Если навык блокирован исключительно ими, надо идти,
+# а не переключаться на другую цель (живой баг: ACCEPT, гивер 9 yd, ушёл farm).
+DISTANCE_PRECONDITIONS = frozenset({
+    "giver_reachable", "vendor_reachable", "node_reachable",
+    "mob_reachable", "corpse_reachable", "station_reachable",
+})
+
 TOLERANCE = {
     "quest_giver": 6.0,     # чуть строже гейта 7, чтобы не зависать на границе
     "vendor": 10.0,         # гейт покупки 12
