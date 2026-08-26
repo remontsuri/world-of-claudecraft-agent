@@ -206,6 +206,20 @@ class GoalManager:
     # ---- candidate skills from current world ----
     def _candidates(self, info: dict, ws: dict, goal: str = None,
                     class_cfg: dict = None, playstyle: str = None) -> List[str]:
+        # Класс игрока НЕ передавался параметром, хотя ниже используется для
+        # выбора классовых способностей -> NameError на первом же шаге воина
+        # (`gap_closer = get_ability_for_class(player_class, ...)`).
+        # Берём его из тех же источников, что и decide().
+        player_class = (info.get("player_class")
+                        or (ws or {}).get("player_class")
+                        or "warrior")
+        # class_cfg/playstyle приходят не из всех вызовов (agent.py:392 зовёт
+        # только с goal), а ниже идёт class_cfg["resource"] -> TypeError.
+        # Выводим их из класса, если не передали.
+        if class_cfg is None:
+            class_cfg = get_class_config(player_class)
+        if playstyle is None:
+            playstyle = get_playstyle(player_class)
         near = info.get("nearby") or []
         quest_npcs = [e for e in near
                       if (e.get("kind") == "npc" or e.get("type") == "npc")

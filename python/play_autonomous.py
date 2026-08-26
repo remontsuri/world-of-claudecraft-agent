@@ -173,6 +173,25 @@ def main():
     from goal_fsm import GoalFSM
     from replay_buffer import ReplayBuffer
     from strategy_memory import StrategyMemory
+
+    # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
+    # WOC_AUTONOMY=0 полностью отключает обёртку (агент работает как раньше).
+    # Startup-ассерты валят процесс ЗДЕСЬ, если контракты рассинхронизированы:
+    # лучше не стартовать, чем 5000 шагов писать испорченный replay.
+    autonomy = None
+    if os.environ.get("WOC_AUTONOMY", "1") != "0":
+        try:
+            from autonomy import AutonomyLoop
+            from skill_contracts import assert_predicates_implemented
+            from skill_index_contract import assert_skill_indices_match
+            assert_predicates_implemented()
+            assert_skill_indices_match()
+            autonomy = AutonomyLoop(min_dwell=20)
+            print("[autonomy] loop enabled (contracts verified)", flush=True)
+        except Exception:
+            traceback.print_exc()
+            print("[autonomy] DISABLED: contract check failed", flush=True)
+            autonomy = None
     # Record our live PID so the launcher's singleton check (agent.pid) tracks
     # the real long-lived process. (Previously the launcher wrote this via a
     # python -c wrapper; now the module records it directly and reliably.)
@@ -414,7 +433,56 @@ def main():
                         brain._last_qid = new_qid
                     except Exception:
                         traceback.print_exc()
+                # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
+                # Planner/маска/навигация/recovery оборачивают шаг агента.
+                # Неинвазивно: контур ПРЕДЛАГАЕТ действие, agent.step() всё
+                # так же исполняет и учится. Если контур недоступен или упал —
+                # шаг идёт как раньше, агент не останавливается.
+                _pre = None
+                if autonomy is not None:
+                    try:
+                        _live_info = getattr(env, "_last_info", None) or {}
+                        if _live_info:
+                            from world_state import build_world_state as _bws2
+                            _live_ws = _bws2(_live_info)
+                            # кандидаты берём у САМОЙ политики (её интерфейс —
+                            # _candidates/decide, у неё нет .actions)
+                            try:
+                                _cands = list(agent.policy._candidates(
+                                    _live_info, _live_ws) or [])
+                            except Exception:
+                                _cands = []
+                            _pre = autonomy.before_action(
+                                _live_info, _live_ws, _cands)
+                            # навигация исполняется прямо здесь: у agent.step()
+                            # нет канала для координат
+                            _cmd = _pre.get("nav_command")
+                            if _cmd:
+                                env.raw_call(_cmd)
+                                _nav_after = getattr(env, "_last_info", None) or {}
+                                autonomy.after_action(
+                                    "explore", _nav_after, _bws2(_nav_after))
+                                continue
+                            # подсказка политике через её же hints-канал
+                            _forced = _pre.get("forced_skill")
+                            if _forced and isinstance(
+                                    getattr(agent.policy, "hints", None), dict):
+                                agent.policy.hints["autonomy_subgoal"] = {
+                                    "key": "autonomy_subgoal", "skill": _forced}
+                    except Exception:
+                        traceback.print_exc()
                 rec = agent.step()
+                if autonomy is not None and _pre is not None:
+                    try:
+                        _after = getattr(env, "_last_info", None) or {}
+                        if _after:
+                            from world_state import build_world_state as _bws3
+                            autonomy.after_action(
+                                (rec or {}).get("action") or "noop",
+                                _after, _bws3(_after),
+                                reward=float((rec or {}).get("reward") or 0.0))
+                    except Exception:
+                        traceback.print_exc()
         except BrowserBridgeError as e:
             # Infra failure (bridge/CDP/HTTP down). RECOVER IN-PROCESS — do NOT
             # re-create BrowserEnv/Agent. That re-init itself calls snapshot/

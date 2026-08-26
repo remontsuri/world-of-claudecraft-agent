@@ -52,6 +52,19 @@ class BrowserEnv:
         self._last_info = self._require({"action": "snapshot"}).get("info", {})
 
     # ---- bridge I/O ----
+    def raw_call(self, payload: dict, timeout: float = 200.0) -> dict:
+        """Прямой вызов моста (нужен навигации: у step() нет канала координат).
+
+        Обновляет _last_info, чтобы автономный контур видел свежее состояние.
+        """
+        raw = self._post(payload, timeout=timeout)
+        info = (raw or {}).get("info") or {}
+        if isinstance(info, dict) and "info" in info:
+            info = info["info"]
+        if info:
+            self._last_info = info
+        return raw
+
     def _post(self, payload: dict, timeout: float = 30.0) -> dict:
         """Bounded one-shot HTTP RPC. No background reader thread is used.
 
