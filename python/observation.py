@@ -232,5 +232,8 @@ def encode_observation(ws: Dict[str, Any],
             "cell": ws.get("cell"),
         },
         "craftable_now": ws.get("craftable_now"),
+        # сырые сущности с посчитанной дистанцией — чтобы навигация брала
+        # КООРДИНАТЫ ИЗ ИГРЫ, а не из статических таблиц
+        "_entities": (mobs + npcs + nodes + corpses),
     }
     return obs

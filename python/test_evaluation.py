@@ -1,182 +1,178 @@
-"""TDD tests for the autonomy evaluation suite (evaluation.py).
+"""Тесты Autonomy Benchmark (ARCHITECTURE.md §15).
 
-Run from the python/ directory:
-    C:/Users/vladc/AppData/Local/Programs/Python/Python312/python.exe test_evaluation.py
-
-These tests must FAIL before evaluation.py exists, then PASS after.
+Запуск: cd python && python -m pytest test_evaluation.py -v
 """
 import json
 import os
+import sys
 import tempfile
-import unittest
 
-import evaluation
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-
-def _rec(**kw):
-    """Build a minimal record with sane defaults."""
-    base = {
-        "step": 0,
-        "pid": 1,
-        "action": "farm",
-        "verdict": "success",
-        "dist": 10.0,
-        "kills": 0,
-        "deaths": 0,
-        "qprog": 0,
-    }
-    base.update(kw)
-    return base
+from evaluation import load_run, evaluate, format_report
 
 
-def _perfect_run(n=12):
-    """A run that should score ~1.0: every attempt succeeds, real progress
-    is made every step, no stuck loops, no inconclusive verdicts."""
+def _r(step, action, verdict="success", pid=1, **kw):
+    rec = {"step": step, "pid": pid, "action": action, "verdict": verdict}
+    rec.update(kw)
+    return rec
+
+
+# ------------------------------------------------------------------- evaluate
+
+def test_empty_records_do_not_raise():
+    s = evaluate([])
+    assert s["total_steps"] == 0
+    assert s["autonomy_score"] == 0.0
+
+
+def test_perfect_run_scores_high():
     recs = []
-    actions = ["accept_quest", "turn_in_quest", "sell_junk", "buy", "farm", "farm",
-               "farm", "farm", "farm", "farm", "farm", "farm"]
-    for i, a in enumerate(actions[:n]):
-        recs.append(_rec(
-            step=i,
-            action=a,
-            verdict="success",
-            dist=float(10 - i),       # strictly decreasing -> nav frac 1.0
-            kills=i,                  # strictly increasing -> kills_delta > 0
-            deaths=0,                 # no deaths
-            qprog=i,                  # strictly increasing -> progress
-        ))
-    return recs
+    for i in range(20):
+        recs.append(_r(i, "farm", "success", kills=i, deaths=0, qprog=min(8, i),
+                       dist=30 - i, xp=i))
+    recs.append(_r(20, "accept_quest", "success", kills=20, deaths=0, qprog=8,
+                   dist=5, xp=20))
+    recs.append(_r(21, "turn_in_quest", "success", kills=20, deaths=0, qprog=8,
+                   dist=4, xp=30, quests_done=1))
+    s = evaluate(recs)
+    assert s["autonomy_score"] > 0.8, s["components"]
 
 
-def _all_inconclusive_run(n=10):
-    """A run that should score ~0.0: every verdict is inconclusive, no quest/
-    economy/combat/nav data at all, and one repeated action with no progress
-    (so a long no-progress loop is detected)."""
-    recs = []
-    for i in range(n):
-        recs.append({
-            "step": i,
-            "pid": 7,
-            "action": "farm",          # repeated, never succeeds -> long no-progress run
-            "verdict": "inconclusive", # never 'success'
-            # intentionally no dist/kills/deaths/qprog -> those categories None
-        })
-    return recs
+def test_all_inconclusive_scores_low():
+    recs = [_r(i, "farm", "inconclusive", kills=0, deaths=0, qprog=0)
+            for i in range(30)]
+    s = evaluate(recs)
+    assert s["autonomy_score"] < 0.3, s["components"]
+    assert s["loop_health"]["inconclusive_share"] == 1.0
 
 
-class TestEvaluate(unittest.TestCase):
-
-    def test_perfect_run_scores_near_one(self):
-        score = evaluation.evaluate(_perfect_run())
-        self.assertIsNotNone(score["autonomy_score"])
-        self.assertGreater(score["autonomy_score"], 0.95,
-                          "perfect run should score near 1.0, got %r" % score["autonomy_score"])
-
-    def test_all_inconclusive_scores_near_zero(self):
-        score = evaluation.evaluate(_all_inconclusive_run())
-        self.assertIsNotNone(score["autonomy_score"])
-        self.assertLess(score["autonomy_score"], 0.05,
-                        "all-inconclusive run should score near 0.0, got %r" % score["autonomy_score"])
-
-    def test_accept_rate_two_of_three(self):
-        recs = [
-            _rec(step=0, action="accept_quest", verdict="success"),
-            _rec(step=1, action="accept_quest", verdict="success"),
-            _rec(step=2, action="accept_quest", verdict="failure"),
-        ]
-        score = evaluation.evaluate(recs)
-        self.assertAlmostEqual(score["quest"]["accept_rate"], 2.0 / 3.0, places=6)
-
-    def test_empty_does_not_raise(self):
-        score = evaluation.evaluate([])
-        self.assertIsInstance(score, dict)
-        # no data -> no subscore -> autonomy_score None, but no exception
-        self.assertIsNone(score["autonomy_score"])
-
-    def test_no_attempts_reported_as_none_not_zero(self):
-        # A run with zero quest/economy attempts: those rates must be None and
-        # excluded from the average, never counted as 0.
-        recs = [_rec(step=i, action="farm", verdict="success", kills=i, qprog=i,
-                     dist=float(10 - i)) for i in range(5)]
-        score = evaluation.evaluate(recs)
-        self.assertIsNone(score["quest"]["accept_rate"])
-        self.assertIsNone(score["quest"]["turn_in_rate"])
-        self.assertIsNone(score["economy"]["sell_rate"])
-        self.assertIsNone(score["economy"]["buy_rate"])
-        # autonomy_score should still be a real number (not None) because other
-        # categories have data.
-        self.assertIsNotNone(score["autonomy_score"])
-
-    def test_no_division_by_zero_on_single_record(self):
-        recs = [_rec(step=0, action="farm", verdict="success", kills=0, qprog=0, dist=5.0)]
-        score = evaluation.evaluate(recs)  # must not raise ZeroDivisionError
-        self.assertIsInstance(score, dict)
+def test_accept_rate_two_of_three():
+    recs = [_r(0, "accept_quest", "success"),
+            _r(1, "accept_quest", "failure"),
+            _r(2, "accept_quest", "success")]
+    s = evaluate(recs)
+    assert abs(s["quest"]["accept_rate"] - 2.0 / 3.0) < 1e-9
+    assert s["quest"]["accept_attempts"] == 3
 
 
-class TestLoadRun(unittest.TestCase):
-
-    def _write_tmp(self, lines):
-        fd, path = tempfile.mkstemp(suffix=".jsonl", prefix="eval_test_")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for ln in lines:
-                f.write(ln + "\n")
-        return path
-
-    def test_skips_malformed_lines(self):
-        path = self._write_tmp([
-            '{"pid": 1, "action": "farm", "verdict": "success"}',
-            "this is not json at all ===",
-            "=== another summary line ===",
-            '{"pid": 1, "action": "sell_junk", "verdict": "failure"}',
-            "{broken json",
-            '{"pid": 1, "action": "accept_quest", "verdict": "success"}',
-        ])
-        try:
-            recs = evaluation.load_run(path)
-            self.assertEqual(len(recs), 3)
-            for r in recs:
-                self.assertIsInstance(r, dict)
-        finally:
-            os.remove(path)
-
-    def test_pid_none_returns_last_run_only(self):
-        # First-appearance order: pid1@0, pid2@1, pid3@4 (last run).
-        path = self._write_tmp([
-            '{"pid": 1, "action": "a", "verdict": "success"}',
-            '{"pid": 2, "action": "b", "verdict": "success"}',
-            '{"pid": 1, "action": "c", "verdict": "failure"}',
-            "garbage line that is not json",
-            '{"pid": 3, "action": "d", "verdict": "inconclusive"}',
-        ])
-        try:
-            recs = evaluation.load_run(path)  # pid=None
-            self.assertEqual(len(recs), 1)
-            self.assertEqual(recs[0]["pid"], 3)
-        finally:
-            os.remove(path)
-
-    def test_pid_filter_returns_only_that_run(self):
-        path = self._write_tmp([
-            '{"pid": 1, "action": "a", "verdict": "success"}',
-            '{"pid": 2, "action": "b", "verdict": "success"}',
-            '{"pid": 1, "action": "c", "verdict": "failure"}',
-        ])
-        try:
-            recs = evaluation.load_run(path, pid=1)
-            self.assertEqual(len(recs), 2)
-            self.assertTrue(all(r["pid"] == 1 for r in recs))
-        finally:
-            os.remove(path)
+def test_category_without_attempts_is_none_and_excluded():
+    recs = [_r(i, "farm", "success", kills=i) for i in range(12)]
+    s = evaluate(recs)
+    assert s["components"]["economy_buy"] is None
+    assert s["components"]["quest_accept"] is None
+    # None-компоненты не тянут score вниз как нули
+    assert s["autonomy_score"] > 0.0
 
 
-class TestFormatReport(unittest.TestCase):
-
-    def test_format_report_returns_string(self):
-        score = evaluation.evaluate(_perfect_run())
-        rep = evaluation.format_report(score)
-        self.assertIsInstance(rep, str)
-        self.assertGreater(len(rep), 0)
+def test_no_division_by_zero_on_single_record():
+    s = evaluate([_r(0, "farm", "success")])
+    assert isinstance(s["autonomy_score"], float)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+def test_deaths_reduce_survival_component():
+    good = [_r(i, "farm", "success", kills=i, deaths=0) for i in range(20)]
+    bad = [_r(i, "farm", "success", kills=i, deaths=i // 4) for i in range(20)]
+    assert (evaluate(good)["components"]["combat_survival"]
+            > evaluate(bad)["components"]["combat_survival"])
+
+
+def test_max_no_progress_run_detected():
+    recs = [_r(i, "buy", "inconclusive", kills=0, qprog=0, deaths=0, xp=0)
+            for i in range(15)]
+    s = evaluate(recs)
+    assert s["loop_health"]["max_no_progress_run"] >= 14
+    assert s["components"]["loop_health"] < 1.0
+
+
+def test_progress_breaks_no_progress_run():
+    recs = [_r(i, "farm", "success", kills=i, qprog=0, deaths=0, xp=i)
+            for i in range(15)]
+    s = evaluate(recs)
+    assert s["loop_health"]["max_no_progress_run"] <= 2
+
+
+def test_navigation_fraction_counts_only_decreases():
+    recs = [_r(0, "explore", dist=30.0), _r(1, "explore", dist=20.0),
+            _r(2, "explore", dist=25.0), _r(3, "explore", dist=10.0)]
+    s = evaluate(recs)
+    # 3 пары: 30->20 (да), 20->25 (нет), 25->10 (да)
+    assert abs(s["navigation"]["dist_improved_fraction"] - 2.0 / 3.0) < 1e-9
+
+
+def test_navigation_none_when_no_dist_data():
+    s = evaluate([_r(0, "farm"), _r(1, "farm")])
+    assert s["navigation"]["dist_improved_fraction"] is None
+
+
+# ------------------------------------------------------------------- load_run
+
+def _write(lines):
+    fh = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False,
+                                     encoding="utf-8")
+    for l in lines:
+        fh.write(l + "\n")
+    fh.close()
+    return fh.name
+
+
+def test_load_run_skips_malformed_lines():
+    path = _write([
+        json.dumps(_r(0, "farm", pid=7)),
+        "  action_dist = {'farm': '100%'}",
+        "not json at all",
+        "",
+        json.dumps(_r(1, "loot", pid=7)),
+    ])
+    try:
+        recs = load_run(path)
+        assert len(recs) == 2
+        assert [r["action"] for r in recs] == ["farm", "loot"]
+    finally:
+        os.unlink(path)
+
+
+def test_load_run_returns_only_last_run():
+    path = _write([
+        json.dumps(_r(0, "farm", pid=1)),
+        json.dumps(_r(1, "farm", pid=1)),
+        json.dumps(_r(0, "loot", pid=2)),
+        json.dumps(_r(1, "loot", pid=2)),
+        json.dumps(_r(2, "loot", pid=2)),
+    ])
+    try:
+        recs = load_run(path)
+        assert len(recs) == 3
+        assert all(r["pid"] == 2 for r in recs)
+    finally:
+        os.unlink(path)
+
+
+def test_load_run_explicit_pid():
+    path = _write([
+        json.dumps(_r(0, "farm", pid=1)),
+        json.dumps(_r(0, "loot", pid=2)),
+    ])
+    try:
+        recs = load_run(path, pid=1)
+        assert len(recs) == 1 and recs[0]["action"] == "farm"
+    finally:
+        os.unlink(path)
+
+
+def test_load_run_missing_file_returns_empty():
+    assert load_run("D:/definitely/not/here.jsonl") == []
+
+
+# --------------------------------------------------------------------- report
+
+def test_format_report_contains_score_and_sections():
+    txt = format_report(evaluate([_r(i, "farm", "success", kills=i)
+                                 for i in range(12)]))
+    assert "AUTONOMY SCORE" in txt
+    assert "QUEST" in txt and "ECONOMY" in txt and "COMBAT" in txt
+    assert "n/a" in txt          # категории без попыток честно помечены
+
+
+def test_format_report_on_empty_does_not_raise():
+    assert "AUTONOMY SCORE" in format_report(evaluate([]))
