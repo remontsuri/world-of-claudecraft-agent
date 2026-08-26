@@ -12,6 +12,19 @@
 """
 from typing import Dict, List, Any
 
+
+class UnknownPredicate(RuntimeError):
+    """Предикат объявлен в контракте, но не реализован в _pred()."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            "precondition %r is declared in SKILL_CONTRACTS but not implemented "
+            "in skill_contracts._pred() — this is a programming error, not a "
+            "runtime condition" % name)
+        self.predicate = name
+
+
+
 # ---------------------------------------------------------------- contracts
 
 SKILL_CONTRACTS: Dict[str, Dict[str, Any]] = {
@@ -118,9 +131,22 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "vendor_reachable":
         return (world.get("vendor_distance") or 999) <= 12.0
     if name == "item_exists":
-        return bool(inv.get("buy_item_available", True))
+        # FAIL-CLOSED: отсутствие информации об ассортименте != «товар есть».
+        # Раньше default=True давало BUY -> гарантированный failure моста
+        # и мусорный отрицательный transition в replay (аудит P0.5/P0.4).
+        avail = inv.get("buy_item_available")
+        if avail is None:
+            return False
+        return bool(avail)
     if name == "money_sufficient":
-        return (player.get("copper") or 0) > 0
+        # copper > 0 НЕ значит «хватает»: handaxe стоит 20, а на руках 14.
+        # Цена берётся из живого vendor_offers, иначе из справочника
+        # контента (items.ts). Неизвестная цена -> считаем недостаточно.
+        copper = int(player.get("copper") or 0)
+        price = inv.get("buy_item_price")
+        if price is None:
+            return False
+        return copper >= int(price)
     if name == "bags_not_full":
         return (inv.get("free_slots") or 0) > 0
     if name == "has_junk":
@@ -130,6 +156,11 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "node_reachable":
         return (world.get("node_distance") or 999) <= 5.0
     if name == "has_tool":
+        # Трёхзначно: инструмент нужен и его нет -> False; нужен и есть -> True;
+        # данных об инвентаре НЕТ -> False (fail-closed). Раньше отсутствие
+        # данных считалось «инструмент есть» и GATHER гарантированно падал.
+        if inv.get("items") is None and inv.get("missing_tool") is None:
+            return False
         return not inv.get("missing_tool")
     if name == "mob_exists":
         return (world.get("nearby_mobs") or 0) > 0
@@ -174,8 +205,40 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
         return bool(obs.get("craftable_now"))
     if name == "station_reachable":
         return bool(obs.get("craftable_now"))
-    # неизвестный предикат: не блокируем (fail-open, чтобы не глушить навык)
-    return True
+    # НЕИЗВЕСТНЫЙ предикат — FAIL-CLOSED (аудит P0.3).
+    # Раньше здесь стоял `return True`: любой предикат, добавленный в контракт
+    # но не реализованный тут, молча разрешал навык. Для автономного агента
+    # это худший вид ошибки — он «умеет» то, что никто не проверял.
+    # Полноту гарантирует assert_predicates_implemented() на старте.
+    raise UnknownPredicate(name)
+
+
+def all_predicates() -> List[str]:
+    """Все предусловия, упомянутые в контрактах."""
+    out = set()
+    for c in SKILL_CONTRACTS.values():
+        out.update(c.get("preconditions") or [])
+    return sorted(out)
+
+
+def assert_predicates_implemented() -> None:
+    """Startup-проверка: каждый предикат из контрактов реализован.
+
+    Вызывать при старте агента. Падаем громко на старте, а не тихо
+    разрешаем невалидное действие в середине автономного прогона.
+    """
+    probe = {"player": {}, "world": {}, "inventory": {}, "quest": {},
+             "target": {}}
+    missing = []
+    for name in all_predicates():
+        try:
+            _pred(name, probe)
+        except UnknownPredicate:
+            missing.append(name)
+        except Exception:
+            pass                        # предикат есть, данных в probe нет — ок
+    if missing:
+        raise UnknownPredicate(", ".join(missing))
 
 
 def check_preconditions(skill: str, obs: Dict[str, Any]) -> Dict[str, Any]:

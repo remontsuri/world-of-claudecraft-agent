@@ -247,6 +247,52 @@ function readGameState() {
       return m;
     })(),
     inventory: invFull,
+    // --- CANONICAL поля для детектора прогресса (аудит P0.2/P0.4) ---
+    // inventory_by_id (ниже) уже даёт {itemId: count} — именно его надо
+    // диффить: free_slots СЛЕПЫ к стакам (handaxe x1 -> x2 не меняет число
+    // слотов), из-за чего реальная покупка классифицировалась как NO_OP.
+    // 1) экипировка как {slot: itemId}. equipment_rev в observation не
+    //    формировался, поэтому контракт equip -> equipment_changed был слепым.
+    equipment: (function () {
+      try {
+        const w = g.world;
+        const pp = w && w.players && w.primaryId != null
+          ? w.players.get(w.primaryId) : null;
+        const eq = pp && pp.equipment;
+        if (!eq) return {};
+        const out = {};
+        for (const k of Object.keys(eq)) {
+          const v = eq[k];
+          out[k] = (v && typeof v === 'object') ? (v.itemId || v.id || null) : v;
+        }
+        return out;
+      } catch (_) { return {}; }
+    })(),
+    // 3) ассортимент и ЦЕНЫ ближайшего вендора (items.ts: buyValue).
+    //    money_sufficient = copper > 0 пропускало покупку handaxe (buyValue 20)
+    //    при copper 14 -> гарантированный failure и мусорный transition.
+    vendor_offers: (function () {
+      try {
+        let best = null, bd = Infinity;
+        for (const e of sim.entities.values()) {
+          if (!e || !e.pos || !e.vendorItems || !e.vendorItems.length) continue;
+          const d = Math.hypot(e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+          if (d < bd) { bd = d; best = e; }
+        }
+        if (!best) return null;
+        const defs = (typeof sim.itemDef === 'function') ? sim.itemDef.bind(sim) : null;
+        const items = [];
+        for (const id of best.vendorItems) {
+          let price = null;
+          try {
+            const def = defs ? defs(id) : null;
+            if (def) price = (def.buyValue != null) ? def.buyValue : (def.sellValue != null ? def.sellValue : null);
+          } catch (_) {}
+          items.push({ itemId: id, price: price });
+        }
+        return { npc: best.templateId || best.name || null, dist: bd, items: items };
+      } catch (_) { return null; }
+    })(),
     inventory_by_id: invFull.reduce((m, s) => { if (s.itemId) m[s.itemId] = (m[s.itemId] || 0) + (s.count || 1); return m; }, {}),
     recipes_known: recipesKnown,
     stations,

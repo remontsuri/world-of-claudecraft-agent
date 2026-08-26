@@ -42,9 +42,47 @@ def test_preconditions_fail_without_vendor():
 def test_preconditions_pass_with_vendor_in_range():
     obs = {"world": {"vendors": 1, "vendor_distance": 4.0},
            "player": {"copper": 100},
-           "inventory": {"free_slots": 5, "buy_item_available": True}}
+           "inventory": {"free_slots": 5, "buy_item_available": True,
+                         "buy_item_id": "handaxe", "buy_item_price": 20}}
     res = check_preconditions("buy", obs)
     assert res["ok"] is True, res["failed"]
+
+
+def test_buy_blocked_when_price_exceeds_copper():
+    """handaxe стоит 20, на руках 14 -> покупка обречена, знать это ЗАРАНЕЕ."""
+    obs = {"world": {"vendors": 1, "vendor_distance": 4.0},
+           "player": {"copper": 14},
+           "inventory": {"free_slots": 5, "buy_item_available": True,
+                         "buy_item_id": "handaxe", "buy_item_price": 20}}
+    assert "money_sufficient" in check_preconditions("buy", obs)["failed"]
+
+
+def test_buy_fail_closed_on_unknown_price_and_stock():
+    """Нет данных о цене/наличии -> НЕ пытаться (раньше fail-open)."""
+    base = {"world": {"vendors": 1, "vendor_distance": 4.0},
+            "player": {"copper": 999}}
+    no_price = dict(base, inventory={"free_slots": 5, "buy_item_available": True,
+                                     "buy_item_price": None})
+    no_stock = dict(base, inventory={"free_slots": 5, "buy_item_available": None,
+                                     "buy_item_price": 20})
+    assert "money_sufficient" in check_preconditions("buy", no_price)["failed"]
+    assert "item_exists" in check_preconditions("buy", no_stock)["failed"]
+
+
+def test_unknown_predicate_fails_closed():
+    """Предикат в контракте без реализации = ошибка программиста, не 'можно'."""
+    from skill_contracts import UnknownPredicate, _pred
+    try:
+        _pred("totally_made_up_predicate", {"player": {}})
+    except UnknownPredicate:
+        pass
+    else:
+        raise AssertionError("unknown predicate must NOT be allowed silently")
+
+
+def test_every_contract_predicate_is_implemented():
+    from skill_contracts import assert_predicates_implemented
+    assert_predicates_implemented()
 
 
 def test_turn_in_requires_ready_quest():
@@ -89,10 +127,36 @@ def test_quest_progress_delta():
     assert p["quests_ready_delta"] == 1
 
 
-def test_inventory_delta_sign_is_items_gained():
-    # свободных слотов стало меньше -> предмет получен -> +1
-    p = detect_progress(_obs(free=5), _obs(free=4))
+def test_inventory_delta_counts_items_not_slots():
+    """P0.1: стак handaxe 1->2 НЕ меняет слоты, но это реальная покупка."""
+    before = {"inventory": {"free_slots": 4, "items": {"handaxe": 1}}}
+    after = {"inventory": {"free_slots": 4, "items": {"handaxe": 2}}}
+    p = detect_progress(before, after)
     assert p["inventory_delta"] == 1
+    assert p["items_delta"] == {"handaxe": 1}
+    assert p["free_slots_delta"] == 0          # слоты слепы — и это видно
+
+
+def test_item_spent_is_negative_delta():
+    before = {"inventory": {"items": {"bread": 2}}}
+    after = {"inventory": {"items": {"bread": 1}}}
+    p = detect_progress(before, after)
+    assert p["items_delta"] == {"bread": -1}
+    assert p["inventory_delta"] == -1
+
+
+def test_equipment_change_detected_by_slot_diff():
+    """P0.2: equipment_rev не существовал -> equip был слепым."""
+    before = {"inventory": {"equipment": {"mainhand": "worn_sword"}}}
+    after = {"inventory": {"equipment": {"mainhand": "iron_sword"}}}
+    p = detect_progress(before, after)
+    assert p["equipment_changed"] is True
+    assert p["equipment_delta"]["mainhand"] == ("worn_sword", "iron_sword")
+
+
+def test_equipment_unchanged_is_not_progress():
+    same = {"inventory": {"equipment": {"mainhand": "worn_sword"}}}
+    assert detect_progress(same, same)["equipment_changed"] is False
 
 
 def test_copper_delta_negative_on_purchase():

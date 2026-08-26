@@ -104,6 +104,38 @@ def _next_objective(active: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return None
 
 
+# --------------------------------------------------------- покупки (P0.4)
+
+def _buy_target(ws, info):
+    """Что агент собирается купить: нужный инструмент, иначе явная цель."""
+    return (ws.get("needs_tool") or ws.get("buy_item_id")
+            or (info or {}).get("buy_item_id"))
+
+
+def _buy_price(ws, info):
+    """Цена цели покупки. None = НЕИЗВЕСТНО (fail-closed у контракта)."""
+    item = _buy_target(ws, info)
+    if not item:
+        return None
+    try:
+        from item_prices import resolve_price
+        return resolve_price(info or {}, item)
+    except Exception:
+        return None
+
+
+def _buy_available(ws, info):
+    """Продаёт ли ближайший вендор эту вещь. None = НЕИЗВЕСТНО."""
+    item = _buy_target(ws, info)
+    if not item:
+        return None
+    try:
+        from item_prices import vendor_sells
+        return vendor_sells(info or {}, item)
+    except Exception:
+        return None
+
+
 def encode_observation(ws: Dict[str, Any],
                        info: Dict[str, Any] = None) -> Dict[str, Any]:
     """Собрать observation из WorldState (+ сырой info как fallback)."""
@@ -211,6 +243,19 @@ def encode_observation(ws: Dict[str, Any],
             "missing_tool": ws.get("needs_tool"),
             "quest_items": ws.get("quest_items") or [],
             "equippable_item": ws.get("equippable_item"),
+            # CANONICAL из игры: {itemId: count} и {slot: itemId}.
+            # По ним детектор прогресса считает реальные дельты вместо
+            # слепых free_slots / отсутствующего equipment_rev (P0.1, P0.2).
+            "items": (info.get("inventory_by_id")
+                      or ws.get("inventory_by_id") or {}),
+            "equipment": (info.get("equipment") or ws.get("equipment") or {}),
+            # Что именно агент собирается купить, его ЦЕНА и наличие у вендора.
+            # money_sufficient сравнивает copper >= price, а не copper > 0
+            # (handaxe стоит 20 при 14 на руках -> покупка была обречена).
+            # None означает НЕИЗВЕСТНО и трактуется fail-closed.
+            "buy_item_id": _buy_target(ws, info),
+            "buy_item_price": _buy_price(ws, info),
+            "buy_item_available": _buy_available(ws, info),
         },
         "world": {
             "nearby_mobs": len(mobs),

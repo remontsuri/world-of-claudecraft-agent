@@ -160,7 +160,8 @@ def test_buy_masked_without_vendor():
 def test_buy_unmasked_with_vendor_and_money():
     obs = _obs(world={"vendors": 1, "vendor_distance": 5.0},
                player={"copper": 50},
-               inventory={"free_slots": 4})
+               inventory={"free_slots": 4, "buy_item_available": True,
+                          "buy_item_id": "handaxe", "buy_item_price": 20})
     assert get_action_mask(obs)[index_of("buy")] == 1
 
 
