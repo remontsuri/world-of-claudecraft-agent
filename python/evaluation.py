@@ -258,7 +258,8 @@ def evaluate(records: list) -> dict:
     out["steps"] = steps
     out["pid"] = records[0].get("pid") if records else None
     out["categories_used"] = used
-    out["autonomy_score"] = 0.0 if overall is None else _clamp(overall)
+    # No category produced data (e.g. empty input) -> no score, never 0.0.
+    out["autonomy_score"] = None if overall is None else _clamp(overall)
     return out
 
 
