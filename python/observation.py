@@ -22,6 +22,16 @@ QUEST_RANGE = 7.0
 VENDOR_RANGE = 12.0
 MOB_SCAN_RANGE = 45.0
 
+# Из какого блока ws["world"] какой kind восстанавливать (см. _entities).
+_KIND_BY_WORLD_KEY = {
+    "nearby_mobs": "mob",
+    "corpses": "mob",
+    "gather_nodes": "node",
+    "vendors": "npc",
+    "quest_givers": "npc",
+    "npcs": "npc",
+}
+
 
 def _num(v, default=0.0) -> float:
     try:
@@ -61,9 +71,38 @@ def _is_kind(e: Dict[str, Any], kind: str) -> bool:
 
 
 def _entities(ws: Dict[str, Any], info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Сущности рядом. Порядок источников: сырой список -> canonical ws.world.
+
+    Раньше здесь были только ws["nearby"] / info["nearby"] / ws["entities"],
+    поэтому при неполном raw info сущности исчезали целиком: мобы, трупы,
+    узлы, вендоры и гиверы становились нулём, и farm/loot/gather/buy/
+    accept_quest молча блокировались. Canonical WorldState несёт те же
+    сущности в ws["world"], и adapter обязан их видеть — иначе факт живёт
+    только благодаря мосту (та же поломка, что дала мёртвый heal).
+    """
     for src in (ws.get("nearby"), info.get("nearby"), ws.get("entities")):
         if isinstance(src, list) and src:
             return src
+    # canonical fallback: собираем обратно из ws["world"] блоков
+    world = ws.get("world")
+    if isinstance(world, dict):
+        merged: List[Dict[str, Any]] = []
+        for key in ("nearby_mobs", "corpses", "gather_nodes", "vendors",
+                    "quest_givers", "npcs"):
+            part = world.get(key)
+            if not isinstance(part, list):
+                continue
+            for e in part:
+                if not isinstance(e, dict):
+                    continue
+                # ws["world"] блоки уже разложены по типу, а kind в них может
+                # отсутствовать — восстанавливаем его из имени блока, иначе
+                # классификация ниже отправит всё в "прочее".
+                if not e.get("kind") and not e.get("type"):
+                    e = dict(e, kind=_KIND_BY_WORLD_KEY.get(key, "npc"))
+                merged.append(e)
+        if merged:
+            return merged
     return []
 
 
@@ -81,6 +120,22 @@ def _quest_lists(ws: Dict[str, Any], info: Dict[str, Any]):
     active = q.get("active") or []
     ready = q.get("ready") or []
     done = q.get("done") or []
+    # P0.11: canonical ws не держит списков — он несёт ОДИН активный квест
+    # как ws["quest"] (id/phase/objectives/giver_distance). Раньше читался
+    # только ws["quests"], поэтому без raw info next_objective становился
+    # None: planner терял цель и агент перестал бы доводить квесты на любом
+    # пути без мостового info.
+    if not active:
+        cq = ws.get("quest")
+        if isinstance(cq, dict) and cq.get("id"):
+            active = [{
+                "id": cq.get("id"),
+                "state": "ready" if cq.get("complete") else "active",
+                "complete": bool(cq.get("complete")),
+                "objectives": cq.get("objectives") or [],
+                "turnInNpc": cq.get("turnInNpc"),
+                "giver_distance": cq.get("giver_distance"),
+            }]
     # сервер может держать READY внутри active (state == 'ready')
     if not ready and active:
         ready = [x for x in active
@@ -210,6 +265,15 @@ def encode_observation(ws: Dict[str, Any],
 
     mana = _num(player.get("mana"))
     max_mana = _num(player.get("maxMana"), 0.0)
+    # P0.11: мана и уровень приходят из игры ПЛОСКИМИ ключами (ws.mana,
+    # ws.max_mana, ws.player_level, info.mana/maxMana) и в player-dict их нет.
+    # Раньше читался только player.*, поэтому мана обнулялась, а уровень
+    # сбрасывался в 1 -> классовые спеллы мага теряли ресурс, а level_diff
+    # врал. Порядок: вложенное поле -> canonical ws -> raw info.
+    if not mana:
+        mana = _num(ws.get("mana"), _num(info.get("mana")))
+    if not max_mana:
+        max_mana = _num(ws.get("max_mana"), _num(info.get("maxMana")))
 
     # --- сущности по типам
     mobs, npcs, nodes, corpses, vendors, givers = [], [], [], [], [], []
@@ -243,7 +307,10 @@ def encode_observation(ws: Dict[str, Any],
 
     # ЦЕЛЬ выбирается ПОСЛЕ расчёта объектива (см. ниже, после _next_objective):
     # квестовый моб приоритетнее ближайшего (P0.5).
-    p_level = _num(player.get("level"), 1.0)
+    p_level = _num(player.get("level"), 0.0)
+    if not p_level:
+        # canonical ws несёт уровень как player_level (плоский ключ)
+        p_level = _num(ws.get("player_level"), _num(info.get("level"), 1.0))
 
     active, ready, done = _quest_lists(ws, info)
     nxt = _next_objective(active)

@@ -129,8 +129,19 @@ def test_world_nearby_mobs_gather_nodes_vendors_from_entities():
 
 
 def test_world_blocks_empty_without_entities():
+    """Без сущностей КАЖДЫЙ блок world пуст.
+
+    Раньше проверялся точный набор из трёх ключей. P0.11 добавил corpses и
+    quest_givers (контракты их читают, и без них loot/accept_quest теряли
+    факт на границе canonical -> observation). Проверяем смысл — все блоки
+    пусты — а не фиксированный список имён, иначе тест ломается на каждом
+    законном расширении canonical схемы.
+    """
     ws = W.build_world_state(_info())
-    assert ws["world"] == {"nearby_mobs": [], "gather_nodes": [], "vendors": []}
+    world = ws["world"]
+    assert set(world) >= {"nearby_mobs", "gather_nodes", "vendors",
+                          "corpses", "quest_givers"}, world
+    assert all(v == [] for v in world.values()), world
 
 
 # ---------- no hardcoded tables ----------

@@ -375,11 +375,26 @@ def build_world_state(info: Dict) -> Dict:
             "z": e.get("z"),
             "nodeType": e.get("nodeType"),
             "lootable": bool(e.get("lootable")),
+            # P0.11: проекция обязана нести ПРИЗНАКИ ТИПА, иначе потребители
+            # (observation._entities и далее контракты) не смогут отличить
+            # вендора от гивера, и оба станут нулём при неполном raw info.
+            # Раньше эти поля обрезались -> vendors/quest_givers = 0 ->
+            # buy/sell_junk/accept_quest/turn_in_quest молча блокировались.
+            "kind": e.get("kind") or e.get("type"),
+            "dead": bool(e.get("dead")),
+            "hostile": e.get("hostile"),
+            "vendorItems": e.get("vendorItems"),
+            "vendor": e.get("vendor"),
+            "isVendor": e.get("isVendor"),
+            "questGiver": e.get("questGiver"),
+            "questIds": e.get("questIds"),
+            "componentTags": e.get("componentTags"),
             "distance": round((((e.get("x") or 0) - ppos[0]) ** 2
                                + ((e.get("z") or 0) - ppos[1]) ** 2) ** 0.5, 3),
         }
 
     nearby_mobs, gather_nodes, vendors = [], [], []
+    corpses, quest_givers = [], []
     for e in nearby:
         if not isinstance(e, dict):
             continue
@@ -390,10 +405,24 @@ def build_world_state(info: Dict) -> Dict:
             gather_nodes.append(_ent(e))
         elif kind == "npc" and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor")):
             vendors.append(_ent(e))
+        if kind == "npc" and (e.get("questGiver") or e.get("questIds")
+                              or e.get("quests")):
+            quest_givers.append(_ent(e))
+        # Труп = мёртвый МОБ. Игровой флаг lootable стоит и на декорациях
+        # (Ogre War Totem, Grave of Royal Assassin Voss, Warded Shore-Rock) —
+        # см. P0.8, поэтому kind обязателен, одного lootable недостаточно.
+        if kind == "mob" and (e.get("dead") or e.get("lootable")):
+            corpses.append(_ent(e))
     world_block = {
         "nearby_mobs": nearby_mobs,
         "gather_nodes": gather_nodes,
         "vendors": vendors,
+        # P0.11: contracts читают world.corpses и world.quest_givers.
+        # Раньше canonical блок их не нёс, и на границе canonical -> observation
+        # они восстанавливались ТОЛЬКО из raw info: loot и accept_quest/
+        # turn_in_quest молча блокировались на любом пути без мостового info.
+        "corpses": corpses,
+        "quest_givers": quest_givers,
     }
 
     return {
