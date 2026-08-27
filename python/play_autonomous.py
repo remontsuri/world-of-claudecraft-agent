@@ -516,7 +516,7 @@ def main():
                             # передать masked (автономная маска) в политику,
                             # чтобы политика не выбирала действия, заблокированные
                             # предусловиями (farm без мобов, accept_quest без квеста)
-                            _masked = _pre.get("masked")
+                            _masked = _pre.get("candidates")
                             if _masked and isinstance(
                                     getattr(agent.policy, "hints", None), dict):
                                 agent.policy.hints["masked_candidates"] = _masked

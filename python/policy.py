@@ -693,6 +693,9 @@ class GoalManager:
             elif "explore" in _masked:
                 # Если ни один из наших кандидатов не в маске — используем explore
                 cands = ["explore"]
+            # DEBUG: логируем если маска изменила candidates
+            if "farm" in cands and "farm" not in _masked:
+                print(f"[policy] farm in cands but not in masked={_masked}, ws_weak_mob={ws.get('weak_mob_near')}, cands={cands}", flush=True)
         # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
         # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
         # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.
