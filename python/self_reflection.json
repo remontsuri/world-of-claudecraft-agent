@@ -69,6 +69,55 @@
    "key": "spin:buy",
    "hint": "reduce_weight",
    "t": 1787685174.1880658
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'loot' took 127/128 steps with avg reward -0.039 - spinning",
+   "key": "spin:loot",
+   "hint": "reduce_weight",
+   "t": 1787776066.5958538
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 146/146 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787780616.2751052
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 142/142 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787785045.6195335
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 138/138 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787789483.3246646
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 134/134 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787793922.7311733
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 130/130 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787798360.160082
+  },
+  {
+   "kind": "ACTION_SATURATION",
+   "detail": "'farm' took 126/126 steps with avg reward -5.000 - spinning",
+   "key": "spin:farm",
+   "hint": "reduce_weight",
+   "t": 1787802798.3866687
   }
  ]
 }
