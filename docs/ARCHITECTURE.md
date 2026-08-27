@@ -1,7 +1,7 @@
 # World of ClaudeCraft Agent — Architecture & State
 
 > Этот файл — живой документ. Обновляется при каждом изменении.
-> Дата последнего обновления: 2026-08-26
+> Дата последнего обновления: 2026-08-27
 
 ## 1. Общая архитектура
 
@@ -59,11 +59,12 @@
 - `POST / {"action":"snapshot"}` → `{ok, info}`
 - `POST / {"action":"step", "idx":N, "cmd":{}}` → `{ok, noTarget, info}`
 
-**Действия (idx):**
-| idx | Действие | Описание |
-|-----|----------|----------|
+**Действия — единственный источник истины `hierarchical_env.SKILLS` (13 навыков):**
+
+| idx | Навык | Описание |
+|-----|-------|----------|
 | 0 | farm | Атака ближайшего моба |
-| 1 | loot | Поднять лут |
+| 1 | loot | Поднять лут — `sim.lootCorpse(mobId, pid)`, адресно |
 | 2 | accept_quest | Принять квест |
 | 3 | turn_in_quest | Сдать квест |
 | 4 | sell_junk | Продать мусор |
@@ -72,22 +73,37 @@
 | 7 | heal | Лечение |
 | 8 | equip | Экипировка |
 | 9 | buy | Покупка |
+| 10 | cast_frostbolt | Спелл (mage) |
+| 11 | cast_fireball | Спелл (mage) |
+| 12 | craft_item | Крафт предмета |
 
-**Снапшот (info):**
+**`respawn` — НЕ индекс, а отдельный endpoint:** `POST / {"action":"respawn"}`.
+Выдумывать `SKILL_INDEX` нельзя: любой сдвиг (BUY→HEAL) портит весь replay.
+Инвариант: `Python SKILLS == bridge action indices == actual handler dispatch`.
+
+**Снапшот (info) — canonical-поля:**
 ```json
 {
   "player": {"hp": 100, "maxHp": 100, "level": 1, "dead": false},
   "player_pos": [x, z],
   "player_class": "warrior",
-  "nearby": [...],
-  "inventory": [...],
+  "nearby": [{"kind": "mob", "name": "...", "dist": 4.2, "maxHp": 42,
+              "dead": false, "lootable": false, "templateId": "forest_wolf"}],
+  "inventory_by_id": {"rough_hide": 2, "curved_tusk": 1},
+  "equipment": {"mainHand": "rusty_axe"},
+  "vendor_offers": [{"itemId": "handaxe", "price": 25}],
   "quests": {"active": [...], "done": [...]},
   "quests_done": 0,
   "kills": 0,
+  "deaths": 0,
   "copper": 14,
   "in_combat": false
 }
 ```
+
+**Почему `inventory_by_id`, а не `free_slots`:** прогресс считается диффом
+`{itemId: count}`. `free_slots` даёт ложный SUCCESS, когда один предмет
+заменился другим.
 
 ### 2.2. Агент (python/)
 
@@ -209,12 +225,75 @@ powershell -File D:\world-of-claudecraft\start_offline.ps1
 | 5 | Progress Detector | `progress.py` | 7 | ✅ `5b6b783` |
 | 6 | Recovery Manager | `recovery.py` | 5 | ✅ `5b6b783` |
 | 7 | Anti-Loop System | `anti_loop.py` | 8 | ✅ `5b6b783` |
-| 8 | Extended Replay | `replay.py` | — | 🔄 |
+| 8 | Extended Replay | `replay.py` | ✔ | ✅ |
 | 9 | Planner | `planner.py` | 26 | ✅ `d932963` |
-| 10 | Evaluation Suite | `evaluation.py` | — | 🔄 |
-| 11 | Wire into agent.py | `agent.py` | — | ⏳ |
+| 10 | Evaluation Suite | `evaluation.py` | ✔ | ✅ |
+| 11 | Wire into agent.py | `agent.py`, `play_autonomous.py` | ✔ | ✅ `1d0a5e498` |
 
-**Итого тестов: 91 green** (65 + 26).
+**Итого тестов: 208 green** (было 91).
+
+```
+pytest test_loot_targets test_navigation test_autonomy_loop test_recovery_execution \
+       test_planner test_quest_target test_autonomy_core test_observation_mask \
+       test_skill_index_contract test_canonical_state test_evaluation test_replay_extended
+```
+
+### 8.0. Аудит P0 — контрактные дефекты
+
+Каждый пункт закрыт **живым замером**, не чтением кода.
+
+| # | Дефект | Было | Стало | Коммит |
+|---|--------|------|-------|--------|
+| P0.1 | Прогресс инвентаря по `free_slots` | ложный SUCCESS при замене предмета | дифф `{itemId: count}` | `7c04995db` |
+| P0.2 | `equipment_rev` не существует в игре | предикат всегда врал | дифф `{slot: itemId}` из снапшота | `7c04995db` |
+| P0.3 | Неизвестный предикат → «разрешено» | контракт молча пропускал | `UnknownPredicate`, fail-closed | `7c04995db` |
+| P0.4 | Цены выдуманы | `buy` уходил в отказ | 214 цен из `items.ts` → `item_prices.py` | `7c04995db` |
+| P0.5 | `target = mobs[0]` | бил не квестового моба | `target = quest_mob` приоритетом | `1d0a5e498` |
+| P0.6 | `policy._candidates` NameError | падение на шаге 0 | `player_class`/`class_cfg` выводятся | `1d0a5e498` |
+| P0.7 | Контур писал `["skill"]`, политика читала `["hint"]` | контур считал шаги, поведение не менялось | `autonomy_subgoal` доходит | `1d0a5e498` |
+| P0.8 | `loot` на декорациях | 153 подряд `inconclusive`, 0 прогресса | труп = `kind==mob` + dead/lootable + ≤12 yd | `ad1771d76` |
+| P0.9 | long-horizon baseline | — | ⏳ в работе (headless) | — |
+
+**Дополнительно закрыто тем же замером:**
+- `heal` предлагался «always available» → 34 `failure` из 69. Теперь `_has_healing()`
+  по паттерну `potion|tonic|elixir|bread|jerky|cooked|ration`.
+- Два водителя: anchor тянул в `[-52,-4]`, контур — к мобу, взаимное гашение.
+  Теперь anchor только наблюдает при активном `autonomy`.
+- Suicidal combat: воин level 1 (29 HP) фармил Warlord Drogmar (1564 HP) → 55 смертей.
+  Теперь `farm` не предлагается при `target.maxHp > player.maxHp * 3.0`.
+
+### 8.05. Headless env — второй режим замера
+
+**Файл:** `D:\woc-game\headless\env_server.ts` → `dist-env/env_server.cjs`
+(сборка `npx esbuild headless/env_server.ts --bundle --platform=node --format=cjs`)
+
+| | HEADLESS | BROWSER |
+|---|---|---|
+| Транспорт | NDJSON stdin/stdout | CDP → HTTP :8791 |
+| Действия | **61 низкоуровневое** (`forward`, `attack`, `ability_N`) | **13 навыков** |
+| Скорость | **296 шагов/сек** | ~0.1 шага/сек |
+| Мир | clean seed, детерминизм | реальный offline-клиент |
+| Отвечает на вопрос | «может ли архитектура играть при корректном старте?» | «справляется ли агент с конкретным состоянием клиента?» |
+
+**Результаты этих режимов НЕ смешиваются.** Плохой spawn (level 1 рядом с
+Warlord Drogmar 1564 HP) — свойство world state, а не код: чинить его кодом
+значит оптимизировать агента под один плохой spawn.
+
+**Протокол:**
+```
+{"cmd":"info"}                                    → obs_size=567, num_actions=61
+{"cmd":"reset","seed":N,"player_class":"warrior"}  → {obs, info}
+{"cmd":"step","action":N}                          → {obs, reward, terminated, truncated, info}
+```
+
+**Разрыв, который надо закрыть для P0.9:** headless принимает низкоуровневые
+действия, а контур говорит навыками. Нужен адаптер `skill → [low-level actions]`
++ расширение `infoDict()` (сейчас отдаёт только 8 полей: `level, xp, hp, kills,
+deaths, quests_done, copper, step` — нет objectives, skills-статистики,
+economy, navigation, recovery, loops).
+
+Reward-счётчики, доступные в `sim.counters`: `damageDealt, damageTaken, kills,
+deaths, xpGained, questsCompleted, questProgress, levelUps`.
 
 ### 8.1. Контракты модулей
 
@@ -249,6 +328,16 @@ result
 - **Имена инструментов из живой игры**: `handaxe`, `gathering_sickle`, `copper_mining_pick`. `logging_axe` / `herb_sack` в игре НЕ существуют (проверено тестом).
 - **`min_dwell=20`** — цель не дёргается каждый шаг; `force` только на смерть/критический HP.
 - **Лестница восстановления всегда заканчивается `abandon_objective`** — цикл не зависает.
+- **Один writer у цели** — anchor выключается при активном `autonomy`, иначе два водителя гасят друг друга.
+- **Неизвестный предикат = отказ, не разрешение** (`UnknownPredicate`, fail-closed).
+- **Труп = мёртвый МОБ, не декорация.** Игровой флаг `lootable:true` стоит и на
+  декорациях (`Ogre War Totem`, `Grave of Royal Assassin Voss`, `Warded Shore-Rock`).
+  Предикат `kind==mob && (dead||lootable) && dist<=12` продублирован в
+  `policy` / `navigation` / `observation` / `world_state` — фикс одного слоя цикл не лечит.
+- **`heal` требует, чтобы было чем лечиться** — иначе 34 `failure` подряд.
+- **Цены только из `woc-game/src/sim/content/items.ts`** (`buyValue`), 214 предметов.
+  `sim.itemDef` не экспонирован — выдумывать цены нельзя.
+- **Правила игры читаются из `src/sim/`, не угадываются.**
 
 ## 9. Известные проблемы
 
@@ -256,4 +345,20 @@ result
 |----------|--------|
 | Мост падает при background-запуске через Hermes | Обход: `start_offline.ps1` |
 | Офлайн-мир ≠ онлайн (другие координаты) | Нормально для обучения |
-| Автономный контур ещё не подключён к `agent.py` | Task 11 |
+| Персонаж level 1 (29 HP) спавнится рядом с мобами 382–1564 HP | Свойство world state, НЕ баг кода. Чинить кодом = оптимизировать под один плохой spawn |
+| `entitiesNear` в живой игре `undefined` | Fallback к `sim.entities.values()` (Map, 985 сущностей) |
+| `sim.interact()` безадресный | Для лута только `sim.lootCorpse(mobId, pid)` (`sim.ts:9727`) |
+| headless env говорит низкоуровневыми действиями, контур — навыками | Нужен адаптер для P0.9 |
+
+## 10. Что доказано и что нет
+
+| Утверждение | Статус |
+|---|---|
+| Контур подключён, не падает | ✅ 208 тестов + живой прогон без traceback |
+| Контракты навыков соответствуют игре | ✅ P0.1–P0.8 закрыты живым замером |
+| Тредмилл (повтор без прогресса) сломан | ✅ было 153 холостых `loot`, стало 0 |
+| Агент играет длинную дистанцию автономно | ❌ **не доказано** — нужен P0.9 baseline |
+| Обучение УЛУЧШАЕТ политику | ❌ **не доказано** — нужен V0 → 100 ep → train → V1 → 100 НОВЫХ ep, `V1 > V0` |
+
+**P1 без доказательства `V1 > V0` — это memorization, а не autonomy.**
+PPO/self-learning (P2) начинать только после этого доказательства.
