@@ -222,6 +222,13 @@ def main():
     _nav_substeps = 0
     _autonomy_errors = 0
     _AUTONOMY_MAX_ERRORS = int(os.environ.get("WOC_AUTONOMY_MAX_ERRORS", "5"))
+    # V0 baseline: пошаговая трасса (skill/result/failure_reason + состояние
+    # ресурсов). Пишется в WOC_TRACE_OUT, по умолчанию рядом с логом.
+    _step_trace = []
+    _TRACE_OUT = os.environ.get(
+        "WOC_TRACE_OUT",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "step_trace.json"))
     if os.path.exists(EXP_PATH):
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
@@ -527,10 +534,60 @@ def main():
                         _after = getattr(env, "_last_info", None) or {}
                         if _after:
                             from world_state import build_world_state as _bws3
-                            autonomy.after_action(
+                            _ares = autonomy.after_action(
                                 (rec or {}).get("action") or "noop",
                                 _after, _bws3(_after),
                                 reward=float((rec or {}).get("reward") or 0.0))
+                            # V0 baseline: причина КАЖДОГО не-успеха. Раньше
+                            # возврат after_action отбрасывался, поэтому после
+                            # прогона была видна только цифра "heal failure=N"
+                            # без ответа, ГДЕ агент теряет автономность.
+                            # Пишем и состояние ресурсов на момент шага, чтобы
+                            # отличить "ресурс был -> heal провалился" от
+                            # "ресурс кончился -> heal не должен был вызываться".
+                            if isinstance(_ares, dict):
+                                _inv_now = (_after.get("inventory_by_id")
+                                            if isinstance(_after, dict) else None)
+                                _pl_now = ((_after.get("player") or {})
+                                           if isinstance(_after, dict) else {})
+                                _step_trace.append({
+                                    "step": i,
+                                    "skill": _ares.get("skill"),
+                                    "result": _ares.get("skill_result"),
+                                    "failure_reason": _ares.get("failure_reason"),
+                                    "subgoal": _ares.get("subgoal"),
+                                    "goal": _ares.get("goal"),
+                                    "reward": _ares.get("reward"),
+                                    "hp": _pl_now.get("hp"),
+                                    "max_hp": _pl_now.get("maxHp"),
+                                    "in_combat": (_after.get("in_combat")
+                                                  if isinstance(_after, dict) else None),
+                                    "inventory_count": (len(_inv_now)
+                                                        if isinstance(_inv_now, dict) else None),
+                                    "inventory": _inv_now,
+                                    "recovery": ((_ares.get("recovery") or {}).get("recovery_action")
+                                                 if isinstance(_ares.get("recovery"), dict) else None),
+                                })
+                                # Прогон может быть прерван (kill/крэш/мост).
+                                # Периодический дамп: незавершённый V0 всё
+                                # равно останется анализируемым, а не пропадёт.
+                                if len(_step_trace) % 50 == 0:
+                                    try:
+                                        with open(_TRACE_OUT, "w", encoding="utf-8") as _pf:
+                                            json.dump({
+                                                "accounting": {
+                                                    "environment_steps": i,
+                                                    "learning_steps": _learning_steps,
+                                                    "nav_substeps": _nav_substeps,
+                                                    "autonomy_errors": _autonomy_errors,
+                                                    "skill_attempts": len(_step_trace),
+                                                    "partial": True,
+                                                },
+                                                "steps": _step_trace,
+                                            }, _pf, ensure_ascii=False,
+                                                default=str)
+                                    except Exception:
+                                        pass
                     except Exception:
                         traceback.print_exc()
                         _autonomy_errors += 1
@@ -951,6 +1008,28 @@ def main():
           "(autonomy=%s)"
           % (_learning_steps, _nav_substeps, _autonomy_errors,
              "on" if autonomy is not None else "OFF"), flush=True)
+    # V0 baseline: сохраняем трассу + сводку контура одним файлом.
+    try:
+        _payload = {
+            "accounting": {
+                "environment_steps": m.get("steps"),
+                "learning_steps": _learning_steps,
+                "nav_substeps": _nav_substeps,
+                "autonomy_errors": _autonomy_errors,
+                "skill_attempts": len(_step_trace),
+                "autonomy_enabled": autonomy is not None,
+            },
+            "autonomy_stats": (autonomy.summary()
+                               if autonomy is not None
+                               and hasattr(autonomy, "summary") else None),
+            "steps": _step_trace,
+        }
+        with open(_TRACE_OUT, "w", encoding="utf-8") as _tf:
+            json.dump(_payload, _tf, ensure_ascii=False, indent=1, default=str)
+        print("[trace] %d шагов -> %s" % (len(_step_trace), _TRACE_OUT),
+              flush=True)
+    except Exception:
+        traceback.print_exc()
     print(f"\n[autonomous] done. log -> {LOG_PATH}, memory -> {EXP_PATH}")
     # release the single-instance lock so a future launch can start cleanly
     try:
