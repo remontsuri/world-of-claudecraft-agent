@@ -405,10 +405,24 @@ class HierarchicalWoWEnv(gym.Env):
         junk = [i for i in (info.get("inventory") or [])
                 if (i.get("quality") or 0) == 0]
 
+        # FIX #1 (2026-08-27): accept_quest mask requires quest_available, not just quest_npcs.
+        # Раньше: mask[2] = bool(quest_npcs) — разрешало accept_quest когда NPC имеет questIds,
+        # но quest_states[questId] != "available" → preconditions fail → INCONCLUSIVE → loop.
+        # Теперь: проверяем, что хотя бы один questId имеет state == "available".
+        quest_states = info.get("quest_states") or {}
+        has_available_quest = False
+        for e in quest_npcs:
+            for qid in (e.get("questIds") or [e.get("questId")] or []):
+                if quest_states.get(qid) == "available":
+                    has_available_quest = True
+                    break
+            if has_available_quest:
+                break
+
         mask = np.zeros(N_SKILLS, dtype=bool)
         mask[0] = bool(mobs) or info.get("targetId") is not None   # farm
         mask[1] = bool(corpses)                                    # loot
-        mask[2] = bool(quest_npcs)                                 # accept_quest
+        mask[2] = has_available_quest                              # accept_quest (FIX #1)
         mask[3] = bool(ready_q)                                    # turn_in_quest
         mask[4] = bool(junk)                                       # sell_junk (vendor not observable)
         mask[5] = bool(nodes)                                      # gather

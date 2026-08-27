@@ -87,6 +87,8 @@ def test_accept_offered_for_normal_quest_nearby():
         "quests": {"active": [{"id": "q_prof_attune_smith", "state": "active",
                                "objectives": [{"current": 0, "required": 3}]}],
                    "ready": [], "done": []},
+        # FIX #1 (2026-08-27): quest_states для квестов NPC
+        "quest_states": {"q_bones": "available", "q_whispers": "available"},
     }
     ws = gm._world_state(info)
     cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")

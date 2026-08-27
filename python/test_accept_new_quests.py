@@ -9,11 +9,18 @@ def _info(npc_quests=(), have=(), dist=8.0, hp=100):
         nearby.append({"id": 900, "kind": "npc", "name": "Giver",
                        "dist": dist, "x": 5.0, "z": 5.0,
                        "questIds": list(npc_quests)})
+    # FIX #1 (2026-08-27): quest_states для квестов NPC.
+    # Если квест не в логе (have) — считаем его "available" для тестов.
+    quest_states = {}
+    for qid in npc_quests:
+        if qid not in have:
+            quest_states[qid] = "available"
     return {
         "player": {"hp": hp, "maxHp": 100, "dead": False},
         "player_pos": [0.0, 0.0],
         "nearby": nearby,
         "inventory": [],
+        "quest_states": quest_states,
         "quests": {
             "active": [{"id": q, "state": "active",
                         "objectives": [{"current": 1, "required": 5}],

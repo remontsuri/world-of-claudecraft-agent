@@ -351,6 +351,11 @@ class GoalManager:
         except Exception:
             accept_blocked_by_identity = lambda q, a: False
         _active_ids = [q.get("id") for q in (_quests.get("active") or []) if q.get("id")]
+        # FIX #1 (2026-08-27): has_new_quest_nearby должен учитывать quest_states.
+        # Раньше: если у NPC есть questId, которого нет в логе — accept_quest добавлялся
+        # в кандидаты. Но quest_states[questId] мог быть "unavailable" → skill_contracts
+        # блокировал (quest_available=False) → INCONCLUSIVE → зацикливание (70+ шагов).
+        quest_states = info.get("quest_states") or {}
         has_new_quest_nearby = False
         for e in quest_npcs:
             ids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
@@ -359,6 +364,8 @@ class GoalManager:
                     continue
                 if accept_blocked_by_identity(qid, _active_ids):
                     continue          # игра не даст его взять
+                if quest_states.get(qid) != "available":
+                    continue          # квест недоступен (unavailable/active/done)
                 has_new_quest_nearby = True
                 break
             if has_new_quest_nearby:
