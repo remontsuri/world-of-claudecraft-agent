@@ -3,7 +3,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 def _info_with_inv(items, hp=142, max_hp=142):
-    inv = [{"id": k, "count": v} for k, v in items.items()]
+    # canonical inventory schema: itemId, НЕ id (закреплено 1d4cceb61).
+    # Раньше здесь стоял "id" -> ws.inventory_by_id выходил пустым и все
+    # предикаты, читающие инвентарь, видели пустую сумку.
+    inv = [{"itemId": k, "count": v, "quality": "common"}
+           for k, v in items.items()]
     return {
         "player": {"hp": hp, "maxHp": max_hp, "dead": False},
         "player_pos": [0, 0],
@@ -64,8 +68,12 @@ def test_survival_still_gates_low_hp():
     from policy import GoalManager
     from memory import ExperienceStore
     gm = GoalManager(ExperienceStore(), reflection_hints={})
-    info = _info_with_inv({"spider_silk": 5}, hp=10, max_hp=142)
+    # heal предлагается только когда есть ЧЕМ лечиться — иначе он
+    # гарантированно failure (живой замер: 34 из 69 шагов). Кладём в сумку
+    # реальное зелье игры (items.ts:1129) вместе с квестовым сырьём.
+    info = _info_with_inv({"spider_silk": 5, "minor_healing_potion": 2},
+                          hp=10, max_hp=142)
     ws = gm._world_state(info)
     cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
     # при критическом hp выживание важнее: heal должен быть в кандидатах
-    assert "heal" in cands
+    assert "heal" in cands, cands

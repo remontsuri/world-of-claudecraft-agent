@@ -23,6 +23,9 @@ def _write_hints(hints, tmpdir):
 def _info(hp=100, max_hp=100, cell_hint_used=True):
     return {
         "player": {"hp": hp, "maxHp": max_hp, "dead": False},
+        # Тест ждёт cast_frostbolt в кандидатах — это классовый спелл, значит
+        # класс обязан быть задан. Без поля policy выводит "warrior".
+        "player_class": "mage",
         "player_pos": [0, 0],
         "cell": "2_-3",  # matches the death-cluster cell in the test
         "nearby": [{"id": 9, "kind": "mob", "type": "mob", "name": "wolf",

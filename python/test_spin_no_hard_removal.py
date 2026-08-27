@@ -14,7 +14,11 @@ def _info(hp=142, max_hp=142):
         "player_pos": [0, 0],
         "nearby": [{"id": 1, "kind": "mob", "type": "mob", "name": "wolf",
                     "dist": 30, "hp": 50, "maxHp": 50}],
-        "inventory": [],
+        # heal требует, чтобы было ЧЕМ лечиться (живой замер: при пустых
+        # сумках heal давал 34 failure из 69 шагов). minor_healing_potion —
+        # реальный предмет игры, woc-game/src/sim/content/items.ts:1129.
+        "inventory": [{"itemId": "minor_healing_potion", "count": 2,
+                       "quality": "common"}],
         "quests": {
             "active": [{"id": "q_x", "state": "active",
                         "objectives": [{"current": 5, "required": 6}],

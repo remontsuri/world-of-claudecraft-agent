@@ -452,6 +452,12 @@ def build_world_state(info: Dict) -> Dict:
         "has_ready_damage_spell": has_ready_damage_spell,
         # economy view: inventory by id, recipes craftable right now
         "inv_by_id": inv_by_id,
+        # P0.10: тот же словарь под именем, которое читают потребители
+        # (policy._has_healing, observation). Мост кладёт `inventory_by_id`
+        # в info; canonical ws обязан отдавать это имя тоже, иначе предикат,
+        # читающий "не то" имя, становится вечным False и глушит навык —
+        # ровно так heal работал только благодаря мосту.
+        "inventory_by_id": inv_by_id,
         "craftable_now": craftable_now,
         # Умная продажа: какие предметы НУЖНЫ для квестов и крафта.
         # Продавать только то, чего нет в этих множествах — иначе агент

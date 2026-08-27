@@ -27,6 +27,9 @@ from memory import ExperienceStore
 def _mage_info(hp=100, max_hp=100, mana=80, max_mana=100):
     return {
         "player": {"hp": hp, "maxHp": max_hp, "dead": False},
+        # Класс обязателен: без него policy выводит "warrior" по умолчанию
+        # и классовые спеллы законно не предлагаются.
+        "player_class": "mage",
         "mana": mana, "maxMana": max_mana,
         "abilities": [
             {"id": "fireball", "name": "Cinderbolt", "cost": 30, "castTime": 1.5,

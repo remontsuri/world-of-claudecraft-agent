@@ -45,8 +45,25 @@ _HAS_HEAL_PAT = re.compile(r"potion|draught|tonic|elixir|heal|bread|water|jerky"
 
 
 def _has_healing(info: dict, ws: dict) -> bool:
-    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет."""
-    items = (info or {}).get("inventory_by_id") or (ws or {}).get("inventory_by_id")
+    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет.
+
+    P0.10: читаем ОБА имени. world_state кладёт словарь как `inv_by_id`,
+    мост — как `inventory_by_id` в info. Раньше читалось только второе, и
+    heal работал лишь потому, что поле приходило из моста: любой вызов с
+    canonical ws без мостового поля терял heal полностью (та же поломка,
+    что junk в P0.1 — разъехавшееся имя превращает предикат в вечный False).
+    """
+    items = None
+    for src in (info, ws):
+        if not isinstance(src, dict):
+            continue
+        for key in ("inventory_by_id", "inv_by_id"):
+            cand = src.get(key)
+            if isinstance(cand, dict) and cand:
+                items = cand
+                break
+        if items is not None:
+            break
     if not isinstance(items, dict) or not items:
         return False
     return any(_HAS_HEAL_PAT.search(str(k)) for k, v in items.items() if (v or 0) > 0)
