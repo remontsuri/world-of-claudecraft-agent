@@ -513,6 +513,13 @@ def main():
                                     getattr(agent.policy, "hints", None), dict):
                                 agent.policy.hints["autonomy_subgoal"] = {
                                     "key": "autonomy_subgoal", "skill": _forced}
+                            # передать masked (автономная маска) в политику,
+                            # чтобы политика не выбирала действия, заблокированные
+                            # предусловиями (farm без мобов, accept_quest без квеста)
+                            _masked = _pre.get("masked")
+                            if _masked and isinstance(
+                                    getattr(agent.policy, "hints", None), dict):
+                                agent.policy.hints["masked_candidates"] = _masked
                     except Exception:
                         traceback.print_exc()
                         _autonomy_errors += 1

@@ -682,6 +682,17 @@ class GoalManager:
         playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, goal=goal,
                                   class_cfg=class_cfg, playstyle=playstyle)
+        # Учесть автономную маскировку (из autonomy.before_action).
+        # Политика не должна выбирать действия, заблокированные предусловиями.
+        _masked = self.hints.get("masked_candidates") if hasattr(self, "hints") else None
+        if _masked:
+            # Фильтруем кандидатов, оставляя только те, что разрешены маской
+            filtered = [c for c in cands if c in _masked]
+            if filtered:
+                cands = filtered
+            elif "explore" in _masked:
+                # Если ни один из наших кандидатов не в маске — используем explore
+                cands = ["explore"]
         # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
         # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
         # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.
