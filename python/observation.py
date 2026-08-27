@@ -196,6 +196,31 @@ def _buy_available(ws, info):
         return None
 
 
+def _quest_available_from_states(ws, givers):
+    """FIX #1 (2026-08-27): quest_available = существует гивер AND
+    questState(questId) == 'available'.
+
+    Раньше было bool(givers), что означало "NPC имеет questIds", а не
+    "quest сейчас available". Источник истины — sim.questState() через
+    snapshot.quest_states (авторитетный метод в offline, проверен 2026-08-27).
+
+    Args:
+        ws: world state (snapshot)
+        givers: список гиверов с полем 'questIds'
+
+    Returns:
+        True если хотя бы один гивер имеет quest в state == 'available'
+    """
+    if not givers:
+        return False
+    states = ws.get("quest_states") or {}
+    for g in givers:
+        for qid in (g.get("quest_ids") or g.get("questIds") or []):
+            if states.get(qid) == "available":
+                return True
+    return False
+
+
 # ------------------------------------------------- выбор цели боя (P0.5)
 
 def _mob_matches(mob, mob_id):
@@ -433,9 +458,11 @@ def encode_observation(ws: Dict[str, Any],
             "node_distance": round(nodes[0]["_dist"], 2) if nodes else 999.0,
             "corpse_distance": round(corpses[0]["_dist"], 2) if corpses else 999.0,
             "kills": _num(ws.get("kills", info.get("kills"))),
-            # P0-B: quest_available = гивер существует и имеет квест (семантика),
-            # НЕ зависит от дистанции (дистанция — отдельная проверка giver_reachable).
-            "quest_available": bool(givers),
+            # FIX #1 (2026-08-27): quest_available = существует гивер AND
+            # questState(questId) == 'available'. Раньше было bool(givers),
+            # что означало "NPC имеет questIds", а не "quest сейчас available".
+            # Источник истины — sim.questState() через snapshot.quest_states.
+            "quest_available": _quest_available_from_states(ws, givers),
         },
         "navigation": {
             "target_distance": round(target["_dist"], 2) if target else 999.0,

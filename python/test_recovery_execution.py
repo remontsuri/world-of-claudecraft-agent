@@ -104,6 +104,7 @@ def _info(dead=False, hp=100, giver_dist=None, mobs=0):
         "nearby": nearby, "quests": {"active": [], "ready": [], "done": []},
         "inventory": [], "inventory_by_id": {}, "equipment": {},
         "copper": 0, "kills": 0, "deaths": 0, "xp": 0, "bagCapacity": 16,
+        "quest_states": {"q1": "available"},  # FIX #1: квест доступен
     }
 
 

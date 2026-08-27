@@ -59,13 +59,13 @@ def test_vendor_and_giver_detected_separately():
     ws = {"player": {"maxHp": 1}, "player_pos": [0, 0], "nearby": [
         {"kind": "npc", "name": "Trader Wilkes", "vendorItems": ["handaxe"], "dist": 8.0},
         {"kind": "npc", "name": "Marshal", "questIds": ["q_wolves"], "dist": 4.0},
-    ]}
+    ], "quest_states": {"q_wolves": "available"}}  # FIX #1: questState авторитетен
     obs = encode_observation(ws)
     assert obs["world"]["vendors"] == 1
     assert obs["world"]["vendor_distance"] == 8.0
     assert obs["world"]["quest_givers"] == 1
     assert obs["quest"]["giver_distance"] == 4.0
-    # quest_available = квест ЕСТЬ (дистанцию проверяет giver_reachable)
+    # quest_available = questState == 'available' (FIX #1)
     assert obs["world"]["quest_available"] is True
 
 

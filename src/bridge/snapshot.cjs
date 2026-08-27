@@ -235,6 +235,24 @@ function readGameState() {
     bags: sim.bags || [],
     bagCapacity: (typeof sim.bagCapacity === 'number') ? sim.bagCapacity : 16,
     nearby,
+    // Quest states for all quests offered by nearby NPCs.
+    // sim.questState(questId) is AUTHORITATIVE in offline (verified 2026-08-27):
+    // returns 'available'|'active'|'done'|'unavailable'. Without this, the agent
+    // cannot distinguish "NPC has questIds" from "quest is currently available",
+    // which caused the V0 accept_quest loop (givers present but quest unavailable).
+    quest_states: (function () {
+      const qs = {};
+      try {
+        for (const e of sim.entities.values()) {
+          if (e.kind !== 'npc' || !Array.isArray(e.questIds)) continue;
+          for (const qid of e.questIds) {
+            if (qid == null || qid in qs) continue;
+            try { qs[qid] = sim.questState(qid); } catch (_) { qs[qid] = 'unknown'; }
+          }
+        }
+      } catch (_) {}
+      return qs;
+    })(),
     // live NPC positions by templateId — the AUTHORITATIVE turn-in source
     // (static layout tables drifted from the real world). Collected for every
     // npc entity in range; resolveTurnIn checks here FIRST.
