@@ -403,11 +403,27 @@ result
 - `test_fix4_giver_navigation.py`: 4 теста (GO_TO_GIVER → nav_command, не unknown_skill)
 - `test_npc_registry.py`: 12 тестов (priority + canonical key contracts)
 
+### 8.5. Loop Fix: accept_quest mask синхронизирован с quest_states (коммит `b731ee0`)
+
+**Проблема:** агент зацикливался на `accept_quest -> INCONCLUSIVE` (70+ шагов) в зонах без доступных квестов.
+
+**Причина:**
+- `hierarchical_env.action_masks()` разрешал `accept_quest` по `bool(quest_npcs)` (NPC имеет questIds)
+- `policy._candidates()` добавлял `accept_quest` по `has_new_quest_nearby` (questId не в логе)
+- `skill_contracts.check_preconditions('accept_quest')` блокировал по `quest_available=False`
+- Результат: маска разрешает → политика выбирает → предусловия отбивают → INCONCLUSIVE → повтор
+
+**Исправление:**
+- `hierarchical_env.py`: `mask[2] = has_available_quest` (проверяет `quest_states[questId] == 'available'`)
+- `policy.py`: `has_new_quest_nearby` учитывает `quest_states.get(qid) == 'available'`
+- Тесты обновлены для передачи `quest_states` в `info`
+
 ## 9. Известные проблемы
 
 | Проблема | Статус |
 |----------|--------|
 | Мост падает при background-запуске через Hermes | Обход: `start_offline.ps1` |
+| Loop Fix: accept_quest mask синхронизирован с quest_states | ✅ `b731ee0` |
 | Офлайн-мир ≠ онлайн (другие координаты) | Нормально для обучения |
 | Персонаж level 1 (29 HP) спавнится рядом с мобами 382–1564 HP | Свойство world state, НЕ баг кода. Чинить кодом = оптимизировать под один плохой spawn |
 | `entitiesNear` в живой игре `undefined` | Fallback к `sim.entities.values()` (Map, 985 сущностей) |
