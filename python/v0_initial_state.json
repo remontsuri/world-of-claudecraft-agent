@@ -1,0 +1,61 @@
+{
+ "commit": "33b7134de",
+ "mode": "browser",
+ "steps_planned": 1000,
+ "start_procedure": "respawn -> snapshot",
+ "player_class": "warrior",
+ "hp": 100,
+ "max_hp": 100,
+ "dead": false,
+ "level": 1,
+ "position": [
+  -0.5259610262717256,
+  32.98933462086055
+ ],
+ "inventory": {},
+ "equipment": {
+  "mainhand": "worn_sword",
+  "chest": "recruit_tunic",
+  "offhand": "eastbrook_buckler"
+ },
+ "copper": 0,
+ "kills": 2,
+ "deaths": 5,
+ "quests_done": 0,
+ "quests_active": [
+  [
+   "q_wolves",
+   "active"
+  ]
+ ],
+ "in_combat": false,
+ "nearby_total": 36,
+ "live_mobs": 16,
+ "nearest_mobs": [
+  {
+   "name": "Forest Wolf",
+   "maxHp": 54,
+   "dist": 25.6
+  },
+  {
+   "name": "Forest Wolf",
+   "maxHp": 40,
+   "dist": 25.9
+  },
+  {
+   "name": "Forest Wolf",
+   "maxHp": 40,
+   "dist": 30.9
+  },
+  {
+   "name": "Forest Wolf",
+   "maxHp": 54,
+   "dist": 40.5
+  },
+  {
+   "name": "Forest Wolf",
+   "maxHp": 40,
+   "dist": 43.8
+  }
+ ]
+}
