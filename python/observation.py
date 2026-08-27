@@ -433,7 +433,9 @@ def encode_observation(ws: Dict[str, Any],
             "node_distance": round(nodes[0]["_dist"], 2) if nodes else 999.0,
             "corpse_distance": round(corpses[0]["_dist"], 2) if corpses else 999.0,
             "kills": _num(ws.get("kills", info.get("kills"))),
-            "quest_available": bool(givers) and givers[0]["_dist"] <= QUEST_RANGE,
+            # P0-B: quest_available = гивер существует и имеет квест (семантика),
+            # НЕ зависит от дистанции (дистанция — отдельная проверка giver_reachable).
+            "quest_available": bool(givers),
         },
         "navigation": {
             "target_distance": round(target["_dist"], 2) if target else 999.0,
@@ -445,5 +447,7 @@ def encode_observation(ws: Dict[str, Any],
         # сырые сущности с посчитанной дистанцией — чтобы навигация брала
         # КООРДИНАТЫ ИЗ ИГРЫ, а не из статических таблиц
         "_entities": (mobs + npcs + nodes + corpses),
+        # P0-A: Canonical NPC registry
+        "npc_registry": ws.get("npc_registry"),
     }
     return obs

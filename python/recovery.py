@@ -30,6 +30,7 @@ RECOVERY_LADDER: Dict[str, List[str]] = {
     "giver_too_far":    ["navigate_to_giver", "find_giver"],
     "no_quest_available": ["next_quest", "explore_town"],
     "quest_log_full":   ["turn_in_ready_quest"],
+    "quests_active_increased": ["navigate_to_giver", "find_giver"],
     # навигация
     "stuck":            ["alternate_route", "unstuck_jump", "abandon_objective"],
     "navigation_failure": ["alternate_route", "abandon_objective"],

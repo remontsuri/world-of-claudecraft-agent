@@ -62,14 +62,14 @@ SKILL_CONTRACTS: Dict[str, Dict[str, Any]] = {
         "failure_reasons": ["no_corpse", "corpse_too_far", "bags_full"],
     },
     "accept_quest": {
-        "preconditions": ["giver_exists", "giver_reachable", "quest_available"],
+        "preconditions": ["giver_exists", "giver_position_known", "quest_available"],
         "action": "navigate_to_giver -> acceptQuest -> verify_quest_log",
         "postconditions": ["quests_active_increased"],
         "failure_reasons": ["no_giver", "giver_too_far", "no_quest_available",
                             "quest_log_full"],
     },
     "turn_in_quest": {
-        "preconditions": ["quest_ready", "giver_exists", "giver_reachable"],
+        "preconditions": ["quest_ready", "giver_exists", "giver_position_known"],
         "action": "navigate_to_giver -> turnInQuest -> verify_quests_done",
         "postconditions": ["quests_done_increased"],
         "failure_reasons": ["quest_not_ready", "no_giver", "giver_too_far"],
@@ -181,7 +181,20 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
         return (world.get("corpse_distance") or 999) <= 5.0
     if name == "giver_exists":
         return (world.get("quest_givers") or 0) > 0
+    if name == "giver_position_known":
+        # P0-B: позиция гивера известна (из npc_registry в obs)
+        _reg = obs.get("npc_registry")
+        if _reg is None:
+            # Fallback: проверяем расстояние в quest
+            return (quest.get("giver_distance") or 999) < 999
+        # Ищем гивера для текущего квеста
+        _qid = quest.get("id") or quest.get("questId")
+        if not _qid:
+            return False
+        pos = _reg.get_giver_position_for_quest(_qid)
+        return pos is not None
     if name == "giver_reachable":
+        # P0-C: гивер в пределах досягаемости (для recovery routing)
         return (quest.get("giver_distance") or 999) <= 7.0
     if name == "quest_available":
         return bool(world.get("quest_available"))

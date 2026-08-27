@@ -143,6 +143,14 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 6. взять новый квест
     if world.get("quest_available"):
+        # P0-B: если гивер далеко, сначала подойти к нему
+        if (quest.get("giver_distance") or 999) > 7.0:
+            return [
+                {"subgoal": "GO_TO_GIVER", "skill": "explore",
+                 "reason": "giver_far", "target": "quest_giver"},
+                {"subgoal": "ACCEPT", "skill": "accept_quest",
+                 "reason": "quest_available"},
+            ]
         return [{"subgoal": "ACCEPT", "skill": "accept_quest",
                  "reason": "quest_available"}]
     if (world.get("quest_givers") or 0) > 0:

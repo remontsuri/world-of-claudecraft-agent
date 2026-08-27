@@ -69,6 +69,8 @@ from typing import Dict
 
 # Единый junk-предикат (P0.1) — общий с observation/contracts.
 from item_prices import is_junk_item as _is_junk_item
+# P0-A: Canonical NPC registry
+from npc_registry import NpcRegistry
 
 
 def build_world_state(info: Dict) -> Dict:
@@ -425,6 +427,15 @@ def build_world_state(info: Dict) -> Dict:
         "quest_givers": quest_givers,
     }
 
+    # P0-A: Canonical NPC registry — единый источник истины об NPC.
+    _reg = NpcRegistry()
+    _wc_npcs = (info.get("worldContent") or {}).get("npcs") or {}
+    if _wc_npcs:
+        _reg.update_from_world_content(_wc_npcs)
+    # Runtime entities из snapshot (высший приоритет позиции)
+    if nearby:
+        _reg.update_from_snapshot(nearby)
+
     return {
         # canonical player facts straight from sim.player / sim.entities
         "player_class": player_class,
@@ -434,6 +445,8 @@ def build_world_state(info: Dict) -> Dict:
         "max_mana": max_mana,
         "inventory": inventory_block,
         "world": world_block,
+        # P0-A: Canonical NPC registry
+        "npc_registry": _reg,
         # has_ready: a turn-in-ready quest exists (any). The FSM keeps
         # RETURN_TO_GIVER alive while this is true.
         "has_ready": bool(ready),
