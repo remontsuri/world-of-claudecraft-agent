@@ -44,9 +44,9 @@
 
 ## 2. Компоненты
 
-### 2.1. Мост (browser_bridge_offline.cjs)
+### 2.1. Мост (browser_bridge.cjs)
 
-**Файл:** `D:\world-of-claudecraft\browser_bridge_offline.cjs`
+**Файл:** `D:\world-of-claudecraft\browser_bridge.cjs`
 
 **Функции:**
 - Подключение к Chrome через CDP (Chrome DevTools Protocol, порт 9222)
@@ -97,7 +97,8 @@
   "kills": 0,
   "deaths": 0,
   "copper": 14,
-  "in_combat": false
+  "in_combat": false,
+  "quest_states": {"q_boars": "available", "q_bandits": "active"}
 }
 ```
 
@@ -120,6 +121,16 @@
 | `self_reflection.py` | Анализ паттернов, генерация hints |
 | `class_config.py` | Конфигурация классов (warrior/mage/hunter) |
 | `quest_objectives.cjs` | Статическая таблица квестов |
+| `npc_registry.py` | Canonical NPC registry (P0-A) |
+| `observation.py` | Кодирование состояния в obs (6 блоков) |
+| `skill_contracts.py` | Контракты навыков (pre/postconditions) |
+| `action_mask.py` | Фильтрация кандидатов по контрактам |
+| `progress.py` | Детектор прогресса (дельты) |
+| `recovery.py` | Лестница восстановления |
+| `anti_loop.py` | LoopGuard — обнаружение циклов |
+| `planner.py` | Планировщик подцелей (subgoals) |
+| `navigation.py` | Навигация (nav_command, _nav_to) |
+| `autonomy.py` | Автономный контур (AutonomyLoop) |
 
 ### 2.3. Классы персонажей
 
@@ -143,7 +154,7 @@
 **Фиксы:**
 - `world_state.py`: `state="ready"` сервера = авторитетный READY
 - `policy.py`: READY + гивер ≤6 yd → форсированный `turn_in_quest`
-- `browser_bridge_offline.cjs`: accept/turn_in с навигацией к гиверу
+- `browser_bridge.cjs`: accept/turn_in с навигацией к гиверу
 
 ## 4. Экономический цикл
 
@@ -174,21 +185,13 @@
 - `death:<cell>` — farm запрещён в клетке при hp<0.6
 - `quest_stall` — приоритет квестов
 
-## 6. Текущее состояние (2026-08-26)
+## 6. Текущее состояние (2026-08-27)
 
 **Коммиты:**
-- `de871b2` — class config + offline bridge + plan-stack
-- `5e40cf7` — merge с backup
-- `efe0cb9` — hardened needs_tool invariant + replay persistence + quest lifecycle test
-- `64ea6ad` — replay buffer serialization fix
-- `6b4bc53` — sell_junk copper-delta verification
-- `417834b` — plan-stack quest transaction
-- `046b78c` — quality null + buy counter + schema contract test
-- `1d4cceb` — canonical inventory schema + turn-in truth + stateful buy
-- `fd99334` — inline QUEST_OBJECTIVES into readGameState
-- `a744e3b` — buy distance check before sim.buyItem
-- `f1ce454` — navigate to vendor + honest noTarget + itemId in verify
-- `03f0cd7` — real vendor item names (handaxe/gathering_sickle)
+- `43fa139` — FIX #1-#4 для V1 readiness (quest_states, NpcRegistry priority, canonical key, GO_TO_GIVER)
+- `e4b497b` — P0-A: NPC registry + target-aware quest planning
+- `15dc2d2` — V0 browser 1000-step run — FROZEN
+- `33b7134` — telemetry: record WHY each step failed
 
 **Запуск:**
 ```powershell
@@ -229,13 +232,16 @@ powershell -File D:\world-of-claudecraft\start_offline.ps1
 | 9 | Planner | `planner.py` | 26 | ✅ `d932963` |
 | 10 | Evaluation Suite | `evaluation.py` | ✔ | ✅ |
 | 11 | Wire into agent.py | `agent.py`, `play_autonomous.py` | ✔ | ✅ `1d0a5e498` |
+| 12 | NPC Registry (P0-A) | `npc_registry.py` | 12 | ✅ `e4b497b` |
+| 13 | FIX #1-#4 (V1 readiness) | `observation.py`, `npc_registry.py`, `snapshot.cjs` | 11 | ✅ `43fa139` |
 
-**Итого тестов: 208 green** (было 91).
+**Итого тестов: 498 passed, 17 skipped** (было 208, стало 498).
 
 ```
 pytest test_loot_targets test_navigation test_autonomy_loop test_recovery_execution \
        test_planner test_quest_target test_autonomy_core test_observation_mask \
-       test_skill_index_contract test_canonical_state test_evaluation test_replay_extended
+       test_skill_index_contract test_canonical_state test_evaluation test_replay_extended \
+       test_npc_registry test_fix1_quest_available test_fix4_giver_navigation
 ```
 
 ### 8.0. Аудит P0 — контрактные дефекты
@@ -338,6 +344,64 @@ result
 - **Цены только из `woc-game/src/sim/content/items.ts`** (`buyValue`), 214 предметов.
   `sim.itemDef` не экспонирован — выдумывать цены нельзя.
 - **Правила игры читаются из `src/sim/`, не угадываются.**
+- **`quest_available` = существует гивер AND `questState(questId) == 'available'`** (FIX #1).
+  `sim.questState()` — авторитетный метод в offline (проверен 2026-08-27).
+- **NpcRegistry source priority:** `runtime_entity > world_content > snapshot > memory` (FIX #2).
+  `update_from_*` не перезаписывает более приоритетный источник.
+- **NpcRegistry canonical key:** `npc_id` (строковый) отдельный от `entity_id` (числовой) и `template_id` (FIX #3).
+- **`GO_TO_GIVER` — navigation hint, не policy skill** (FIX #4).
+  Planner возвращает `skill="explore"` для навигации. Autonomy обрабатывает через `_nav_to()` → `nav_command`.
+  `explore` — валидный навык (пустые предусловия, в `ALWAYS_AVAILABLE`).
+
+### 8.3. P0-A: Canonical NPC Registry (npc_registry.py)
+
+**Файл:** `python/npc_registry.py`
+
+**Источники (по приоритету):**
+1. `runtime_entity` (sim.entities) — высший приоритет позиции
+2. `world_content` (worldContent.npcs) — статический контент
+3. `snapshot` (bridge nearby) — live данные из моста
+4. `memory` (WorldMemory) — persisted knowledge, низший приоритет
+
+**Контракт:**
+- Ключ реестра = `npc_id` (строковый, из worldContent или templateId)
+- `entity_id` = числовой id из runtime (для bridge actions)
+- `template_id` = строковый templateId (для сопоставления с quest.giverNpcId)
+
+**Методы:**
+- `update_from_world_content(npcs)` — статический контент
+- `update_from_runtime_entities(entities)` — runtime entities
+- `update_from_snapshot(nearby)` — live bridge data
+- `update_from_memory(memory)` — WorldMemory
+- `find_giver_for_quest(quest_id)` — найти гивера по quest_id
+- `get_npc_position(npc_id)` — позиция NPC
+- `get_giver_position_for_quest(quest_id)` — позиция гивера для квеста
+
+### 8.4. FIX #1-#4 (V1 readiness, коммит `43fa139`)
+
+**FIX #1: `quest_available` через `sim.questState()`**
+- Раньше: `bool(givers)` = "NPC имеет questIds" (ложно при done/active/unavailable)
+- Теперь: `exists giver AND questState == 'available'`
+- `snapshot.cjs` собирает `quest_states` из `sim.questState()` для всех NPC
+- `observation.py`: `_quest_available_from_states(ws, givers)`
+
+**FIX #2: NpcRegistry source priority contract**
+- Раньше: `update_from_snapshot` безусловно перезаписывал позицию
+- Теперь: `_should_update_position()` через `SOURCE_PRIORITY`
+
+**FIX #3: Canonical npc_id отдельный от entity_id/template_id**
+- Раньше: ключ = `templateId or id` (числовой entity.id ломал поиск)
+- Теперь: ключ = `npc_id` (строковый), `entity_id` сохранён отдельно
+
+**FIX #4: `GO_TO_GIVER` — navigation hint, не unknown_skill**
+- Planner возвращает `skill="explore"` для навигации
+- Autonomy обрабатывает через `_nav_to()` → `nav_command` + `forced="explore"`
+- `explore` — валидный навык (пустые предусловия, в `ALWAYS_AVAILABLE`)
+
+**Регрессионные тесты:**
+- `test_fix1_quest_available.py`: 7 тестов (iron invariant: 11 givers + 0 available → 0 accept)
+- `test_fix4_giver_navigation.py`: 4 теста (GO_TO_GIVER → nav_command, не unknown_skill)
+- `test_npc_registry.py`: 12 тестов (priority + canonical key contracts)
 
 ## 9. Известные проблемы
 
@@ -354,11 +418,43 @@ result
 
 | Утверждение | Статус |
 |---|---|
-| Контур подключён, не падает | ✅ 208 тестов + живой прогон без traceback |
+| Контур подключён, не падает | ✅ 498 тестов + живой прогон без traceback |
 | Контракты навыков соответствуют игре | ✅ P0.1–P0.8 закрыты живым замером |
 | Тредмилл (повтор без прогресса) сломан | ✅ было 153 холостых `loot`, стало 0 |
+| NPC Registry с правильным priority и canonical key | ✅ FIX #2 + FIX #3, 12 тестов |
+| `quest_available` через `sim.questState()` | ✅ FIX #1, 7 тестов (iron invariant) |
+| `GO_TO_GIVER` → nav_command, не unknown_skill | ✅ FIX #4, 4 теста |
 | Агент играет длинную дистанцию автономно | ❌ **не доказано** — нужен P0.9 baseline |
 | Обучение УЛУЧШАЕТ политику | ❌ **не доказано** — нужен V0 → 100 ep → train → V1 → 100 НОВЫХ ep, `V1 > V0` |
 
 **P1 без доказательства `V1 > V0` — это memorization, а не autonomy.**
 PPO/self-learning (P2) начинать только после этого доказательства.
+
+## 11. V0 Baseline (FROZEN)
+
+**Коммит:** `15dc2d2b9`
+**Отчёт:** `docs/baselines/V0-browser-2026-08-27.md`
+**Статус:** FROZEN — не изменять после начала фиксов.
+
+**Результат:** 989/1000 шагов, `autonomy_errors=0`.
+- `accept_quest` 964/989 = 97.5%, все NO_OP
+- До шага 35: `accept → farm×8 → return_to_giver → turn_in_quest` РАБОТАЕТ
+- Quest сдан на шаге 35
+- `recoveries=986, recoveries_executed=8, loops_tripped=752, max_no_progress_run=964`
+- AutonomyScore = **30.2%**
+
+**Root cause:** `snapshot.cjs:315` читает только `g.online.questsDone`. В offline
+`g.online === false` → `undefined` → fallback `done.length=0` → постусловие
+`quests_done_increased` никогда не выполняется в offline.
+
+## 12. Архитектурная граница (зафиксирована 2026-08-27)
+
+| Репозиторий | Ответственность |
+|-------------|-----------------|
+| **GAME REPO** (`levy-street/world-of-claudecraft`) | АБСОЛЮТНАЯ ИСТИНА о мире и правилах (sim, entities, content, quest engine, combat, economy, navigation, Capability API) |
+| **AGENT REPO** (`remontsuri/world-of-claudecraft-agent`) | АБСОЛЮТНАЯ ИСТИНА о принятии решений и обучении (Planner, PPO, Q-learning, Recovery, LoopGuard, Memory, Evaluation) |
+| **BRIDGE** | Только транспорт между ними |
+
+**Принцип:** Agent repo НЕ дублирует game data. Основная игра уже умеет
+правильно вычислять `questState()` через `computeQuestState()`. Agent repo
+должен только выбирать цель, идти, переключаться, учить.
