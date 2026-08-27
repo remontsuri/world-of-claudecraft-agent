@@ -1,858 +1,1059 @@
 {
-"acolyte_chain_grips": {
-"buy": null,
-"sell": 120
-},
-"acolytes_circlet": {
-"buy": null,
-"sell": 120
-},
-"amber_hide": {
-"buy": 35,
-"sell": 9
-},
-"apprentice_robe": {
-"buy": null,
-"sell": 5
-},
-"apprentice_staff": {
-"buy": null,
-"sell": 120
-},
-"arcane_dust": {
-"buy": null,
-"sell": 6
-},
-"arcane_essence": {
-"buy": null,
-"sell": 18
-},
-"arcane_shard": {
-"buy": null,
-"sell": 55
-},
-"arcanite_bar": {
-"buy": 160,
-"sell": 40
-},
-"arcanite_mining_pick": {
-"buy": null,
-"sell": 150
-},
-"artisans_eye": {
-"buy": null,
-"sell": 60
-},
-"ashwood_axe": {
-"buy": null,
-"sell": 60
-},
-"ashwood_log": {
-"buy": 60,
-"sell": 15
-},
-"baked_bread": {
-"buy": 25,
-"sell": 6
-},
-"bandit_bandana": {
-"buy": 25,
-"sell": 6
-},
-"blessed_wax": {
-"buy": null,
-"sell": 0
-},
-"boar_hide": {
-"buy": null,
-"sell": 0
-},
-"bone_fragments": {
-"buy": null,
-"sell": 7
-},
-"boundstone_girdle": {
-"buy": 250,
-"sell": 340
-},
-"boundstone_helm": {
-"buy": 250,
-"sell": 460
-},
-"bramblehide_jerkin": {
-"buy": 25,
-"sell": 120
-},
-"briarroot_staff": {
-"buy": null,
-"sell": 320
-},
-"brightwood_venison": {
-"buy": 35,
-"sell": 4
-},
-"bristleback_maul": {
-"buy": null,
-"sell": 160
-},
-"bristlehide_spaulders": {
-"buy": null,
-"sell": 150
-},
-"bronze_sickle": {
-"buy": 120,
-"sell": 10
-},
-"bronzework_mace": {
-"buy": 1400,
-"sell": 140
-},
-"caravan_quilted_vest": {
-"buy": null,
-"sell": 130
-},
-"caravan_warden_dirk": {
-"buy": null,
-"sell": 170
-},
-"chunk_of_ore": {
-"buy": 35,
-"sell": 0
-},
-"conjured_bread": {
-"buy": 1400,
-"sell": 0
-},
-"conjured_bread2": {
-"buy": 1400,
-"sell": 0
-},
-"conjured_bread3": {
-"buy": 1400,
-"sell": 0
-},
-"conjured_bread4": {
-"buy": 1400,
-"sell": 0
-},
-"conjured_water": {
-"buy": null,
-"sell": 0
-},
-"conjured_water2": {
-"buy": null,
-"sell": 0
-},
-"conjured_water3": {
-"buy": null,
-"sell": 0
-},
-"conjured_water4": {
-"buy": 1400,
-"sell": 0
-},
-"copper_mining_pick": {
-"buy": 20,
-"sell": 4
-},
-"copper_ore": {
-"buy": null,
-"sell": 4
-},
-"crossroads_saber": {
-"buy": null,
-"sell": 170
-},
-"cryptbone_greaves": {
-"buy": null,
-"sell": 180
-},
-"cryptbone_helm": {
-"buy": 800,
-"sell": 185
-},
-"cryptbone_pauldrons": {
-"buy": 800,
-"sell": 140
-},
-"cryptstalker_jerkin": {
-"buy": null,
-"sell": 700
-},
-"drovers_staff": {
-"buy": null,
-"sell": 175
-},
-"duskhide_wraps": {
-"buy": null,
-"sell": 420
-},
-"eastbrook_arming_sword": {
-"buy": 1400,
-"sell": 140
-},
-"eastbrook_buckler": {
-"buy": 1300,
-"sell": 130
-},
-"eastbrook_chain_vest": {
-"buy": 1800,
-"sell": 180
-},
-"eastbrook_druids_hide": {
-"buy": 2300,
-"sell": 84
-},
-"eastbrook_greatsword": {
-"buy": 1600,
-"sell": 160
-},
-"eastbrook_ritual_vestments": {
-"buy": 2100,
-"sell": 72
-},
-"eastbrook_warded_leggings": {
-"buy": 2200,
-"sell": 105
-},
-"eastbrook_wool_trousers": {
-"buy": 1100,
-"sell": 110
-},
-"elderwood_axe": {
-"buy": null,
-"sell": 150
-},
-"elderwood_log": {
-"buy": 160,
-"sell": 40
-},
-"elixir_of_the_bear": {
-"buy": 100,
-"sell": 20
-},
-"embroidered_mantle": {
-"buy": null,
-"sell": 110
-},
-"event_skin_token": {
-"buy": null,
-"sell": 0
-},
-"felling_axe": {
-"buy": 120,
-"sell": 10
-},
-"fine_ashwood_log": {
-"buy": 120,
-"sell": 30
-},
-"fine_copper_ore": {
-"buy": 32,
-"sell": 8
-},
-"fine_elderwood_log": {
-"buy": 320,
-"sell": 80
-},
-"fine_goldleaf_herb": {
-"buy": 120,
-"sell": 30
-},
-"fine_iron_ore": {
-"buy": 64,
-"sell": 16
-},
-"fine_ironbark_log": {
-"buy": 32,
-"sell": 8
-},
-"fine_silverleaf_herb": {
-"buy": 32,
-"sell": 8
-},
-"fine_sunpetal_herb": {
-"buy": 320,
-"sell": 80
-},
-"fine_thorium_ore": {
-"buy": 120,
-"sell": 30
-},
-"firebottle": {
-"buy": null,
-"sell": 0
-},
-"footpad_jerkin": {
-"buy": null,
-"sell": 5
-},
-"gatherers_cache": {
-"buy": null,
-"sell": 60
-},
-"gathering_sickle": {
-"buy": 20,
-"sell": 4
-},
-"ghostly_essence": {
-"buy": null,
-"sell": 0
-},
-"glimmerfin_koi": {
-"buy": 100,
-"sell": 75
-},
-"gnarled_staff": {
-"buy": null,
-"sell": 12
-},
-"goldleaf_herb": {
-"buy": 60,
-"sell": 15
-},
-"goldleaf_sickle": {
-"buy": null,
-"sell": 60
-},
-"gorraks_cleaver": {
-"buy": null,
-"sell": 180
-},
-"gorraks_cruel_chopper": {
-"buy": null,
-"sell": 180
-},
-"gravecaller_blade": {
-"buy": null,
-"sell": 800
-},
-"gravecaller_sigil": {
-"buy": null,
-"sell": 0
-},
-"gravecaller_staff": {
-"buy": null,
-"sell": 800
-},
-"gravepath_treads": {
-"buy": null,
-"sell": 600
-},
-"gravewalker_softboots": {
-"buy": null,
-"sell": 500
-},
-"gravewardens_shiv": {
-"buy": null,
-"sell": 880
-},
-"gravewoven_bag": {
-"buy": 25,
-"sell": 3500
-},
-"gravewoven_raiment": {
-"buy": null,
-"sell": 700
-},
-"gravewyrm_gauntlets": {
-"buy": 250,
-"sell": 390
-},
-"gravewyrm_mantle": {
-"buy": 250,
-"sell": 410
-},
-"greyjaw_fang": {
-"buy": 35,
-"sell": 0
-},
-"greyjaw_hide_boots": {
-"buy": null,
-"sell": 130
-},
-"greyjaw_pelt_cloak": {
-"buy": null,
-"sell": 110
-},
-"handaxe": {
-"buy": 20,
-"sell": 4
-},
-"healing_potion": {
-"buy": 170,
-"sell": 32
-},
-"heroic_mark": {
-"buy": null,
-"sell": 0
-},
-"hickory_shortstaff": {
-"buy": 1500,
-"sell": 150
-},
-"hobnail_boots": {
-"buy": 900,
-"sell": 90
-},
-"hollow_vigil_staff": {
-"buy": null,
-"sell": 880
-},
-"hollowbone_hauberk": {
-"buy": null,
-"sell": 700
-},
-"hollowbound_legguards": {
-"buy": null,
-"sell": 600
-},
-"iron_mining_pick": {
-"buy": 120,
-"sell": 10
-},
-"iron_ore": {
-"buy": null,
-"sell": 8
-},
-"ironbark_axe": {
-"buy": 400,
-"sell": 25
-},
-"ironbark_log": {
-"buy": null,
-"sell": 4
-},
-"ironreel_fishing_rod": {
-"buy": 60,
-"sell": 10
-},
-"keen_dirk": {
-"buy": null,
-"sell": 120
-},
-"lesser_healing_potion": {
-"buy": 85,
-"sell": 16
-},
-"lesser_mana_potion": {
-"buy": 85,
-"sell": 16
-},
-"linen_pouch": {
-"buy": 250,
-"sell": 60
-},
-"linen_scrap": {
-"buy": null,
-"sell": 3
-},
-"maldrecs_soulbinder": {
-"buy": null,
-"sell": 850
-},
-"mana_potion": {
-"buy": 170,
-"sell": 32
-},
-"marrowtread_boots": {
-"buy": null,
-"sell": 500
-},
-"milepost_boots": {
-"buy": null,
-"sell": 110
-},
-"militia_vest": {
-"buy": null,
-"sell": 150
-},
-"minor_healing_potion": {
-"buy": 40,
-"sell": 8
-},
-"minor_mana_potion": {
-"buy": 40,
-"sell": 8
-},
-"mistcallers_duffel": {
-"buy": 25,
-"sell": 9000
-},
-"mistveil_cord": {
-"buy": null,
-"sell": 150
-},
-"mistveil_grips": {
-"buy": null,
-"sell": 165
-},
-"mithril_mining_pick": {
-"buy": 400,
-"sell": 25
-},
-"moggers_copper_cudgel": {
-"buy": null,
-"sell": 850
-},
-"moggers_hide_quiver": {
-"buy": null,
-"sell": 160
-},
-"moggers_shiv": {
-"buy": null,
-"sell": 850
-},
-"moggers_stomper_boots": {
-"buy": null,
-"sell": 180
-},
-"monarch_crown_helm": {
-"buy": 25,
-"sell": 320
-},
-"morthen_grimoire": {
-"buy": 35,
-"sell": 0
-},
-"mosshide_vest": {
-"buy": null,
-"sell": 130
-},
-"mossy_handwraps": {
-"buy": null,
-"sell": 140
-},
-"mudfin_scale": {
-"buy": null,
-"sell": 5
-},
-"murloc_hut": {
-"buy": null,
-"sell": 0
-},
-"oathbound_greaves": {
-"buy": null,
-"sell": 200
-},
-"oiled_boots": {
-"buy": null,
-"sell": 80
-},
-"outrider_brigandine": {
-"buy": null,
-"sell": 165
-},
-"outrider_legguards": {
-"buy": null,
-"sell": 150
-},
-"outrider_sabatons": {
-"buy": null,
-"sell": 130
-},
-"pilgrims_leggings": {
-"buy": null,
-"sell": 120
-},
-"quilted_trousers": {
-"buy": null,
-"sell": 90
-},
-"raw_bog_eel": {
-"buy": 100,
-"sell": 6
-},
-"raw_frostgill_trout": {
-"buy": 100,
-"sell": 10
-},
-"raw_marsh_pike": {
-"buy": 100,
-"sell": 6
-},
-"raw_mirror_trout": {
-"buy": null,
-"sell": 3
-},
-"raw_river_perch": {
-"buy": null,
-"sell": 2
-},
-"raw_stonescale_carp": {
-"buy": 100,
-"sell": 10
-},
-"recruit_tunic": {
-"buy": null,
-"sell": 5
-},
-"redbrook_blade": {
-"buy": null,
-"sell": 120
-},
-"reinforced_pauldrons": {
-"buy": null,
-"sell": 140
-},
-"reins_grag_bear": {
-"buy": null,
-"sell": 0
-},
-"reins_terrorspark_groundshaker": {
-"buy": null,
-"sell": 0
-},
-"reins_valorsteed": {
-"buy": 100,
-"sell": 0
-},
-"resonant_hide": {
-"buy": null,
-"sell": 40
-},
-"resonant_links": {
-"buy": null,
-"sell": 40
-},
-"resonant_steel": {
-"buy": null,
-"sell": 40
-},
-"resonant_thread": {
-"buy": null,
-"sell": 40
-},
-"resonant_timber": {
-"buy": null,
-"sell": 40
-},
-"restless_skull": {
-"buy": null,
-"sell": 0
-},
-"riding_training": {
-"buy": 800,
-"sell": 0
-},
-"roadwardens_helm": {
-"buy": null,
-"sell": 130
-},
-"roasted_boar": {
-"buy": 100,
-"sell": 12
-},
-"roughspun_gloves": {
-"buy": null,
-"sell": 95
-},
-"rusty_dagger": {
-"buy": null,
-"sell": 10
-},
-"rusty_hatchet": {
-"buy": null,
-"sell": 10
-},
-"sableweb_cord": {
-"buy": null,
-"sell": 150
-},
-"sableweb_slippers": {
-"buy": null,
-"sell": 150
-},
-"sextons_slippers": {
-"buy": null,
-"sell": 500
-},
-"shadow_jerkin": {
-"buy": null,
-"sell": 150
-},
-"silk_sash": {
-"buy": null,
-"sell": 100
-},
-"silverleaf_herb": {
-"buy": null,
-"sell": 4
-},
-"silverleaf_sickle": {
-"buy": 400,
-"sell": 25
-},
-"silverstream_fishing_rod": {
-"buy": 150,
-"sell": 25
-},
-"simple_fishing_pole": {
-"buy": 20,
-"sell": 4
-},
-"soft_down": {
-"buy": 35,
-"sell": 4
-},
-"soggy_boot": {
-"buy": 100,
-"sell": 1
-},
-"sootscale_mantle": {
-"buy": null,
-"sell": 280
-},
-"soul_stone": {
-"buy": 1400,
-"sell": 0
-},
-"spider_leg": {
-"buy": null,
-"sell": 4
-},
-"spring_water": {
-"buy": 25,
-"sell": 6
-},
-"stag_antler": {
-"buy": 35,
-"sell": 8
-},
-"stormreel_fishing_rod": {
-"buy": null,
-"sell": 60
-},
-"sturdy_belt": {
-"buy": null,
-"sell": 100
-},
-"sunpetal_herb": {
-"buy": 160,
-"sell": 40
-},
-"sunpetal_sickle": {
-"buy": null,
-"sell": 150
-},
-"supply_crate": {
-"buy": null,
-"sell": 0
-},
-"tallow_candle": {
-"buy": null,
-"sell": 5
-},
-"tangled_weed": {
-"buy": null,
-"sell": 1
-},
-"tanned_leather_jerkin": {
-"buy": 1600,
-"sell": 80
-},
-"thorium_mining_pick": {
-"buy": null,
-"sell": 60
-},
-"thorium_ore": {
-"buy": 60,
-"sell": 15
-},
-"thornling_grips": {
-"buy": null,
-"sell": 140
-},
-"tidewrought_fishing_rod": {
-"buy": 60,
-"sell": 150
-},
-"tough_jerky": {
-"buy": 25,
-"sell": 2
-},
-"tradesman_hatchet": {
-"buy": null,
-"sell": 160
-},
-"trail_leggings": {
-"buy": null,
-"sell": 120
-},
-"training_mace": {
-"buy": null,
-"sell": 10
-},
-"travelers_knapsack": {
-"buy": 2000,
-"sell": 500
-},
-"tunnelkings_spade": {
-"buy": null,
-"sell": 190
-},
-"vale_carving_knife": {
-"buy": 1200,
-"sell": 120
-},
-"valeborn_spellblade": {
-"buy": null,
-"sell": 850
-},
-"valefire_lantern": {
-"buy": null,
-"sell": 160
-},
-"valespun_robe": {
-"buy": 1400,
-"sell": 140
-},
-"verlans_oathblade": {
-"buy": null,
-"sell": 880
-},
-"votive_chain_belt": {
-"buy": null,
-"sell": 150
-},
-"wanderers_chestguard": {
-"buy": null,
-"sell": 150
-},
-"wardweave_cowl": {
-"buy": null,
-"sell": 440
-},
-"wayfarers_hood": {
-"buy": null,
-"sell": 120
-},
-"weathered_ledger_page": {
-"buy": 35,
-"sell": 0
-},
-"webwood_silk": {
-"buy": null,
-"sell": 0
-},
-"widowfang_dirk": {
-"buy": null,
-"sell": 800
-},
-"wolf_fang": {
-"buy": 25,
-"sell": 4
-},
-"wolfhide_satchel": {
-"buy": 25,
-"sell": 1200
-},
-"worn_sword": {
-"buy": null,
-"sell": 10
-},
-"woven_robe": {
-"buy": null,
-"sell": 150
-}
+ "acolyte_chain_grips": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "acolytes_circlet": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "amber_hide": {
+  "buy": 35,
+  "quality": "poor",
+  "sell": 9
+ },
+ "apprentice_robe": {
+  "buy": null,
+  "quality": "common",
+  "sell": 5
+ },
+ "apprentice_staff": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "arcane_dust": {
+  "buy": null,
+  "quality": "common",
+  "sell": 6
+ },
+ "arcane_essence": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 18
+ },
+ "arcane_shard": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 55
+ },
+ "arcanite_bar": {
+  "buy": 160,
+  "quality": "common",
+  "sell": 40
+ },
+ "arcanite_mining_pick": {
+  "buy": null,
+  "quality": "epic",
+  "sell": 150
+ },
+ "artisans_eye": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "ashwood_axe": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "ashwood_log": {
+  "buy": 60,
+  "quality": "common",
+  "sell": 15
+ },
+ "baked_bread": {
+  "buy": 25,
+  "quality": "common",
+  "sell": 6
+ },
+ "bandit_bandana": {
+  "buy": 25,
+  "quality": "poor",
+  "sell": 6
+ },
+ "blessed_wax": {
+  "buy": null,
+  "sell": 0
+ },
+ "boar_hide": {
+  "buy": null,
+  "sell": 0
+ },
+ "bone_fragments": {
+  "buy": null,
+  "quality": "common",
+  "sell": 7
+ },
+ "boundstone_girdle": {
+  "buy": 250,
+  "quality": "rare",
+  "sell": 340
+ },
+ "boundstone_helm": {
+  "buy": 250,
+  "quality": "rare",
+  "sell": 460
+ },
+ "bramblehide_jerkin": {
+  "buy": 25,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "briarroot_staff": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 320
+ },
+ "brightwood_venison": {
+  "buy": 35,
+  "quality": "common",
+  "sell": 4
+ },
+ "bristleback_maul": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 160
+ },
+ "bristlehide_spaulders": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "bronze_sickle": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 10
+ },
+ "bronzework_mace": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 140
+ },
+ "caravan_quilted_vest": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 130
+ },
+ "caravan_warden_dirk": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 170
+ },
+ "chunk_of_ore": {
+  "buy": 35,
+  "sell": 0
+ },
+ "conjured_bread": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_bread2": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_bread3": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_bread4": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_water": {
+  "buy": null,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_water2": {
+  "buy": null,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_water3": {
+  "buy": null,
+  "quality": "common",
+  "sell": 0
+ },
+ "conjured_water4": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 0
+ },
+ "copper_mining_pick": {
+  "buy": 20,
+  "quality": "common",
+  "sell": 4
+ },
+ "copper_ore": {
+  "buy": null,
+  "quality": "common",
+  "sell": 4
+ },
+ "crossroads_saber": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 170
+ },
+ "cryptbone_greaves": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 180
+ },
+ "cryptbone_helm": {
+  "buy": 800,
+  "quality": "uncommon",
+  "sell": 185
+ },
+ "cryptbone_pauldrons": {
+  "buy": 800,
+  "quality": "uncommon",
+  "sell": 140
+ },
+ "cryptstalker_jerkin": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 700
+ },
+ "drovers_staff": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 175
+ },
+ "duskhide_wraps": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 420
+ },
+ "eastbrook_arming_sword": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 140
+ },
+ "eastbrook_buckler": {
+  "buy": 1300,
+  "quality": "common",
+  "sell": 130
+ },
+ "eastbrook_chain_vest": {
+  "buy": 1800,
+  "quality": "common",
+  "sell": 180
+ },
+ "eastbrook_druids_hide": {
+  "buy": 2300,
+  "quality": "uncommon",
+  "sell": 84
+ },
+ "eastbrook_greatsword": {
+  "buy": 1600,
+  "quality": "common",
+  "sell": 160
+ },
+ "eastbrook_ritual_vestments": {
+  "buy": 2100,
+  "quality": "uncommon",
+  "sell": 72
+ },
+ "eastbrook_warded_leggings": {
+  "buy": 2200,
+  "quality": "uncommon",
+  "sell": 105
+ },
+ "eastbrook_wool_trousers": {
+  "buy": 1100,
+  "quality": "common",
+  "sell": 110
+ },
+ "elderwood_axe": {
+  "buy": null,
+  "quality": "epic",
+  "sell": 150
+ },
+ "elderwood_log": {
+  "buy": 160,
+  "quality": "common",
+  "sell": 40
+ },
+ "elixir_of_the_bear": {
+  "buy": 100,
+  "quality": "uncommon",
+  "sell": 20
+ },
+ "embroidered_mantle": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 110
+ },
+ "event_skin_token": {
+  "buy": null,
+  "quality": "epic",
+  "sell": 0
+ },
+ "felling_axe": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 10
+ },
+ "fine_ashwood_log": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 30
+ },
+ "fine_copper_ore": {
+  "buy": 32,
+  "quality": "common",
+  "sell": 8
+ },
+ "fine_elderwood_log": {
+  "buy": 320,
+  "quality": "common",
+  "sell": 80
+ },
+ "fine_goldleaf_herb": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 30
+ },
+ "fine_iron_ore": {
+  "buy": 64,
+  "quality": "common",
+  "sell": 16
+ },
+ "fine_ironbark_log": {
+  "buy": 32,
+  "quality": "common",
+  "sell": 8
+ },
+ "fine_silverleaf_herb": {
+  "buy": 32,
+  "quality": "common",
+  "sell": 8
+ },
+ "fine_sunpetal_herb": {
+  "buy": 320,
+  "quality": "common",
+  "sell": 80
+ },
+ "fine_thorium_ore": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 30
+ },
+ "firebottle": {
+  "buy": null,
+  "sell": 0
+ },
+ "footpad_jerkin": {
+  "buy": null,
+  "quality": "common",
+  "sell": 5
+ },
+ "gatherers_cache": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "gathering_sickle": {
+  "buy": 20,
+  "quality": "common",
+  "sell": 4
+ },
+ "ghostly_essence": {
+  "buy": null,
+  "sell": 0
+ },
+ "glimmerfin_koi": {
+  "buy": 100,
+  "quality": "uncommon",
+  "sell": 75
+ },
+ "gnarled_staff": {
+  "buy": null,
+  "quality": "common",
+  "sell": 12
+ },
+ "goldleaf_herb": {
+  "buy": 60,
+  "quality": "common",
+  "sell": 15
+ },
+ "goldleaf_sickle": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "gorraks_cleaver": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 180
+ },
+ "gorraks_cruel_chopper": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 180
+ },
+ "gravecaller_blade": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 800
+ },
+ "gravecaller_sigil": {
+  "buy": null,
+  "sell": 0
+ },
+ "gravecaller_staff": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 800
+ },
+ "gravepath_treads": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 600
+ },
+ "gravewalker_softboots": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 500
+ },
+ "gravewardens_shiv": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 880
+ },
+ "gravewoven_bag": {
+  "buy": 25,
+  "quality": "rare",
+  "sell": 3500
+ },
+ "gravewoven_raiment": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 700
+ },
+ "gravewyrm_gauntlets": {
+  "buy": 250,
+  "quality": "rare",
+  "sell": 390
+ },
+ "gravewyrm_mantle": {
+  "buy": 250,
+  "quality": "rare",
+  "sell": 410
+ },
+ "greyjaw_fang": {
+  "buy": 35,
+  "sell": 0
+ },
+ "greyjaw_hide_boots": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 130
+ },
+ "greyjaw_pelt_cloak": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 110
+ },
+ "handaxe": {
+  "buy": 20,
+  "quality": "common",
+  "sell": 4
+ },
+ "healing_potion": {
+  "buy": 170,
+  "quality": "common",
+  "sell": 32
+ },
+ "heroic_mark": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 0
+ },
+ "hickory_shortstaff": {
+  "buy": 1500,
+  "quality": "common",
+  "sell": 150
+ },
+ "hobnail_boots": {
+  "buy": 900,
+  "quality": "common",
+  "sell": 90
+ },
+ "hollow_vigil_staff": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 880
+ },
+ "hollowbone_hauberk": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 700
+ },
+ "hollowbound_legguards": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 600
+ },
+ "iron_mining_pick": {
+  "buy": 120,
+  "quality": "common",
+  "sell": 10
+ },
+ "iron_ore": {
+  "buy": null,
+  "quality": "common",
+  "sell": 8
+ },
+ "ironbark_axe": {
+  "buy": 400,
+  "quality": "uncommon",
+  "sell": 25
+ },
+ "ironbark_log": {
+  "buy": null,
+  "quality": "common",
+  "sell": 4
+ },
+ "ironreel_fishing_rod": {
+  "buy": 60,
+  "quality": "common",
+  "sell": 10
+ },
+ "keen_dirk": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "lesser_healing_potion": {
+  "buy": 85,
+  "quality": "common",
+  "sell": 16
+ },
+ "lesser_mana_potion": {
+  "buy": 85,
+  "quality": "common",
+  "sell": 16
+ },
+ "linen_pouch": {
+  "buy": 250,
+  "quality": "common",
+  "sell": 60
+ },
+ "linen_scrap": {
+  "buy": null,
+  "quality": "common",
+  "sell": 3
+ },
+ "maldrecs_soulbinder": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 850
+ },
+ "mana_potion": {
+  "buy": 170,
+  "quality": "common",
+  "sell": 32
+ },
+ "marrowtread_boots": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 500
+ },
+ "milepost_boots": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 110
+ },
+ "militia_vest": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "minor_healing_potion": {
+  "buy": 40,
+  "quality": "common",
+  "sell": 8
+ },
+ "minor_mana_potion": {
+  "buy": 40,
+  "quality": "common",
+  "sell": 8
+ },
+ "mistcallers_duffel": {
+  "buy": 25,
+  "quality": "epic",
+  "sell": 9000
+ },
+ "mistveil_cord": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "mistveil_grips": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 165
+ },
+ "mithril_mining_pick": {
+  "buy": 400,
+  "quality": "uncommon",
+  "sell": 25
+ },
+ "moggers_copper_cudgel": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 850
+ },
+ "moggers_hide_quiver": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 160
+ },
+ "moggers_shiv": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 850
+ },
+ "moggers_stomper_boots": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 180
+ },
+ "monarch_crown_helm": {
+  "buy": 25,
+  "quality": "rare",
+  "sell": 320
+ },
+ "morthen_grimoire": {
+  "buy": 35,
+  "sell": 0
+ },
+ "mosshide_vest": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 130
+ },
+ "mossy_handwraps": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 140
+ },
+ "mudfin_scale": {
+  "buy": null,
+  "quality": "poor",
+  "sell": 5
+ },
+ "murloc_hut": {
+  "buy": null,
+  "sell": 0
+ },
+ "oathbound_greaves": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 200
+ },
+ "oiled_boots": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 80
+ },
+ "outrider_brigandine": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 165
+ },
+ "outrider_legguards": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "outrider_sabatons": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 130
+ },
+ "pilgrims_leggings": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "quilted_trousers": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 90
+ },
+ "raw_bog_eel": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 6
+ },
+ "raw_frostgill_trout": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 10
+ },
+ "raw_marsh_pike": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 6
+ },
+ "raw_mirror_trout": {
+  "buy": null,
+  "quality": "common",
+  "sell": 3
+ },
+ "raw_river_perch": {
+  "buy": null,
+  "quality": "common",
+  "sell": 2
+ },
+ "raw_stonescale_carp": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 10
+ },
+ "recruit_tunic": {
+  "buy": null,
+  "quality": "common",
+  "sell": 5
+ },
+ "redbrook_blade": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "reinforced_pauldrons": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 140
+ },
+ "reins_grag_bear": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 0
+ },
+ "reins_terrorspark_groundshaker": {
+  "buy": null,
+  "quality": "epic",
+  "sell": 0
+ },
+ "reins_valorsteed": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 0
+ },
+ "resonant_hide": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 40
+ },
+ "resonant_links": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 40
+ },
+ "resonant_steel": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 40
+ },
+ "resonant_thread": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 40
+ },
+ "resonant_timber": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 40
+ },
+ "restless_skull": {
+  "buy": null,
+  "sell": 0
+ },
+ "riding_training": {
+  "buy": 800,
+  "quality": "common",
+  "sell": 0
+ },
+ "roadwardens_helm": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 130
+ },
+ "roasted_boar": {
+  "buy": 100,
+  "quality": "common",
+  "sell": 12
+ },
+ "roughspun_gloves": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 95
+ },
+ "rusty_dagger": {
+  "buy": null,
+  "quality": "common",
+  "sell": 10
+ },
+ "rusty_hatchet": {
+  "buy": null,
+  "quality": "common",
+  "sell": 10
+ },
+ "sableweb_cord": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "sableweb_slippers": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "sextons_slippers": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 500
+ },
+ "shadow_jerkin": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "silk_sash": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 100
+ },
+ "silverleaf_herb": {
+  "buy": null,
+  "quality": "common",
+  "sell": 4
+ },
+ "silverleaf_sickle": {
+  "buy": 400,
+  "quality": "uncommon",
+  "sell": 25
+ },
+ "silverstream_fishing_rod": {
+  "buy": 150,
+  "quality": "uncommon",
+  "sell": 25
+ },
+ "simple_fishing_pole": {
+  "buy": 20,
+  "quality": "common",
+  "sell": 4
+ },
+ "soft_down": {
+  "buy": 35,
+  "quality": "poor",
+  "sell": 4
+ },
+ "soggy_boot": {
+  "buy": 100,
+  "quality": "poor",
+  "sell": 1
+ },
+ "sootscale_mantle": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 280
+ },
+ "soul_stone": {
+  "buy": 1400,
+  "quality": "uncommon",
+  "sell": 0
+ },
+ "spider_leg": {
+  "buy": null,
+  "quality": "common",
+  "sell": 4
+ },
+ "spring_water": {
+  "buy": 25,
+  "quality": "common",
+  "sell": 6
+ },
+ "stag_antler": {
+  "buy": 35,
+  "quality": "poor",
+  "sell": 8
+ },
+ "stormreel_fishing_rod": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "sturdy_belt": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 100
+ },
+ "sunpetal_herb": {
+  "buy": 160,
+  "quality": "common",
+  "sell": 40
+ },
+ "sunpetal_sickle": {
+  "buy": null,
+  "quality": "epic",
+  "sell": 150
+ },
+ "supply_crate": {
+  "buy": null,
+  "sell": 0
+ },
+ "tallow_candle": {
+  "buy": null,
+  "quality": "poor",
+  "sell": 5
+ },
+ "tangled_weed": {
+  "buy": null,
+  "quality": "poor",
+  "sell": 1
+ },
+ "tanned_leather_jerkin": {
+  "buy": 1600,
+  "quality": "common",
+  "sell": 80
+ },
+ "thorium_mining_pick": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 60
+ },
+ "thorium_ore": {
+  "buy": 60,
+  "quality": "common",
+  "sell": 15
+ },
+ "thornling_grips": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 140
+ },
+ "tidewrought_fishing_rod": {
+  "buy": 60,
+  "quality": "epic",
+  "sell": 150
+ },
+ "tough_jerky": {
+  "buy": 25,
+  "quality": "common",
+  "sell": 2
+ },
+ "tradesman_hatchet": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 160
+ },
+ "trail_leggings": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "training_mace": {
+  "buy": null,
+  "quality": "common",
+  "sell": 10
+ },
+ "travelers_knapsack": {
+  "buy": 2000,
+  "quality": "common",
+  "sell": 500
+ },
+ "tunnelkings_spade": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 190
+ },
+ "vale_carving_knife": {
+  "buy": 1200,
+  "quality": "common",
+  "sell": 120
+ },
+ "valeborn_spellblade": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 850
+ },
+ "valefire_lantern": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 160
+ },
+ "valespun_robe": {
+  "buy": 1400,
+  "quality": "common",
+  "sell": 140
+ },
+ "verlans_oathblade": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 880
+ },
+ "votive_chain_belt": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "wanderers_chestguard": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ },
+ "wardweave_cowl": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 440
+ },
+ "wayfarers_hood": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 120
+ },
+ "weathered_ledger_page": {
+  "buy": 35,
+  "sell": 0
+ },
+ "webwood_silk": {
+  "buy": null,
+  "sell": 0
+ },
+ "widowfang_dirk": {
+  "buy": null,
+  "quality": "rare",
+  "sell": 800
+ },
+ "wolf_fang": {
+  "buy": 25,
+  "quality": "common",
+  "sell": 4
+ },
+ "wolfhide_satchel": {
+  "buy": 25,
+  "quality": "uncommon",
+  "sell": 1200
+ },
+ "worn_sword": {
+  "buy": null,
+  "quality": "common",
+  "sell": 10
+ },
+ "woven_robe": {
+  "buy": null,
+  "quality": "uncommon",
+  "sell": 150
+ }
 }

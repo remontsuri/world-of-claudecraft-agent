@@ -66,3 +66,37 @@ def vendor_sells(info: Dict[str, Any], item_id: str) -> Optional[bool]:
         return None
     return any(isinstance(it, dict) and it.get("itemId") == item_id
                for it in items)
+
+
+# ---- quality / junk (P0.1) ----
+# `quality` в игре — СТРОКА. Живой замер items.ts: poor 8, common 80,
+# uncommon 65, rare 41, epic 7. Прежний детект сравнивал её с нулём и
+# не срабатывал НИКОГДА, из-за чего sell_junk был заблокирован навсегда.
+JUNK_QUALITIES = frozenset({"poor"})
+
+
+def item_quality(item_id: str) -> Optional[str]:
+    """Quality предмета из справочника контента. None = НЕИЗВЕСТНО."""
+    row = _PRICES.get(item_id) if isinstance(_PRICES, dict) else None
+    if not isinstance(row, dict):
+        return None
+    q = row.get("quality")
+    return q if isinstance(q, str) and q else None
+
+
+def is_junk_quality(quality: Any) -> bool:
+    """True только для явного junk-качества.
+
+    None / пусто / неизвестное значение -> False (fail-closed): отсутствие
+    данных не повод продавать предмет.
+    """
+    if not isinstance(quality, str):
+        return False
+    return quality.strip().lower() in JUNK_QUALITIES
+
+
+def is_junk_item(item_id: str, quality: Any = None) -> bool:
+    """Хлам ли предмет: сначала живое quality из снапшота, затем справочник."""
+    if isinstance(quality, str) and quality.strip():
+        return is_junk_quality(quality)
+    return is_junk_quality(item_quality(item_id))

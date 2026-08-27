@@ -94,15 +94,34 @@ def test_ready_derived_from_active_state():
 
 
 def test_junk_counted_from_inventory_quality():
+    """junk = quality 'poor' — СТРОКА, как в woc-game/src/sim/content/items.ts.
+
+    Прежняя версия этого теста утверждала, что junk это quality == 0, и
+    закрепляла выдуманный контракт: числового quality в игре не существует
+    (замер items.ts: poor 8, common 80, uncommon 65, rare 41, epic 7).
+    Из-за этого детект junk не срабатывал никогда, has_junk был прибит к
+    False, и sell_junk оставался заблокированным навсегда (P0.1).
+    """
     ws = {"player": {"maxHp": 1},
-          "inventory": [{"quality": 0}, {"quality": 0}, {"quality": 2}]}
+          "inventory": [{"itemId": "tangled_weed", "quality": "poor"},
+                        {"itemId": "soggy_boot", "quality": "poor"},
+                        {"itemId": "rough_hide", "quality": "common"}]}
     obs = encode_observation(ws)
     assert obs["inventory"]["junk_count"] == 2
 
 
+def test_numeric_quality_is_not_junk():
+    """Число в quality — не хлам: игра такого не отдаёт, значит данных нет."""
+    ws = {"player": {"maxHp": 1},
+          "inventory": [{"itemId": "x", "quality": 0},
+                        {"itemId": "y", "quality": 0}]}
+    obs = encode_observation(ws)
+    assert obs["inventory"]["junk_count"] == 0
+
+
 def test_free_slots_from_capacity_when_not_given():
     ws = {"player": {"maxHp": 1}, "bag_capacity": 26,
-          "inventory": [{"quality": 1}] * 20}
+          "inventory": [{"itemId": "rough_hide", "quality": "common"}] * 20}
     obs = encode_observation(ws)
     assert obs["inventory"]["free_slots"] == 6
 

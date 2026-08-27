@@ -160,16 +160,9 @@ class ExperienceStore:
             fd, tmp = tempfile.mkstemp(dir=d, prefix=".mem_", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    try:
-                        open(os.path.join(d, "_mem.log"), "a", encoding="utf-8").write("SAVE START %s\n" % time.time())
-                    except Exception:
-                        pass
                     json.dump(data, f, ensure_ascii=False, indent=1)
-                    try:
-                        open(os.path.join(d, "_mem.log"), "a", encoding="utf-8").write("SAVE DONE %s\n" % time.time())
-                    except Exception:
-                        pass
                 os.replace(tmp, self.path)  # atomic on Windows
+                self._dirty = False
             except Exception:
                 try:
                     os.unlink(tmp)
@@ -240,7 +233,18 @@ class ExperienceStore:
         # record the experience for real memory / analysis
         if next_state is not None:
             self.record(state, action, reward, next_state, outcome_kind)
-        self.save()
+        # P0.2: НЕ сохраняем на каждом update. Раньше здесь стоял self.save(),
+        # который полностью сериализовал weights + counts + experiences[-500:]
+        # в JSON на КАЖДОМ шаге — стоимость росла по мере обучения и делала
+        # любой throughput-замер бессмысленным (headless даёт 296 шагов/сек).
+        # Персист выполняют владельцы цикла: Agent.run() по save_every и
+        # финальным save(), play_autonomous по своей кадансе. Флаг ниже
+        # позволяет им понять, есть ли несохранённые изменения.
+        self._dirty = True
+
+    def has_unsaved(self) -> bool:
+        """True если после последнего save() были update()/record()."""
+        return bool(getattr(self, "_dirty", False))
 
     def candidate_values(self, state: dict, actions: List[str]) -> Dict[str, float]:
         bucket = _bucket(state)
@@ -273,7 +277,7 @@ class ExperienceStore:
                 n += 1
             except Exception:
                 traceback.print_exc()
-        # single atomic persist (update() saves on every call; collapse to one)
+        # single atomic persist (P0.2: update() больше не сохраняет само)
         if n:
             self.save()
         return n

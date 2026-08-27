@@ -11,6 +11,11 @@ Encoder толерантен к схеме: читает и canonical ws, и п�
 import math
 from typing import Any, Dict, List, Optional
 
+# Единый junk-предикат (P0.1). Живёт в item_prices, потому что quality —
+# факт контента из items.ts, а не состояние мира. Один источник для
+# observation / world_state / contracts, чтобы слои не разъехались снова.
+from item_prices import is_junk_item as _is_junk_item
+
 # Дистанции-гейты из игры (src/sim): INTERACT_RANGE=5, accept/turn-in = +2
 INTERACT_RANGE = 5.0
 QUEST_RANGE = 7.0
@@ -253,17 +258,33 @@ def encode_observation(ws: Dict[str, Any],
     target = _pick_target(mobs, quest_mob)
     target_is_quest = bool(target) and _mob_matches(target, quest_mob)
 
-    inv = ws.get("inventory") or info.get("inventory") or []
-    junk = 0
-    for it in inv if isinstance(inv, list) else []:
-        if _num(it.get("quality"), 1.0) == 0:
-            junk += 1
+    # junk-детект (P0.1): считается ОДИН раз в world_state (canonical
+    # inventory.junk_count) — здесь только читаем. Fallback на info оставлен
+    # для вызовов с неполным ws (тесты/legacy), но логика junk одна и та же:
+    # item_prices.is_junk_item, quality — строка 'poor', не число.
+    # ВНИМАНИЕ: ws["inventory"] у legacy-вызовов бывает LIST — отсюда
+    # isinstance-проверки, а не прямой .get().
+    _inv_raw = ws.get("inventory")
+    _inv_block = _inv_raw if isinstance(_inv_raw, dict) else None
+    inv_list = info.get("inventory")
+    if not isinstance(inv_list, list):
+        inv_list = _inv_raw if isinstance(_inv_raw, list) else []
+
+    if _inv_block is not None and _inv_block.get("junk_count") is not None:
+        junk = int(_inv_block.get("junk_count") or 0)
+    else:
+        junk = sum(1 for it in inv_list
+                   if isinstance(it, dict)
+                   and _is_junk_item(it.get("itemId"), it.get("quality")))
 
     free_slots = ws.get("bag_free_slots")
     if free_slots is None:
-        cap = _num(ws.get("bag_capacity"), 0.0)
-        used = float(len(inv)) if isinstance(inv, list) else 0.0
-        free_slots = max(0.0, cap - used) if cap else 0.0
+        if _inv_block is not None and _inv_block.get("free_slots") is not None:
+            free_slots = _num(_inv_block.get("free_slots"), 0.0)
+        else:
+            cap = _num(ws.get("bag_capacity"), 0.0)
+            used = float(len(inv_list))
+            free_slots = max(0.0, cap - used) if cap else 0.0
 
     obs = {
         "player": {
@@ -310,7 +331,10 @@ def encode_observation(ws: Dict[str, Any],
         },
         "inventory": {
             "free_slots": int(_num(free_slots)),
-            "used_slots": len(inv) if isinstance(inv, list) else 0,
+            "used_slots": (_inv_block.get("used_slots")
+                           if _inv_block is not None
+                           and _inv_block.get("used_slots") is not None
+                           else len(inv_list)),
             "junk_count": junk,
             "missing_tool": ws.get("needs_tool"),
             "quest_items": ws.get("quest_items") or [],
@@ -320,7 +344,9 @@ def encode_observation(ws: Dict[str, Any],
             # слепых free_slots / отсутствующего equipment_rev (P0.1, P0.2).
             "items": (info.get("inventory_by_id")
                       or ws.get("inventory_by_id") or {}),
-            "equipment": (info.get("equipment") or ws.get("equipment") or {}),
+            "equipment": (info.get("equipment")
+                          or (_inv_block or {}).get("equipment")
+                          or ws.get("equipment") or {}),
             # Что именно агент собирается купить, его ЦЕНА и наличие у вендора.
             # money_sufficient сравнивает copper >= price, а не copper > 0
             # (handaxe стоит 20 при 14 на руках -> покупка была обречена).

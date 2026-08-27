@@ -175,11 +175,14 @@ def main():
     from strategy_memory import StrategyMemory
 
     # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
-    # WOC_AUTONOMY=0 полностью отключает обёртку (агент работает как раньше).
-    # Startup-ассерты валят процесс ЗДЕСЬ, если контракты рассинхронизированы:
-    # лучше не стартовать, чем 5000 шагов писать испорченный replay.
+    # Fail-closed (P0.4): при WOC_AUTONOMY!=0 провал контракта ОСТАНАВЛИВАЕТ
+    # процесс. Раньше здесь стоял `autonomy = None` — агент продолжал работу
+    # БЕЗ автономного контура, лог говорил "agent running", а замер измерял
+    # совсем не то, что собирались измерять. Единственный законный путь к
+    # legacy-режиму — явный WOC_AUTONOMY=0.
     autonomy = None
-    if os.environ.get("WOC_AUTONOMY", "1") != "0":
+    _autonomy_requested = os.environ.get("WOC_AUTONOMY", "1") != "0"
+    if _autonomy_requested:
         try:
             from autonomy import AutonomyLoop
             from skill_contracts import assert_predicates_implemented
@@ -190,8 +193,15 @@ def main():
             print("[autonomy] loop enabled (contracts verified)", flush=True)
         except Exception:
             traceback.print_exc()
-            print("[autonomy] DISABLED: contract check failed", flush=True)
-            autonomy = None
+            print("[autonomy] FATAL: contract check failed. "
+                  "Отказываюсь стартовать с испорченными контрактами — "
+                  "5000 шагов записали бы мусорный replay. "
+                  "Запусти с WOC_AUTONOMY=0, если legacy-режим нужен намеренно.",
+                  flush=True)
+            raise SystemExit(3)
+    else:
+        print("[autonomy] disabled by WOC_AUTONOMY=0 (legacy mode, explicit)",
+              flush=True)
     # Record our live PID so the launcher's singleton check (agent.pid) tracks
     # the real long-lived process. (Previously the launcher wrote this via a
     # python -c wrapper; now the module records it directly and reliably.)
@@ -201,6 +211,17 @@ def main():
     except OSError:
         pass
     print(f"[BOOT] pid={os.getpid()} autonomous run starting (single long-lived process)", flush=True)
+
+    # P0.4 / P0.7 — учёт того, что реально произошло за прогон.
+    # _learning_steps: шаги, прошедшие полную цепочку agent.step()
+    #                  (policy -> skill -> verifier -> reward -> memory).
+    # _nav_substeps:   навигационные подшаги (env.raw_call), которые НЕ дают
+    #                  обучающего перехода. "N шагов" != "N переходов".
+    # _autonomy_errors: сбои контура; порог валит процесс, а не прячет их.
+    _learning_steps = 0
+    _nav_substeps = 0
+    _autonomy_errors = 0
+    _AUTONOMY_MAX_ERRORS = int(os.environ.get("WOC_AUTONOMY_MAX_ERRORS", "5"))
     if os.path.exists(EXP_PATH):
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
@@ -443,9 +464,11 @@ def main():
                         traceback.print_exc()
                 # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
                 # Planner/маска/навигация/recovery оборачивают шаг агента.
-                # Неинвазивно: контур ПРЕДЛАГАЕТ действие, agent.step() всё
-                # так же исполняет и учится. Если контур недоступен или упал —
-                # шаг идёт как раньше, агент не останавливается.
+                # Контур ПРЕДЛАГАЕТ действие, agent.step() исполняет и учится.
+                # P0.4: сбои контура НЕ проглатываются молча. Каждый учитывается
+                # в _autonomy_errors; при WOC_AUTONOMY!=0 и превышении порога
+                # процесс останавливается, иначе можно намерить 5000 шагов
+                # "автономной архитектуры", которая на деле была отключена.
                 _pre = None
                 if autonomy is not None:
                     try:
@@ -470,6 +493,12 @@ def main():
                                 _nav_after = getattr(env, "_last_info", None) or {}
                                 autonomy.after_action(
                                     "explore", _nav_after, _bws2(_nav_after))
+                                # P0.7: это НАВИГАЦИОННЫЙ ПОДШАГ, а не обучающий
+                                # переход — он не проходит через agent.step()
+                                # (policy -> skill -> verifier -> reward ->
+                                # memory -> replay). Считаем отдельно, иначе
+                                # "5000 шагов" != "5000 обучающих переходов".
+                                _nav_substeps += 1
                                 continue
                             # подсказка политике через её же hints-канал
                             _forced = _pre.get("forced_skill")
@@ -479,7 +508,20 @@ def main():
                                     "key": "autonomy_subgoal", "skill": _forced}
                     except Exception:
                         traceback.print_exc()
+                        _autonomy_errors += 1
+                        print("[autonomy] before_action failed (%d/%d)"
+                              % (_autonomy_errors, _AUTONOMY_MAX_ERRORS),
+                              flush=True)
+                        if (_autonomy_requested
+                                and _autonomy_errors >= _AUTONOMY_MAX_ERRORS):
+                            print("[autonomy] FATAL: контур сбоил %d раз — "
+                                  "останавливаюсь. Дальнейший прогон измерял бы "
+                                  "агента БЕЗ автономного контура и был бы "
+                                  "выдан за baseline автономности."
+                                  % (_autonomy_errors,), flush=True)
+                            raise SystemExit(4)
                 rec = agent.step()
+                _learning_steps += 1
                 if autonomy is not None and _pre is not None:
                     try:
                         _after = getattr(env, "_last_info", None) or {}
@@ -491,6 +533,16 @@ def main():
                                 reward=float((rec or {}).get("reward") or 0.0))
                     except Exception:
                         traceback.print_exc()
+                        _autonomy_errors += 1
+                        print("[autonomy] after_action failed (%d/%d)"
+                              % (_autonomy_errors, _AUTONOMY_MAX_ERRORS),
+                              flush=True)
+                        if (_autonomy_requested
+                                and _autonomy_errors >= _AUTONOMY_MAX_ERRORS):
+                            print("[autonomy] FATAL: контур сбоил %d раз — "
+                                  "останавливаюсь (см. выше)."
+                                  % (_autonomy_errors,), flush=True)
+                            raise SystemExit(4)
         except BrowserBridgeError as e:
             # Infra failure (bridge/CDP/HTTP down). RECOVER IN-PROCESS — do NOT
             # re-create BrowserEnv/Agent. That re-init itself calls snapshot/
@@ -892,6 +944,13 @@ def main():
     logf.close()
     env.close()
     _summary(m, m["steps"], start, None, final=True, fail_analyzer=fail_analyzer)
+    # P0.7: честный учёт — сколько шагов дали ОБУЧАЮЩИЙ переход, а сколько
+    # были навигационными подшагами в обход agent.step(). Без этой строки
+    # "прогнали 5000 шагов" читается как "собрали 5000 переходов", что неверно.
+    print("[accounting] learning_steps=%d nav_substeps=%d autonomy_errors=%d "
+          "(autonomy=%s)"
+          % (_learning_steps, _nav_substeps, _autonomy_errors,
+             "on" if autonomy is not None else "OFF"), flush=True)
     print(f"\n[autonomous] done. log -> {LOG_PATH}, memory -> {EXP_PATH}")
     # release the single-instance lock so a future launch can start cleanly
     try:

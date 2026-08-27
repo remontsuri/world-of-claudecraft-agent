@@ -67,6 +67,9 @@ reward. Fields are OBSERVATIONS (measured facts), never rules.
 
 from typing import Dict
 
+# Единый junk-предикат (P0.1) — общий с observation/contracts.
+from item_prices import is_junk_item as _is_junk_item
+
 
 def build_world_state(info: Dict) -> Dict:
     """Flatten env info into the complete WorldState.
@@ -125,13 +128,16 @@ def build_world_state(info: Dict) -> Dict:
     bag_capacity = info.get("bagCapacity") or 16
     bag_slots_used = len([s for s in inv if s])
     bag_full = bag_slots_used >= bag_capacity
-    # quality: живой замер 2026-08-25 — поле ОТСУТСТВУЕТ у всех предметов
-    # (undefined). Junk-детект по quality==0 помечал ВСЁ как хлам.
-    # Пока игра не отдаёт quality, junk = расходники/мусор по whitelist
-    # отсутствует; считаем junk только предметы без квестовой ценности,
-    # которые политика и так продаёт через keepIds-фильтр. Ставим False:
-    # sell_junk вызывается по bag_full, а не по has_junk.
-    has_junk = False
+    # junk-детект (P0.1): `quality` в игре — СТРОКА ('poor'/'common'/...),
+    # а не число. Прежний код сравнивал её с нулём -> `?? 0` давал фейковый
+    # junk, из-за чего детект отключили целиком (has_junk = False). Вывод был
+    # неверный: поле есть, оно строковое. Теперь единый предикат из
+    # item_prices (факт из items.ts): junk == quality 'poor', 8 предметов.
+    # quality=None -> НЕ хлам (fail-closed).
+    junk_count = sum(1 for s in inv
+                     if isinstance(s, dict)
+                     and _is_junk_item(s.get("itemId"), s.get("quality")))
+    has_junk = junk_count > 0
 
     # vendor proximity: is a vendor NPC within interact range? Drives sell_junk
     # candidacy in policy (no point offering sell_junk when the vendor is far,
@@ -351,6 +357,11 @@ def build_world_state(info: Dict) -> Dict:
             iid: cnt for iid, cnt in inv_by_id.items() if iid in quest_items_needed
         },
         "by_id": inv_by_id,
+        # P0.1: junk считается ОДИН раз здесь; observation больше не имеет
+        # своей копии логики. P0.2: equipment входит в canonical блок, иначе
+        # контракт equip -> equipment_changed слеп.
+        "junk_count": junk_count,
+        "equipment": dict(info.get("equipment") or {}),
     }
 
     def _ent(e):

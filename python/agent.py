@@ -34,6 +34,30 @@ from world_state import build_world_state
 import quest_skill
 from quest_capability import QuestCapability
 
+# P0.3: трассировка горячего цикла за env-гейтом. Раньше _cycle() делал
+# 4 безусловных open()+write()+close() в _cycle.log на КАЖДОМ шаге — на
+# headless-скорости (296 шагов/сек) это ~1200 открытий файла в секунду.
+# WOC_TRACE=1 включает обратно, когда трассировка реально нужна.
+_TRACE_ON = os.environ.get("WOC_TRACE", "0") not in ("", "0", "false", "False")
+_TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "_cycle.log")
+_trace_fh = None
+
+
+def _trace(msg: str) -> None:
+    """Пишет строку трассировки, если WOC_TRACE включён. Держит один открытый
+    handle вместо open/close на каждый вызов."""
+    if not _TRACE_ON:
+        return
+    global _trace_fh
+    try:
+        if _trace_fh is None:
+            _trace_fh = open(_TRACE_PATH, "a", encoding="utf-8")
+        _trace_fh.write("%.2f %s\n" % (time.time(), msg))
+        _trace_fh.flush()
+    except Exception:
+        pass
+
 # Map skill name -> hierarchical_env action index
 SKILL_INDEX = {name: i for i, name in enumerate(SKILLS)}
 
@@ -361,28 +385,16 @@ class Agent:
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
-        try:
-            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
-                "%.2f SKILL_DONE action=%s\n" % (__import__("time").time(), action))
-        except Exception:
-            pass
+        _trace("SKILL_DONE action=%s" % (action,))
 
         # Persist newly observed vendors/NPC facts after every real transition.
         self._remember_visible_world(after)
-        try:
-            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
-                "%.2f REMEMBER_DONE\n" % (__import__("time").time(),))
-        except Exception:
-            pass
+        _trace("REMEMBER_DONE")
 
         # 6. Reward from FACT (reward.py), not from our opinion
         ws_after = _world_state_dict(after)
         reward = outcome_reward(ws_before, ws_after, verdict, outcome_kind)
-        try:
-            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
-                "%.2f REWARD_DONE r=%.2f\n" % (__import__("time").time(), reward))
-        except Exception:
-            pass
+        _trace("REWARD_DONE r=%.2f" % (reward,))
 
         # 7. Memory learns — UNLESS infra error (ENV_ERROR -> no false lesson)
         #    or measurement mode (learn=False).
@@ -398,11 +410,7 @@ class Agent:
             # there). Do NOT double-push here — that would store incompatible
             # bucket-string transitions alongside its dict transitions and break
             # train_from_replay(). See play_autonomous.py ~line 562.
-        try:
-            open("D:/world-of-claudecraft/python/_cycle.log", "a", encoding="utf-8").write(
-                "%.2f MEMORY_DONE\n" % (__import__("time").time(),))
-        except Exception:
-            pass
+        _trace("MEMORY_DONE")
 
         return {
             "action": action,
