@@ -707,7 +707,7 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
 async function exploreWalk(gameClient, steps) {
   // 2026-08-24: раньше здесь стоял поворот каждый 7-й шаг (i % 7 === 6) и
   // controller.stop() на КАЖДОМ тике. Это давало ровно то, что видел
-  // пользователь: агент идёт и постоянно вертит камерой, а из-за stop() ещё и
+  // пользователь: агент идёт и постоянно вертит камеру, а из-за stop() ещё и
   // теряет разгон. Теперь: один поворот в НАЧАЛЕ отрезка (выбираем новый курс),
   // затем идём прямо, не трогая камеру и не сбрасывая ввод каждый тик.
   const total = steps || 10;
@@ -725,11 +725,33 @@ async function exploreWalk(gameClient, steps) {
   await gameClient.evaluate(() => {
     try { window.__game.controller.move({ forward: true }); } catch (_) {}
   });
+  // 2026-08-28: обнаружение застревания (забор/дом) — если за 4 тика позиция
+  // не изменилась, прыгаем и пробуем новый курс.
+  let lastPos = null;
+  let stuck = 0;
   for (let i = 1; i < total; i++) {
-    // НЕ переотправляем команду каждый тик: ввод контроллера персистентный,
-    // повторный move() с тем же значением только мешает (и раньше здесь был
-    // stop(), который рвал движение).
     await sleep(gameClient.tickMs);
+    const pos = await gameClient.evaluate(() => {
+      const p = window.__game.sim.player;
+      return [p.pos.x, p.pos.z];
+    }).catch(() => null);
+    if (pos && lastPos && Math.hypot(pos[0]-lastPos[0], pos[1]-lastPos[1]) < 0.3) {
+      stuck++;
+      if (stuck >= 3) {
+        // hop: jump + new facing
+        await gameClient.evaluate(() => {
+          try { window.__game.controller.move({ jump: true }); } catch (_) {}
+          try {
+            const p = window.__game.sim.player;
+            window.__game.controller.face(p.facing + Math.PI / 2);
+          } catch (_) {}
+        }).catch(() => {});
+        stuck = 0;
+      }
+    } else {
+      stuck = 0;
+    }
+    lastPos = pos || lastPos;
   }
   return true;
 }
@@ -779,6 +801,7 @@ function createActions({ gameClient, buildSnapshot, tickMs = 220 }) {
       else if (kind === 'back') window.__game.controller.move({ back: true });
       else if (kind === 'turnLeft') window.__game.controller.move({ turnLeft: true });
       else if (kind === 'turnRight') window.__game.controller.move({ turnRight: true });
+      else if (kind === 'jump') window.__game.controller.move({ jump: true });
     }, cmd.kind);
     await sleep(tickMs);
     const r = await buildSnapshot(gameClient);
