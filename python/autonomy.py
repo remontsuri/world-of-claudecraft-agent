@@ -20,6 +20,7 @@ from progress import detect_progress, classify_outcome
 from skill_contracts import check_preconditions, verify_postconditions
 from navigation import (NavigationController, DISTANCE_PRECONDITIONS,
                         target_kind_for_subgoal)
+from decision_context import DecisionContext
 from recovery import (RecoveryTracker, ObjectiveBlacklist,
                       plan_recovery, assert_recovery_executable)
 from anti_loop import LoopGuard
@@ -197,6 +198,21 @@ class AutonomyLoop:
         name = (subgoal or {}).get("subgoal") or "?"
         self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
 
+        # Build explicit decision context (replaces hidden policy.hints channel)
+        _nav_intent = None
+        if nav_command:
+            _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
+        decision_ctx = DecisionContext(
+            allowed_skills=tuple(masked),
+            forced_skill=forced,
+            subgoal=(subgoal or {}).get("subgoal"),
+            navigation_intent=_nav_intent,
+            target=(self.nav.target if self.nav else None),
+            reason=("recovery" if forced and self.last.get("loop")
+                    else "subgoal" if forced
+                    else "policy"),
+        )
+
         return {
             "candidates": masked,
             "subgoal": subgoal,
@@ -205,6 +221,7 @@ class AutonomyLoop:
             "nav_status": nav_status,
             "obs": obs,
             "blocked": self.guard.blocked_actions(),
+            "decision_context": decision_ctx,
         }
 
     def _nav_to(self, obs, kind, hint=None):

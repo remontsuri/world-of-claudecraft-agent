@@ -508,14 +508,19 @@ def main():
                                 _nav_substeps += 1
                                 continue
                             # подсказка политике через её же hints-канал
+                            # (legacy — будет удалён после полного перехода на DecisionContext)
                             _forced = _pre.get("forced_skill")
                             if _forced and isinstance(
                                     getattr(agent.policy, "hints", None), dict):
                                 agent.policy.hints["autonomy_subgoal"] = {
                                     "key": "autonomy_subgoal", "skill": _forced}
-                            # передать masked (автономная маска) в политику,
-                            # чтобы политика не выбирала действия, заблокированные
-                            # предусловиями (farm без мобов, accept_quest без квеста)
+                            # Explicit decision context — основной канал
+                            _ctx = _pre.get("decision_context")
+                            if _ctx is not None:
+                                agent.policy._ctx = _ctx
+                            else:
+                                agent.policy._ctx = None
+                            # передать masked (автономная маска) в политику
                             _masked = _pre.get("candidates")
                             if _masked and isinstance(
                                     getattr(agent.policy, "hints", None), dict):

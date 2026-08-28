@@ -666,36 +666,48 @@ class GoalManager:
 
     # ---- main decision ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
-                goal: Optional[str] = None) -> Tuple[str, dict]:
+                goal: Optional[str] = None,
+                context: "DecisionContext" = None) -> Tuple[str, dict]:
         """Choose one skill. `ws` may be passed in by the caller so the decision
         and the later learn() call are guaranteed to use the SAME WorldState
         instance (and therefore the same bucket key). `exploration_weight` scales
         the count-based bonus; pass 0.0 at MEASUREMENT time so P reflects Q only
-        (removes the exploration/visit-count confound)."""
+        (removes the exploration/visit-count confound).
+
+        `context` is the explicit decision context from AutonomyLoop.
+        When provided, it replaces the old policy.hints["masked_candidates"]
+        hidden channel — Policy reads allowed_skills from context, not mutable
+        state.
+        """
         if ws is None:
             ws = self._world_state(info)
         # Определяем класс игрока (warrior/mage/hunter)
         player_class = (info.get("player_class")
                         or (ws or {}).get("player_class")
-                        or "mage")  # fallback
+                        or "warrior")  # fallback = warrior (our class)
         class_cfg = get_class_config(player_class)
         playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, goal=goal,
                                   class_cfg=class_cfg, playstyle=playstyle)
-        # Учесть автономную маскировку (из autonomy.before_action).
-        # Политика не должна выбирать действия, заблокированные предусловиями.
-        _masked = self.hints.get("masked_candidates") if hasattr(self, "hints") else None
-        if _masked:
-            # Фильтруем кандидатов, оставляя только те, что разрешены маской
+        # Explicit decision context replaces the old hidden hints channel.
+        # AutonomyLoop builds ONE DecisionContext per step; Policy reads it.
+        if context is not None:
+            _masked = list(context.allowed_skills)
             filtered = [c for c in cands if c in _masked]
             if filtered:
                 cands = filtered
             elif "explore" in _masked:
-                # Если ни один из наших кандидатов не в маске — используем explore
                 cands = ["explore"]
-            # DEBUG: логируем если маска изменила candidates
-            if "farm" in cands and "farm" not in _masked:
-                print(f"[policy] farm in cands but not in masked={_masked}, ws_weak_mob={ws.get('weak_mob_near')}, cands={cands}", flush=True)
+            # Forced skill from recovery/loop is a preference, not a command.
+            # It stays in cands; softmax decides.
+        elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
+            # Legacy fallback: still support hints for backward compatibility
+            _masked = self.hints.get("masked_candidates")
+            filtered = [c for c in cands if c in _masked]
+            if filtered:
+                cands = filtered
+            elif "explore" in _masked:
+                cands = ["explore"]
         # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
         # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
         # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.

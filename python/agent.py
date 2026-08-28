@@ -379,9 +379,14 @@ class Agent:
             self.policy.step_idx = self._step_counter
         except Exception:
             pass
+        # Explicit decision context from Autonomy (replaces hidden hints channel)
+        _ctx = getattr(self.policy, "_ctx", None)
+        _decide_kwargs = {}
+        if _ctx is not None:
+            _decide_kwargs["context"] = _ctx
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
-                                          goal=fsm_goal)
+                                          goal=fsm_goal, **_decide_kwargs)
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
