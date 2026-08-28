@@ -176,6 +176,33 @@ class BrowserEnv:
             if header_end < 0: raise BrowserBridgeError("bridge health returned no headers")
             body = bytes(buf[header_end+4:])
             if content_length is not None: body = body[:content_length]
+            # Handle chunked transfer encoding: bridge may return
+            # Transfer-Encoding: chunked instead of Content-Length.
+            if content_length is None:
+                # First line of body is hex size chunk, then data, then "0\r\n\r\n"
+                try:
+                    text = body.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = body.decode("latin-1")
+                # If chunked, strip the hex prefix and trailing 0\r\n\r\n
+                if "\r\n" in text:
+                    lines = text.split("\r\n")
+                    # Reassemble chunked: every odd line is hex size
+                    reassembled = ""
+                    i = 0
+                    while i < len(lines):
+                        try:
+                            size = int(lines[i], 16)
+                        except ValueError:
+                            reassembled = text
+                            break
+                        if size == 0:
+                            break
+                        if i + 1 < len(lines):
+                            reassembled += lines[i + 1]
+                        i += 2
+                    if reassembled:
+                        body = reassembled.encode("utf-8")
             return json.loads(body.decode("utf-8"))
         except BrowserBridgeError: raise
         except (socket.timeout, TimeoutError, ConnectionError, OSError, ValueError, json.JSONDecodeError) as e:
