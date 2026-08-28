@@ -1,130 +1,280 @@
 # WoC-Ragent — Project Memory
 
-> Актуальное состояние на 2026-08-19. Переписано полностью (старого memory.md не было).
-> Репозиторий: `D:\world-of-claudecraft` — CLONE `levy-street/world-of-claudecraft`
-> (origin, публичная игра) + наш агент-код. Backup-remote: `remontsuri/world-of-claudecraft-agent`
-> (ветка `mine/backup`, локальная ветка `backup`).
+> **CANONICAL HANDOFF.** Read this file before making any code change.
+> Last verified: 2026-08-28.
+> Agent repo: `remontsuri/world-of-claudecraft-agent`, branch `backup`.
+> Game source repo: `levy-street/world-of-claudecraft`.
 
-## Статус (коротко)
-- Agent может: observe → policy → farm → реальный combat Sim → kill/death → reward → TD memory → следующее решение.
-- Цепочка `navigate → targetEntity → startAutoAttack → mob dies` ПОДТВЕРЖДЕНА живым smoke-тестом (2×).
-- Длинный autonomous/PPO-run НЕ запускался (решено: сначала smoke, потом run).
-- Бридж остановлен по приказу пользователя; перс выведен в стартовую локацию (zone1, -5,-52) и замер.
+## 0. Non-negotiable rule
 
-## Git / коммиты
-HEAD (`mine/backup`): `7de297e05`
-Цепочка исправлений:
-- `ead45a23d` — farm navigation: turn geometry, убран блокирующий stop(), chase+attack loop
-- `ea31f4be6` — P0/P1: cross-check bridge/verifiers против оригинального game API
-- `ebd835636` — respawn-at-corpse order, honest heal/gather/equip/buy, end-to-end ok:false guard
-- `7de297e05` — combat re-face fix + smoke_combat.py
-Рабочий флоу: правки → `git commit` → `git push mine backup`.
+Do not invent game behavior. The game repository and the live offline client are the source of truth for game APIs, entity schemas, ranges, item IDs, quest states and runtime behavior.
 
-## Структура репозитория
-```
-D:\world-of-claudecraft\
-├── browser_bridge.cjs        # HTTP-мост (:8791) к живому Chrome (CDP :9222)
-│                             #   cmdQueue (1 live browser, сериализация команд)
-│                             #   action idx 0..9, respawn, snapshot, navigate, raw_move, explore
-├── python/
-│   ├── agent.py              # GoalManager loop: observe → decide → skill → cap API
-│   ├── policy.py             # tabular policy, SKILL_INDEX = enumerate(SKILLS)
-│   ├── browser_env.py        # BrowserEnv — I/O к bridge (_require = ok:false guard)
-│   ├── memory.py             # ExperienceStore (TD-память)
-│   ├── reward.py             # reward-функция
-│   ├── smoke_combat.py       # ЧЕСТНЫЙ smoke: navigate→target→autoattack→kill
-│   └── *_nav_report_*, bc_nav_*, experience_*.json   # диагностика/логи
-├── tools/adapter_v1/
-│   ├── world_facade.ts       # LiveWorldFacade — ЧЕСТНЫЙ адаптер к window.__game
-│   ├── known_points.ts       # статические giver/vendor координаты
-│   └── types.ts              # контракт WorldFacade
-├── src/                      # ИСХОДНИКИ ИГРЫ (levy-street, не наш код)
-│   ├── sim/sim.ts            # Sim: player, entities, harvestNode, equipItem, buyItem, targetEntity
-│   ├── sim/combat/auto_attack.ts  # startAutoAttack/updatePlayerAutoAttack — swing gate
-│   ├── sim/targeting.ts      # targetEntity (ставит p.targetId)
-│   ├── sim/items.ts          # useItem (potion/heal)
-│   ├── sim/content/graveyards.ts  # graveyards (gy_willowfen, gy_vale_chapel...)
-│   └── world_api/combat.ts   # IWorldCombat: resurrectAtCorpse/releaseSpirit/resurrectAtSpiritHealer
-├── dist-tools/               # архивные/доставочные варианты (не трогать)
-├── audit_pack*/              # аудит-копии (не трогать)
-└── _*.cjs                    # временные зонды (удалять по необходимости)
-```
+Do not create a second architecture. Before changing code read:
+1. `memory.md`
+2. `docs/ARCHITECTURE-CONSENSUS.md`
+3. `docs/ARCHITECTURE.md`
+4. `docs/AGENT-OPERATING-CONTRACT.md`
+5. the latest commits
 
-## Маппинг action idx (browser_env.py: AGENT→bridge)
-`0 farm, 1 loot, 2 accept_quest, 3 turn_in_quest, 4 sell_junk, 5 gather, 6 craft, 7 heal, 8 equip, 9 buy`
-- SKILLS (policy.py) = тот же список; SKILL_INDEX = enumerate(SKILLS).
+Required workflow: **READ → REPRODUCE → RED TEST → MINIMAL FIX → FULL TEST → LIVE PROBE → COMMIT**.
 
-## Capability-статус (2026-08-19, честно)
-- `0 farm` ✅ реальный combat (targetEntity+startAutoAttack+re-face)
-- `1 loot` ✅ loot трупа
-- `2 accept_quest` ✅ sim.interact у quest-giver
-- `3 turn_in_quest` ✅ sim.interact у giver
-- `4 sell_junk` ✅ sim.sellAllJunk
-- `5 gather` ✅ sim.harvestNode (node в радиусе 60)
-- `6 craft` ⚠️ honest NO-OP (`sim.craft` undefined в клиенте) — в списке SKILLS, policy учит waste
-- `7 heal` ✅ код корректен (`sim.useItem` на potion), НО требует potion в сумке
-- `8 equip` ✅ sim.equipItem (gear с equipSlot)
-- `9 buy` ✅ код корректен (`sim.buyItem(npcId, 'minor_healing_potion')`), НО требует trade-vendor рядом
+## 1. Current repository state
 
-### Ограничения heal/buy (важно)
-- В СТАРТОВОЙ ЗОНЕ (zone1) НЕТ trade-vendor'а с potion. `vendorItems` у NPC пуст (len 0).
-  Проверено: `sim.buyItem` не бросает исключение, но ничего не покупает (server-authoritative: нет в ассорте).
-- Реальные trade-vendors (vendor:true) — в zone3: Quartermaster Bree (x=-5,z=668),
-  Armorer Hode (x=-2,z=672), и т.д. (см. known_points.ts).
-- Значит heal-цепочка (buy→heal) работает ТОЛЬКО у trade-vendor в zone3.
-- smoke_heal.py написан, но требует перса рядом с trade-vendor (не в стартовой зоне).
-- Позиция перса server-authoritative: прямая телепортация в zone3 не держится (откат на тик).
+Latest known commit before the handoff cleanup: `c1224c30` (bridge jump + stuck detection). During this handoff the following documentation/config commits were added:
+- `ad755ecb` — binding Agent Operating Contract
+- `2b5c26f7` — ignore regenerable runtime/replay state
+- this memory update
 
-## Respawn (browser_bridge.cjs: respawn handler)
-Порядок по IWorldCombat: `resurrectAtCorpse()` (у тела, без штрафа, если в радиусе) → если ВСЁ ЕЩЁ dead → `releaseSpirit()` + `resurrectAtSpiritHealer()` (graveyard path).
-Старый порядок (releaseSpirit → corpse) был неверен: после releaseSpirit игрок уже не у тела.
+The current default branch is `backup`.
 
-## Combat (почему работает)
-- `startAutoAttack` (auto_attack.ts) берёт уже существующий `p.targetId` (его ставит targetEntity) и вкл. autoAttack.
-- Swing идёт в `updatePlayerAutoAttack` на tick, НО только если `d <= MELEE_RANGE (5yd)` И `facingDiff <= MELEE_ARC (2.2rad)`.
-- Баг был: farm не держал facing → swing не попадал → перс бил вхолостую. Фикс: re-face в attack-ветке.
+## 2. Two repositories / ownership
 
-## Smoke-тест (python/smoke_combat.py)
-Запуск (бридж поднят):
-```
-cd D:\world-of-claudecraft\python
-PYTHONPATH="" D:\woc-llm\therock-test\Scripts\python.exe smoke_combat.py
-```
-Критерий PASS = моб dead (hp→0/dead/lootable) после navigate→target→autoattack.
-Логирует: player_pos, mob_pos, distance, mob_hp_before/after, kills_before/after, player_hp, deaths.
-Последний честный прогон:
-```
-navigate: dist 38.9 -> 28.5yd
-mob_hp: 66 -> 0, dead=True
-player_hp: 44 -> 219 (выжил)
-PASS: mob died via Sim combat
+### GAME — `levy-street/world-of-claudecraft`
+Owns:
+- `Sim`
+- actual game entities and content
+- quest APIs and quest state
+- item definitions
+- combat rules
+- movement/controller
+- offline runtime
+
+### AGENT — `remontsuri/world-of-claudecraft-agent`
+Owns:
+- browser bridge
+- canonical WorldState adapter
+- observation
+- contracts and action masks
+- planner / GoalFSM
+- policy / Q-learning
+- PPO integration when explicitly used by an RL runner
+- navigation controller
+- recovery / anti-loop
+- memory / replay / reflection
+- tests and telemetry
+
+Never alter GAME to hide an AGENT defect unless explicitly requested.
+
+## 3. Target runtime
+
+Primary integration target: **offline browser client**.
+
+Typical stack:
+- Vite game: `localhost:5173`
+- Chrome CDP: `127.0.0.1:9222`
+- agent bridge: `:8791`
+- bridge file: `browser_bridge.cjs`
+
+Offline launch flow is not the old online Play flow. Use the repository's offline launcher/entry script and ensure `window.__game.sim` exists before declaring the game ready.
+
+Health must show:
+`ok=true, bridge=true, page=true, game=true`.
+
+## 4. Canonical pipeline
+
+```text
+GAME SIM
+  ↓
+browser_bridge.cjs
+  ↓
+canonical WorldState
+  ↓
+Observation
+  ↓
+GoalFSM / Planner context
+  ↓
+Policy / Q / PPO (only in runners that actually instantiate PPO)
+  ↓
+Skill
+  ↓
+Contract + verifier
+  ↓
+bridge/game API
+  ↓
+GAME SIM
 ```
 
-## Autonomous self-play (2026-08-19)
-- `agent.py` `run(n_steps=3000, save_every=100)`: долгий автономный цикл.
-  Сохраняет ExperienceStore каждые 100 шагов (resumable). Stop движения на выходе.
-- Агент балансирует ВЕСЬ скилл-сет через выученную policy (НЕ скриптованный бот):
-  quest/loot/sell/farm/heal/buy/equip/explore.
-- Подтверждено (run 200 шагов): Q в боевом бакете выросли
-  (return_to_giver +4.2, farm +3.4, accept_quest +3.2, loot +3.2, sell_junk +3.0).
-  `farm` дал первый positive reward (+0.32) — бой засчитался.
-- Ограничение: в стартовой зоне мобов/vendor'ов мало → explore выводит агента
-  к zone3 (Thornpeak, x≈4,z≈664), где buy/heal/equip становятся доступны.
-- Запуск: поднять бридж (`node browser_bridge.cjs`), затем
-  `cd python && PYTHONPATH="" /d/woc-llm/therock-test/Scripts/python.exe agent.py`
+Single responsibility:
+- Sim = actual truth
+- bridge = transport + exact game API calls
+- WorldState = canonical facts
+- Observation = agent representation
+- GoalFSM = durable goal owner
+- Planner = current subgoal
+- Policy/Q/PPO = action choice within allowed space
+- Contracts = executability
+- NavigationController = movement toward target
+- Skill = one capability
+- Recovery = response to failure/stuck
+- Memory/Replay = learning state, never live-world authority
+- SelfReflection/LLM = advisory unless an explicit architecture change grants a different role
 
-- `craft` (idx=6) невозможен: `sim.craft` undefined в живом клиенте.
-- `buy` (idx=9) требует vendor+itemId; bridge только открывает vendor.
-- Позиция перса server-authoritative: прямая запись `p.pos.x/z` НЕ держится (откатывается на след. тик). Переместить перса можно только через `controller.move` (навигация) или respawn.
-- Heal требует реальной potion в сумке; если нет — honest no-op (policy учит waste).
+## 5. Navigation
 
-## Запуск бриджа (background падает с "stdin is not a tty" в MSYS — это ок, бридж жив)
+There is **one** navigation implementation: `python/navigation.py::NavigationController`.
+
+Current valid low-level skill set remains fixed to the game's/hierarchical environment mapping. `explore` is the transport action used to execute navigation because there is no separate navigation skill index. Do not invent `navigate_to_giver` as a new low-level skill index.
+
+Semantic navigation intents may be represented above the skill layer:
+- GO_TO_GIVER
+- GO_TO_VENDOR
+- GO_TO_NODE
+- FIND_MOB
+- EXPLORE
+- UNSTUCK
+
+All must use the same NavigationController / bridge movement path.
+
+Do not add another walker, anchor driver, direct coordinate writer, or competing movement loop. While autonomy is active, WorkAnchor is observation-only.
+
+Navigation substeps are not learning transitions unless they pass through the actual learning chain. Count them separately.
+
+## 6. Goal ownership
+
+`GoalFSM` is the durable single writer of the current goal.
+
+LLM/brain may call `suggest()` / provide advisory information but must not silently replace the FSM goal. Planner chooses a subgoal from the observed goal; it does not directly mutate the game.
+
+If a future change introduces another goal writer, stop and add an explicit architecture decision + regression test first.
+
+## 7. Logistics vs learning
+
+Basic logistics must be deterministic and truthful rather than discovered from Q:
+- accept quest
+- navigate to giver
+- return to giver
+- turn in quest
+- navigate to vendor
+- sell junk
+- buy required tool
+- navigate to gather node
+
+Q-learning/PPO is appropriate for combat and micro-decisions. Do not use learning to compensate for a missing state field, bad verifier or missing navigation edge.
+
+## 8. Verified game contracts — do not re-invent
+
+These facts were checked against the game/live client:
+
+- `acceptQuest` works offline when the quest giver is inside the interaction range; too-far is an honest game failure.
+- `questState()` is authoritative for offline quest availability.
+- `sim.questsDone` is authoritative for completed quests in offline. Do not read only `g.online.questsDone`.
+- NPCs may exist in `worldContent.npcs` but not be runtime interaction entities; interaction requires the actual runtime target/range.
+- inventory canonical IDs use `itemId`; normalize to `inventory_by_id` / `inv_by_id` consistently.
+- item `quality` is a string (`poor`, `common`, `uncommon`, `rare`, `epic`), not numeric zero.
+- loot requires an actual dead mob/corpse. `lootable:true` alone is unsafe because world decoration can also be lootable.
+- verified gather tools include `handaxe`, `gathering_sickle`, `copper_mining_pick`.
+- `logging_axe` and `herb_sack` were observed as invented/nonexistent names and must not return to code.
+- `respawn` is an endpoint, not a skill index.
+- player position is server-authoritative; direct `p.pos` assignment is not a movement mechanism.
+- combat requires target acquisition plus the game's auto-attack/facing/range rules; the real combat smoke has already been confirmed.
+
+## 9. Fixed defects already verified
+
+Do not redo these as speculative fixes:
+
+- junk detection unified through real string quality semantics
+- ExperienceStore no longer saves on every update
+- hot-path trace file opens removed/gated
+- autonomy startup fails closed instead of silently disabling itself
+- navigation substeps are counted separately
+- canonical inventory aliases are synchronized
+- canonical WorldState → Observation preserves entities, corpses, gather nodes, vendors, quest givers, objectives, level and mana
+- NPC registry has source priority and canonical `npc_id`
+- quest availability uses authoritative quest states
+- GO_TO_GIVER is represented as navigation intent executed through `explore`, not an unknown skill
+- loot rejects scenery
+- heal is not offered when there is no real healing item
+- policy receives autonomy candidate masking
+- bridge has jump/stuck handling
+
+Evidence lives in the corresponding commits and regression tests; the current files are the final authority.
+
+## 10. V0 baseline — immutable
+
+`docs/baselines/V0-browser-2026-08-27.md` is frozen.
+
+Measured:
+- 989 environment/learning steps
+- ~0.13 browser steps/sec
+- AutonomyScore 30.2%
+- NO_OP 979 / 989 (99.0%)
+- FAILURE 5
+- SUCCESS 5
+
+The agent completed a real quest cycle in the first 35 steps, then spent 964 steps on `accept_quest -> NO_OP`.
+
+Important correction: the quest **was actually turned in**. Offline `sim.questsDone` contained `q_wolves`; the snapshot's online-only `quests_done` field was wrong. Never use the legacy snapshot as authority for this fact.
+
+V0 is evidence, not a target to preserve. Never edit it retroactively.
+
+## 11. PPO status
+
+The browser autonomous runner is currently a tabular Q/ExperienceStore policy path unless the runner explicitly constructs a PPO policy.
+
+The headless/env-server RL stack can use PPO and is useful for high-speed training experiments. Headless and browser metrics answer different questions and must not be mixed.
+
+Do not claim “PPO controls the browser agent” without tracing the actual runtime call path and showing PPO initialization + inference.
+
+## 12. Current architecture risk to fix before long runs
+
+The current code has a good NavigationController and a GoalFSM, but the semantic decision path must remain clean:
+
+```text
+Planner/Goal context
+       ↓
+Autonomy decision context
+       ↓
+Policy chooses among allowed skills
+       ↓
+Skill execution
 ```
-cd D:\world-of-claudecraft && node browser_bridge.cjs
-# слушает :8791; подключается к Chrome CDP :9222 (game-tab worldofclaudecraft)
-```
 
-## Что НЕ делать
-- Не трогать `tools/adapter_v1/world_facade.ts` obs/Sim/reward/PPO (это честный адаптер, отдельный слой).
-- Не убивать running bg-задачи без нужды.
-- Не выдумывать PASS: verify-before-done (прямой probe/живой smoke).
+Avoid using mutable `policy.hints` as a hidden command bus. `masked_candidates` and forced decisions should eventually become explicit decision-context fields. Do not perform a broad refactor during a baseline run; add a RED regression first.
+
+`explore` must remain a transport action, not a pile of unrelated policy meanings.
+
+## 13. Long-horizon acceptance target
+
+The architecture consensus target for a genuinely autonomous run is:
+- ≥10 quests completed per 5000 steps
+- turn-in success ≥90%
+- deaths ≤2/1000 steps
+- `P(heal | hp<0.35) ≥0.70`
+- second half of a 10000-step run ≥1.25× quests and ≤0.7× deaths versus first half
+- zero blocking LLM calls in `decide()`; periodic advisory calls only
+
+These are acceptance targets, not claims that the current agent meets them.
+
+## 14. Runtime memory policy
+
+Runtime artifacts are **regenerable** and should not grow Git history:
+- `experience_autonomous.json`
+- `replay_buffer.json`
+- autonomous/step/crash/lifecycle logs
+- PID/lock files
+- goal/self-reflection/world/strategy runtime state
+
+They are now ignored by `.gitignore`. Keep compact aggregate baseline reports under `docs/` instead.
+
+Do not commit a new multi-megabyte replay just to “remember” a run. Record the run's metrics, seed/start state, code SHA and conclusions.
+
+## 15. Hermes handoff checklist
+
+At the beginning of every fresh coding session:
+
+1. `git status` / current HEAD
+2. read this file
+3. read `docs/AGENT-OPERATING-CONTRACT.md`
+4. read `docs/ARCHITECTURE-CONSENSUS.md`
+5. inspect the latest 10 commits
+6. inspect relevant current files, not old chat claims
+7. run full pytest before declaring the tree green
+8. for game behavior, verify against the main game repo or live CDP
+9. make one minimal change
+10. add/adjust regression test
+11. run full tests
+12. live-probe only after tests pass
+13. commit and push
+
+Never say “fixed” from a tool-call narrative alone. The evidence is:
+**current file + regression test + test result + live measurement + commit SHA**.
