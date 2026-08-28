@@ -220,6 +220,7 @@ def main():
     # _autonomy_errors: сбои контура; порог валит процесс, а не прячет их.
     _learning_steps = 0
     _nav_substeps = 0
+    _nav_substeps_since_learning = 0  # nav budget counter (resets after each learning step)
     _autonomy_errors = 0
     _AUTONOMY_MAX_ERRORS = int(os.environ.get("WOC_AUTONOMY_MAX_ERRORS", "5"))
     # V0 baseline: пошаговая трасса (skill/result/failure_reason + состояние
@@ -477,6 +478,7 @@ def main():
                 # процесс останавливается, иначе можно намерить 5000 шагов
                 # "автономной архитектуры", которая на деле была отключена.
                 _pre = None
+                _NAV_SUBSTEPS_BUDGET = 3  # max nav substeps before forcing a learning step
                 if autonomy is not None:
                     try:
                         _live_info = getattr(env, "_last_info", None) or {}
@@ -495,17 +497,16 @@ def main():
                             # навигация исполняется прямо здесь: у agent.step()
                             # нет канала для координат
                             _cmd = _pre.get("nav_command")
-                            if _cmd:
+                            # NAV BUDGET: if we've spent too many substeps navigating,
+                            # force a learning step so policy can choose differently
+                            # (e.g. accept_quest if giver already in range)
+                            if _cmd and _nav_substeps_since_learning < _NAV_SUBSTEPS_BUDGET:
                                 env.raw_call(_cmd)
                                 _nav_after = getattr(env, "_last_info", None) or {}
                                 autonomy.after_action(
                                     "explore", _nav_after, _bws2(_nav_after))
-                                # P0.7: это НАВИГАЦИОННЫЙ ПОДШАГ, а не обучающий
-                                # переход — он не проходит через agent.step()
-                                # (policy -> skill -> verifier -> reward ->
-                                # memory -> replay). Считаем отдельно, иначе
-                                # "5000 шагов" != "5000 обучающих переходов".
                                 _nav_substeps += 1
+                                _nav_substeps_since_learning += 1
                                 continue
                             # подсказка политике через её же hints-канал
                             # (legacy — будет удалён после полного перехода на DecisionContext)
@@ -541,6 +542,7 @@ def main():
                             raise SystemExit(4)
                 rec = agent.step()
                 _learning_steps += 1
+                _nav_substeps_since_learning = 0  # reset nav budget after learning
                 if autonomy is not None and _pre is not None:
                     try:
                         _after = getattr(env, "_last_info", None) or {}
