@@ -7,6 +7,7 @@
 // live here; transport lives in game_client.js; observation in snapshot.js.
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const { fenceHopPlan } = require('./fence_hop.cjs');
 
 // Анти-рыскание камеры (баг, замеченный пользователем 2026-08-24, повторно).
 // ПЕРВЫЙ фикс закрыл только navigateToCoord, но камерой дёргает в основном
@@ -738,12 +739,19 @@ async function exploreWalk(gameClient, steps) {
     if (pos && lastPos && Math.hypot(pos[0]-lastPos[0], pos[1]-lastPos[1]) < 0.3) {
       stuck++;
       if (stuck >= 3) {
-        // hop: jump + new facing
+        // Use fence_hop.cjs for proper hop logic (checks onGround + fenceAhead)
         await gameClient.evaluate(() => {
-          try { window.__game.controller.move({ jump: true }); } catch (_) {}
           try {
-            const p = window.__game.sim.player;
-            window.__game.controller.face(p.facing + Math.PI / 2);
+            const g = window.__game, p = g.sim.player;
+            // Jump only when onGround (game rule: inp.jump && (onGround || coyote))
+            const onGround = p.onGround !== false;
+            if (onGround) {
+              g.controller.move({ jump: true });
+            }
+            // Turn to new facing after hop
+            g.controller.face(p.facing + Math.PI / 2);
+            // Keep moving forward after hop
+            g.controller.move({ forward: true });
           } catch (_) {}
         }).catch(() => {});
         stuck = 0;
