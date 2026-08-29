@@ -34,6 +34,7 @@ class QuestState(Enum):
     RETURN_TO_GIVER = auto()
     TURN_IN = auto()
     VERIFY_TURN_IN = auto()
+    RESPAWN = auto()          # Обработка смерти и респаун
     DONE = auto()
     ERROR = auto()
 
@@ -140,12 +141,20 @@ class GoalFSM:
         self.reset()
 
     def enter_dead(self):
-        """Агент умер — сбрасываем FSM в QUEST_NONE."""
-        self.reset()
+        """Агент умер — переводим FSM в RESPAWN."""
+        if self.state != QuestState.RESPAWN:
+            self._record_failure(FailureReason.COMBAT_FAILURE)
+            old_state = self.state
+            self.state = QuestState.RESPAWN
+            self.failure_reason = FailureReason.COMBAT_FAILURE
+            self._log_transition(old_state, QuestState.RESPAWN, "death")
 
     def resume_from_dead(self):
-        """Агент воскрес — начинаем сначала."""
-        self.reset()
+        """Агент воскрес — переводим в QUEST_NONE."""
+        old_state = self.state
+        self.state = QuestState.QUEST_NONE
+        self.failure_reason = FailureReason.NONE
+        self._log_transition(old_state, QuestState.QUEST_NONE, "respawn")
 
     def update_from_world(self, world_state: dict):
         """Синхронизирует состояние FSM с наблюдаемым миром.
@@ -224,6 +233,7 @@ class GoalFSM:
             QuestState.RETURN_TO_GIVER: self._handle_return_to_giver,
             QuestState.TURN_IN: self._handle_turn_in,
             QuestState.VERIFY_TURN_IN: self._handle_verify_turn_in,
+            QuestState.RESPAWN: self._handle_respawn,
             QuestState.DONE: self._handle_done,
         }
 
@@ -365,6 +375,17 @@ class GoalFSM:
         self.reset()
         return "explore", {"reason": "quest_done_search_next"}
 
+    def _handle_respawn(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Обработка смерти — ожидание возрождения."""
+        player = info.get("player", {}) or {}
+        dead = player.get("dead", False)
+        hp = player.get("hp", 0)
+        if not dead and hp > 0:
+            self.state = QuestState.QUEST_NONE
+            self.failure_reason = FailureReason.NONE
+            return "explore", {"reason": "respawn_recovered"}
+        return "heal", {"reason": "awaiting_respawn"}
+
     # ---- Навигационная память и обнаружение застревания ----
 
     def _update_navigation_memory(self, ws: dict, info: dict):
@@ -404,6 +425,15 @@ class GoalFSM:
         """Записывает причину неудачи для анализа."""
         self.failure_count[reason] = self.failure_count.get(reason, 0) + 1
         self.save()
+
+    def _log_transition(self, from_state: QuestState, to_state: QuestState, reason: str = ""):
+        """Логирует переход между состояниями (P0: телеметрия)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        msg = f"FSM: {from_state.name} -> {to_state.name}"
+        if reason:
+            msg += f" ({reason})"
+        logger.info(msg)
 
     def _calc_dist_to_giver(self, info: dict) -> Optional[float]:
         """Вычисляет расстояние до квестгивера."""
