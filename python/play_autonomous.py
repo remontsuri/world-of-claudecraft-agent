@@ -726,12 +726,11 @@ def main():
         qp = rec.get("qprog")
         qps = f" qprog={qp}" if qp is not None else ""
         v = rec.get("verdict")
-        print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={rec.get('dist')} hp={ws.get('hp')} kills={m['kills']}", flush=True)
+        print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={ws.get('distance_to_giver')} hp={ws.get('hp_frac'):.2f} kills={m['kills']}", flush=True)
         # quests
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []
         done = info.get("quests", {}).get("done") or []
-        m["quests_accepted"] = max(m["quests_accepted"], len(active) + len(ready) + len(done))
         m["quests_done"] = max(m["quests_done"], len(done))
         m["quests_completed"] = max(m["quests_completed"], len(ready) + len(done))
         # vendors: distinct vendor NPCs ever seen nearby
@@ -745,8 +744,7 @@ def main():
         prev_inv = (rec["ws_before"] or {}).get("inv_slots", 0)
         cur_inv = ws.get("inv_slots", 0)
         if a == "accept_quest" and verdict in ("SUCCESS", "INCONCLUSIVE"):
-            # accept counted via quests_accepted growth; track turn-in outcomes below
-            pass
+            m["quests_accepted"] += 1  # явный инкремент (P1: исправление подсчёта)
         if a == "turn_in_quest":
             if verdict == "SUCCESS":
                 m["quests_turned_in"] += 1
@@ -859,8 +857,9 @@ def main():
         m["win_steps"] += 1
         m["win_actions"][a] += 1
         dnew = ws.get("deaths", 0)
-        if dnew > m["deaths_prev"]:
-            m["win_deaths"] += (dnew - m["deaths_prev"])
+        dold = m["deaths_prev"]  # сохраняем старое значение для проверки
+        if dnew > dold:
+            m["win_deaths"] += (dnew - dold)
             m["deaths_prev"] = dnew
         if was_repeat:
             m["win_repeat"] += 1
@@ -876,7 +875,7 @@ def main():
             _event = "OBJECTIVE_PROGRESS"  # arrived at giver = navigation progress
         elif a == "sell_junk" and verdict == "SUCCESS":
             _event = "VENDOR_SUCCESS"
-        elif rec["outcome_kind"] != "ENV_ERROR" and ws.get("deaths", 0) > m["deaths_prev"]:
+        elif rec["outcome_kind"] != "ENV_ERROR" and dnew > dold:  # используем dold (старое значение)
             _event = "DEATH"
         # navigation success on return/turn_in already counted; tag as progress
         if a in ("return_to_giver", "turn_in_quest") and verdict == "SUCCESS":
