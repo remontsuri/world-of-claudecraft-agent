@@ -288,11 +288,11 @@ class GoalManager:
             # сумках это давало гарантированный failure на каждом шаге
             # (живой замер: 34 heal -> failure из 69 шагов). Реген работает сам.
             cands.append(SKILL_HEAL)
-        # FARM only when a WEAK mob is near. Strong mobs (maxHp > player*1.3) would
-        # kill the agent — offering farm on them just teaches a suicidal habit.
-        # This is observation-driven (mob strength from world state), not a hard
-        # "never farm" rule; the agent can still learn to farm when safe.
-        if ws.get("weak_mob_near"):
+        # FARM — если есть моб (и слабый, и сильный). Раньше только weak_mob,
+        # но тогда при strong_mob + objective almost complete агент застревал
+        # в цикле explore → death. Рискнуть и фармить сильного моба лучше,
+        # чем гарантированно умереть в пустую.
+        if ws.get("has_mob"):
             cands.append(SKILL_FARM)
         # Классовые способности (warrior/mage/hunter)
         # Вместо хардкод-магии — используем class_config

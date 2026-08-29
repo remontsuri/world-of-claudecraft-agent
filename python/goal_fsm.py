@@ -60,6 +60,9 @@ class GoalFSM:
         self.quest_giver: Optional[Dict] = None
         self.failure_reason = FailureReason.NONE
         self.failure_count: Dict[FailureReason, int] = {}
+        # Сохраняем квест/гивера перед смертью для восстановления после респауна
+        self._pre_death_quest: Optional[Dict] = None
+        self._pre_death_giver: Optional[Dict] = None
         self.navigation_memory: Dict[str, Any] = {
             "last_positions": [],
             "last_distances": [],
@@ -137,24 +140,38 @@ class GoalFSM:
         return self.state.name
 
     def resume_after_respawn(self):
-        """Агент воскрес — начинаем сначала."""
-        self.reset()
+        """Агент воскрес — сохраняем квест и гивер."""
+        # Не сбрасываем FSM! Агент должен продолжить текущий квест
+        if self.active_quest:
+            self.state = QuestState.RETURN_TO_GIVER
+            self._log_transition(QuestState.RESPAWN, QuestState.RETURN_TO_GIVER, "respawn_resume_quest")
+        else:
+            self.state = QuestState.QUEST_NONE
+            self._log_transition(QuestState.RESPAWN, QuestState.QUEST_NONE, "respawn_no_quest")
 
     def enter_dead(self):
-        """Агент умер — переводим FSM в RESPAWN."""
+        """Агент умер — переводим FSM в RESPAWN, сохраняя квест."""
         if self.state != QuestState.RESPAWN:
             self._record_failure(FailureReason.COMBAT_FAILURE)
+            # Сохраняем состояние для восстановления
+            self._pre_death_quest = self.active_quest
+            self._pre_death_giver = self.quest_giver
             old_state = self.state
             self.state = QuestState.RESPAWN
             self.failure_reason = FailureReason.COMBAT_FAILURE
             self._log_transition(old_state, QuestState.RESPAWN, "death")
 
     def resume_from_dead(self):
-        """Агент воскрес — переводим в QUEST_NONE."""
-        old_state = self.state
-        self.state = QuestState.QUEST_NONE
-        self.failure_reason = FailureReason.NONE
-        self._log_transition(old_state, QuestState.QUEST_NONE, "respawn")
+        """Агент воскрес — восстанавливаем квест."""
+        if self._pre_death_quest:
+            self.active_quest = self._pre_death_quest
+            self.quest_giver = self._pre_death_giver
+            self.state = QuestState.RETURN_TO_GIVER
+            self.failure_reason = FailureReason.NONE
+            self._log_transition(QuestState.RESPAWN, QuestState.RETURN_TO_GIVER, "respawn_restore_quest")
+        else:
+            self.state = QuestState.QUEST_NONE
+            self._log_transition(QuestState.RESPAWN, QuestState.QUEST_NONE, "respawn_no_quest")
 
     def update_from_world(self, world_state: dict):
         """Синхронизирует состояние FSM с наблюдаемым миром.
@@ -310,11 +327,6 @@ class GoalFSM:
         has_mob = ws.get("has_mob", False)
         if has_mob:
             return "farm", {"reason": "objective_mob"}
-
-        # Есть труп — лут
-        has_corpse = ws.get("has_corpse", False)
-        if has_corpse:
-            return "loot", {"reason": "objective_corpse"}
 
         # Нет целей — исследуем
         return "explore", {"reason": "no_objective_target"}

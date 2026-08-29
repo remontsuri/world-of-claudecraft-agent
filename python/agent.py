@@ -62,7 +62,7 @@ def _trace(msg: str) -> None:
 SKILL_INDEX = {name: i for i, name in enumerate(SKILLS)}
 
 
-def _world_state_dict(info: dict) -> dict:
+def _world_state_dict(info: dict, world_mem=None) -> dict:
     """WorldState for reward + memory — delegates to the SINGLE shared builder.
 
     This used to build its own partial dict (no has_mob/has_corpse/has_junk/
@@ -71,7 +71,7 @@ def _world_state_dict(info: dict) -> dict:
     wrote another and no lesson was ever visible to the decision path
     (measured by _diag_bucket.py). One builder = one bucket key.
     """
-    return build_world_state(info)
+    return build_world_state(info, world_mem)
 
 
 class Agent:
@@ -282,7 +282,7 @@ class Agent:
         """
         info_before = self.env._last_info
         self._remember_visible_world(info_before)
-        ws_before = _world_state_dict(info_before)
+        ws_before = _world_state_dict(info_before, self.world_mem)
         ctx = {}
         if action in ("turn_in_quest", "return_to_giver", "accept_quest"):
             for q in (info_before.get("quests", {}).get("active") or []):
@@ -295,7 +295,7 @@ class Agent:
                         ctx["npc"] = e
                         break
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
-        ws_after = _world_state_dict(after)
+        ws_after = _world_state_dict(after, self.world_mem)
         reward = outcome_reward(ws_before, ws_after, verdict, outcome_kind)
         if learn and outcome_kind != "ENV_ERROR":
             self.policy.learn(ws_before, action, reward, next_state=ws_after, outcome_kind=outcome_kind)
@@ -341,11 +341,11 @@ class Agent:
                 return {
                     "action": "recover", "verdict": "FAILURE", "outcome_kind": "ENV_ERROR",
                     "reward": 0.0,
-                    "ws_before": _world_state_dict(info), "ws_after": _world_state_dict(info),
+                    "ws_before": _world_state_dict(info, self.world_mem), "ws_after": _world_state_dict(info, self.world_mem),
                 }
         info_before = self.env._last_info
         self._remember_visible_world(info_before)
-        ws_before = _world_state_dict(info_before)
+        ws_before = _world_state_dict(info_before, self.world_mem)
 
         # 0b. GoalFSM sync: drive the explicit current_goal from OBSERVED facts
         # each step. update_from_world() only sets the phase; it does not pick a
@@ -397,7 +397,7 @@ class Agent:
         _trace("REMEMBER_DONE")
 
         # 6. Reward from FACT (reward.py), not from our opinion
-        ws_after = _world_state_dict(after)
+        ws_after = _world_state_dict(after, self.world_mem)
         reward = outcome_reward(ws_before, ws_after, verdict, outcome_kind)
         _trace("REWARD_DONE r=%.2f" % (reward,))
 
