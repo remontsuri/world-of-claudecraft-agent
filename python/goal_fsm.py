@@ -1,256 +1,436 @@
-"""GoalFSM — explicit finite-state machine for the agent's current objective.
+"""goal_fsm.py — Quest Goal Finite State Machine.
 
-Why this exists (per user 2026-08-20): the old GoalManager picked a raw skill
-from a flat candidate list every step. There was NO field saying "which phase
-of the quest am I in", so the agent re-decided globally each step and could
-never chain accept -> objective -> return -> turn_in as ONE plan.
+Явная машина состояний для выполнения квестов. Заменяет скрытый
+policy hints детерминированным потоком с верификацией на каждом переходе.
 
-This module makes the goal EXPLICIT and PERSISTENT:
-  - current_goal is a string (NO_QUEST / FIND_GIVER / ACCEPT / DO_OBJECTIVE /
-    RETURN_TO_GIVER / TURN_IN / SELL_REPAIR / HEAL / RESPAWN / DEAD).
-  - It is saved to goal_state.json so an infrastructure restart does NOT wipe
-    an in-progress quest (the agent resumes from PREVIOUS_GOAL, not NO_QUEST).
-  - The Policy chooses a SKILL *within* the current goal, not a global action.
+Состояния:
+  QUEST_NONE → FIND_GIVER → ACCEPT → VERIFY_ACCEPT → DO_OBJECTIVE →
+  VERIFY_PROGRESS → RETURN_TO_GIVER → TURN_IN → VERIFY_TURN_IN → DONE
 
-Death is a sub-state: ANY_STATE -> DEAD -> GO_TO_SPIRIT_HEALER -> RESPAWN ->
-RECOVER -> PREVIOUS_GOAL. Death does NOT destroy the goal.
-
-Transitions are driven by OBSERVED facts (quest status from the bridge), not by
-hard-coded rules about "what to do". The FSM only answers "where am I in the
-quest lifecycle"; the Policy answers "which skill now".
+Каждый переход верифицируется через объективные проверки.
+Неудача переводит в соответствующее состояние ошибки с анализом причины.
 """
 
+from enum import Enum, auto
+from typing import Optional, Tuple, Dict, Any
+import math
 import json
 import os
-import time
-import tempfile
-import traceback
-from typing import Optional
+
+# Константы
+INTERACT_RANGE = 7.0       # дистанция взаимодействия с NPC (из контрактов)
+OBJECTIVE_PROXIMITY = 8.0  # дистанция для прогресса квеста
+STUCK_THRESHOLD = 10       # шагов без прогресса = застревание
 
 
-# ---- goal state constants ----------------------------------------------------
-NO_QUEST        = "NO_QUEST"
-FIND_GIVER      = "FIND_GIVER"
-ACCEPT          = "ACCEPT"
-DO_OBJECTIVE     = "DO_OBJECTIVE"
-RETURN_TO_GIVER = "RETURN_TO_GIVER"
-TURN_IN         = "TURN_IN"
-SELL_REPAIR     = "SELL_REPAIR"
-HEAL            = "HEAL"
-RESPAWN         = "RESPAWN"
-DEAD            = "DEAD"
+class QuestState(Enum):
+    """Состояния квестового FSM."""
+    QUEST_NONE = auto()
+    FIND_GIVER = auto()
+    ACCEPT = auto()
+    VERIFY_ACCEPT = auto()
+    DO_OBJECTIVE = auto()
+    VERIFY_PROGRESS = auto()
+    RETURN_TO_GIVER = auto()
+    TURN_IN = auto()
+    VERIFY_TURN_IN = auto()
+    DONE = auto()
+    ERROR = auto()
 
-# Quest lifecycle (forward path)
-QUEST_CYCLE = [NO_QUEST, FIND_GIVER, ACCEPT, DO_OBJECTIVE, RETURN_TO_GIVER, TURN_IN]
 
-# Goals that represent "a quest is active and being worked on" — used to decide
-# whether the agent should keep progressing the quest instead of free-roaming.
-ACTIVE_GOALS = {FIND_GIVER, ACCEPT, DO_OBJECTIVE, RETURN_TO_GIVER, TURN_IN}
+class FailureReason(Enum):
+    """Причины неудач для анализа и восстановления."""
+    NONE = auto()
+    NAVIGATION_FAILURE = auto()      # не удалось дойти до цели
+    COMBAT_FAILURE = auto()          # смерть в бою
+    QUEST_STATE_FAILURE = auto()     # квест не в ожидаемом состоянии
+    INTERACTION_FAILURE = auto()     # не удалось взаимодействовать
+    SURVIVAL_FAILURE = auto()        # hp критический
+    ENVIRONMENT_FAILURE = auto()     # мир не загружен / ошибка среды
+    STUCK_FAILURE = auto()           # застревание (нет прогресса N шагов)
 
 
 class GoalFSM:
-    def __init__(self, path: Optional[str] = None):
-        self.path = path or os.path.join(os.path.dirname(__file__), "goal_state.json")
-        # current goal
-        self.goal = NO_QUEST
-        # the quest we are working on (id), so we can resume after restart
-        self.quest_id: Optional[str] = None
-        # previous goal before death (to resume after respawn)
-        self.pre_death_goal: Optional[str] = None
-        # single-writer учёт (правка 2026-08-24)
-        self.goal_source = "fsm"
-        self.switch_count = 0
-        self._last_switch_step = None
-        self.last_suggestion = None
-        self.last_suggestion_reason = ""
-        # monotonic step counter for persistence bookkeeping
-        self.updated_at: float = 0.0
+    """Конечный автомат выполнения квестов."""
+
+    def __init__(self, memory_path: Optional[str] = None):
+        self.state = QuestState.QUEST_NONE
+        self.active_quest: Optional[Dict] = None
+        self.quest_giver: Optional[Dict] = None
+        self.failure_reason = FailureReason.NONE
+        self.failure_count: Dict[FailureReason, int] = {}
+        self.navigation_memory: Dict[str, Any] = {
+            "last_positions": [],
+            "last_distances": [],
+            "best_distance": float("inf"),
+            "no_progress_steps": 0,
+            "stuck_detected": False
+        }
+        self.step_count = 0
+        self.total_kills = 0
+        self.total_deaths = 0
+        self.total_xp = 0
+        self.total_copper = 0
+        self.memory_path = memory_path or os.path.join(
+            os.path.dirname(__file__), "goal_fsm_state.json"
+        )
         self._load()
 
-    # ---- persistence (survives infra restart) ----
     def _load(self):
-        if not os.path.exists(self.path):
+        """Восстановление состояния из файла."""
+        if not os.path.exists(self.memory_path):
             return
         try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-            self.goal = d.get("goal", NO_QUEST)
-            self.quest_id = d.get("quest_id")
-            self.pre_death_goal = d.get("pre_death_goal")
-            self.updated_at = d.get("updated_at", 0.0)
+            with open(self.memory_path, "r") as f:
+                data = json.load(f)
+            state_name = data.get("state")
+            if state_name:
+                try:
+                    self.state = QuestState[state_name]
+                except KeyError:
+                    self.state = QuestState.QUEST_NONE
+            self.failure_count = {
+                FailureReason[k]: v
+                for k, v in data.get("failure_count", {}).items()
+            }
+            self.total_kills = data.get("total_kills", 0)
+            self.total_deaths = data.get("total_deaths", 0)
+            self.total_xp = data.get("total_xp", 0)
+            self.total_copper = data.get("total_copper", 0)
         except Exception:
-            return  # corrupt -> fresh FSM
+            pass
 
     def save(self):
+        """Сохранение состояния."""
+        data = {
+            "state": self.state.name,
+            "failure_count": {k.name: v for k, v in self.failure_count.items()},
+            "total_kills": self.total_kills,
+            "total_deaths": self.total_deaths,
+            "total_xp": self.total_xp,
+            "total_copper": self.total_copper,
+            "step_count": self.step_count,
+        }
         try:
-            d = os.path.dirname(os.path.abspath(self.path)) or "."
-            fd, tmp = tempfile.mkstemp(dir=d, prefix=".goal_", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({
-                    "goal": self.goal,
-                    "quest_id": self.quest_id,
-                    "pre_death_goal": self.pre_death_goal,
-                    "updated_at": time.time(),
-                }, f, ensure_ascii=False, indent=1)
-            os.replace(tmp, self.path)  # atomic on Windows
+            with open(self.memory_path, "w") as f:
+                json.dump(data, f, indent=2)
         except Exception:
-            traceback.print_exc()
+            pass
 
-    # ---- transitions ----
-    def set(self, goal: str, quest_id: Optional[str] = None, source: str = "fsm",
-            step: Optional[int] = None, force: bool = False) -> bool:
-        """Единственный писатель цели (правка 2026-08-24).
+    @property
+    def quest_id(self) -> Optional[str]:
+        """ID текущего квеста."""
+        if self.active_quest:
+            return str(self.active_quest.get("id", "?"))
+        return None
 
-        Было ТРИ писателя: play_autonomous:327 (FSM), play_autonomous:384
-        (LLM через apply_decision) и agent.py:304 (FSM внутри step). Последний
-        затирал решение LLM через 6 строк, а вместе они давали
-        goal_switches = 0.71 на шаг — цель менялась почти каждый шаг, поэтому
-        многошаговая доставка к гиверу никогда не доживала до конца
-        (quests_turned_in = 0 за 3000 шагов).
-
-        Теперь: писать цель можно только отсюда, и смена ограничена min-dwell
-        (контракт со-архитектора Q11). force=True — для смерти/критического hp,
-        которые обязаны прерывать немедленно.
-
-        Возвращает True, если цель РЕАЛЬНО изменилась.
-        """
-        if quest_id is not None:
-            self.quest_id = quest_id
-        self.goal_source = source
-        if self.goal == goal:
-            return False                    # повторная запись — не смена
-        # min-dwell: не даём дёргать цель чаще, чем раз в MIN_DWELL_STEPS
-        if (not force and step is not None and self._last_switch_step is not None
-                and (step - self._last_switch_step) < MIN_DWELL_STEPS):
-            return False
-        self.goal = goal
-        self.switch_count += 1
-        if step is not None:
-            self._last_switch_step = step
-        self.save()
-        return True
-
-    def suggest(self, goal: str, reason: str = "") -> bool:
-        """Совет со стороны (LLM/эвристика). НЕ меняет цель — только пишется
-        в журнал, чтобы потом измерить, был ли совет полезен.
-
-        Причина (замер 2026-08-24): LLM в горячем цикле замедляла шаг в 6 раз
-        (0.30с -> 1.80с, 75 минут на прогон в 3000 шагов), а её квестовые цели
-        всё равно затирались фактами. Совет без права записи убирает вред,
-        сохраняя возможность учиться на её мнении.
-        """
-        self.last_suggestion = goal
-        self.last_suggestion_reason = reason
-        return False
-
-    def enter_dead(self):
-        """Called when the character dies. Preserve the pre-death goal."""
-        if self.goal != DEAD:
-            self.pre_death_goal = self.goal if self.goal != DEAD else self.pre_death_goal
-            self.goal = DEAD
-            self.save()
+    @property
+    def goal(self) -> Optional[str]:
+        """Текущая цель FSM для логирования."""
+        if self.state == QuestState.QUEST_NONE:
+            return None
+        if self.state == QuestState.DONE:
+            return "QUEST_COMPLETE"
+        if self.active_quest:
+            return f"{self.state.name}:{self.active_quest.get('id', '?')}"
+        return self.state.name
 
     def resume_after_respawn(self):
-        """After respawn, return to the goal we had before death."""
-        prev = self.pre_death_goal or (self.quest_id and DO_OBJECTIVE) or NO_QUEST
-        self.goal = prev
-        self.pre_death_goal = None
-        self.save()
+        """Агент воскрес — начинаем сначала."""
+        self.reset()
 
-    def reset_to_no_quest(self):
-        self.goal = NO_QUEST
-        self.quest_id = None
-        self.pre_death_goal = None
-        self.save()
+    def enter_dead(self):
+        """Агент умер — сбрасываем FSM в QUEST_NONE."""
+        self.reset()
 
-    # ---- fact-driven transition (called each step with observed world) ----
-    def update_from_world(self, ws: dict):
-        """Move the FSM based on OBSERVED quest facts.
+    def resume_from_dead(self):
+        """Агент воскрес — начинаем сначала."""
+        self.reset()
 
-        `ws` is the structured WorldState (see world_state.py extension):
-          ws["quest"] = {
-            "id", "phase" (NO_QUEST/ACTIVE/READY), "accepted": bool,
-            "progress": int, "required": int, "complete": bool,
-            "giver_known": bool, "giver_distance": float
-          }
-        Death is handled separately (enter_dead / resume_after_respawn).
-
-        This only sets the goal; it does NOT pick a skill. That is the Policy's
-        job, which reads self.goal to constrain its candidate set.
+    def update_from_world(self, world_state: dict):
+        """Синхронизирует состояние FSM с наблюдаемым миром.
+        
+        Вызывается в начале каждого шага. Если квест активен — переводит в 
+        DO_OBJECTIVE. Если квест завершён — в DONE.
         """
-        q = ws.get("quest") or {}
-        qphase = q.get("phase", "NONE")
-        # If we are in the middle of death handling, don't override.
-        if self.goal == DEAD:
-            return
+        quest_status = world_state.get("quest_status", "NONE")
+        if quest_status == "ACTIVE" and self.state in (
+            QuestState.QUEST_NONE, QuestState.FIND_GIVER, QuestState.ACCEPT,
+            QuestState.VERIFY_ACCEPT, QuestState.ERROR
+        ):
+            self.state = QuestState.DO_OBJECTIVE
+        elif quest_status == "READY_TO_TURN_IN" and self.state in (
+            QuestState.DO_OBJECTIVE, QuestState.VERIFY_PROGRESS,
+            QuestState.FIND_GIVER, QuestState.ERROR
+        ):
+            self.state = QuestState.RETURN_TO_GIVER
+        elif quest_status == "DONE" and self.state != QuestState.DONE:
+            self.state = QuestState.DONE
+        elif quest_status == "NONE" and self.state in (
+            QuestState.DONE, QuestState.ERROR
+        ):
+            self.reset()
 
-        if qphase == "NONE" or not q.get("id"):
-            # No active quest -> look for one to start.
-            if self.goal in ACTIVE_GOALS:
-                # Quest we were working on disappeared (turned in or dropped).
-                self.reset_to_no_quest()
+    def reset(self):
+        """Сброс для нового квеста."""
+        self.state = QuestState.QUEST_NONE
+        self.active_quest = None
+        self.quest_giver = None
+        self.failure_reason = FailureReason.NONE
+        self.navigation_memory = {
+            "last_positions": [],
+            "last_distances": [],
+            "best_distance": float("inf"),
+            "no_progress_steps": 0,
+            "stuck_detected": False
+        }
+
+    # ---- Основной цикл ----
+
+    def decide(self, world_state: dict, info: dict) -> Tuple[str, Dict]:
+        """Принимает решение на основе состояния FSM.
+
+        Returns:
+            (action_name, ctx) — действие для Skill Layer
+        """
+        self.step_count += 1
+
+        # Обновляем навигационную память
+        self._update_navigation_memory(world_state, info)
+
+        # Проверяем критический HP — приоритет выживания
+        if world_state.get("hp_frac", 1.0) < 0.2:
+            return "heal", {"reason": "critical_hp"}
+
+        # Проверяем застревание
+        if self._detect_stuck():
+            return self._handle_stuck(world_state, info)
+
+        # Сброс из ERROR при наличии активного квеста
+        if self.state == QuestState.ERROR:
+            if self.active_quest:
+                self.state = QuestState.DO_OBJECTIVE
             else:
-                self.set(NO_QUEST)
-            return
+                self.state = QuestState.QUEST_NONE
 
-        # We have a quest. Track its id.
-        # R1 FIX (2026-08-23 stall): validate a persisted goal against the OLD
-        # tracked quest BEFORE re-pointing. After an infra restart the FSM can
-        # wake up as TURN_IN/q_old while the live world shows q_new ACTIVE —
-        # silently re-pointing kept TURN_IN forever and pinned policy to the
-        # [turn_in_quest, return_to_giver] pocket (measured run: 1860 return +
-        # 1140 turn_in, nothing else).
-        tracked = self.quest_id
-        if (self.goal == TURN_IN and q.get("id")
-                and tracked and q.get("id") != tracked):
-            # The quest we were turning in is GONE from the live log; the
-            # observed ACTIVE quest is a different one. Work its objective.
-            self.set(DO_OBJECTIVE, q.get("id"))
-            return
+        # Основная логика по состоянию
+        handler = {
+            QuestState.QUEST_NONE: self._handle_quest_none,
+            QuestState.FIND_GIVER: self._handle_find_giver,
+            QuestState.ACCEPT: self._handle_accept,
+            QuestState.VERIFY_ACCEPT: self._handle_verify_accept,
+            QuestState.DO_OBJECTIVE: self._handle_do_objective,
+            QuestState.VERIFY_PROGRESS: self._handle_verify_progress,
+            QuestState.RETURN_TO_GIVER: self._handle_return_to_giver,
+            QuestState.TURN_IN: self._handle_turn_in,
+            QuestState.VERIFY_TURN_IN: self._handle_verify_turn_in,
+            QuestState.DONE: self._handle_done,
+        }
 
-        # Fix5 (2026-08-23 live run): SAME quest id but observed ACTIVE with
-        # incomplete objectives under a TURN_IN goal — the turn-in already
-        # happened or the objective regressed; the goal is stale. Demote to
-        # DO_OBJECTIVE. (Measured: 700+ steps farming under TURN_IN because the
-        # phase gate offered no candidates and the full-list fallback fired.)
-        if (self.goal == TURN_IN and qphase == "ACTIVE"
-                and not q.get("complete", True)):
-            self.set(DO_OBJECTIVE, q.get("id"))
-            return
+        handler_fn = handler.get(self.state, self._handle_quest_none)
+        return handler_fn(world_state, info)
 
-        if self.quest_id != q.get("id"):
-            self.quest_id = q.get("id")
+    def _handle_quest_none(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Нет активного квеста — ищем квестгивера."""
+        nearby = info.get("nearby", []) or []
+        quest_npcs = [
+            e for e in nearby
+            if (e.get("kind") == "npc" or e.get("type") == "npc")
+            and (e.get("questIds") or e.get("questId"))
+        ]
+        if quest_npcs:
+            quest_npcs.sort(key=lambda n: n.get("dist", float("inf")))
+            self.quest_giver = quest_npcs[0]
+            self.state = QuestState.FIND_GIVER
+            return self._handle_find_giver(ws, info)
+        # Нет квестгивера рядом — исследуем
+        return "explore", {"reason": "no_quest_giver"}
 
-        if qphase == "READY":
-            # Objectives done, awaiting turn-in.
-            if self.goal in (RETURN_TO_GIVER, TURN_IN, DO_OBJECTIVE):
-                self.set(TURN_IN, q.get("id"))
-            elif self.goal == NO_QUEST or self.goal == FIND_GIVER:
-                self.set(RETURN_TO_GIVER, q.get("id"))
-            return
+    def _handle_find_giver(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Идём к квестгиверу, взаимодействуем для получения квеста."""
+        if not self.quest_giver:
+            self.state = QuestState.QUEST_NONE
+            return "explore", {"reason": "no_giver"}
 
-        # qphase == "ACTIVE": objectives still in progress.
-        if self.goal in (NO_QUEST, FIND_GIVER):
-            self.set(DO_OBJECTIVE, q.get("id"))
-        elif self.goal == ACCEPT:
-            self.set(DO_OBJECTIVE, q.get("id"))
-        elif self.goal == RETURN_TO_GIVER:
-            # 2026-08-23: keep RETURN_TO_GIVER while a READY quest waits — turning
-            # it in is the correct move even if the ws-selected quest shows ACTIVE
-            # objectives (the ready quest lives in a parallel bucket). Only demote
-            # when nothing is ready.
-            if not ws.get("has_ready"):
-                self.set(DO_OBJECTIVE, q.get("id"))
-        # DO_OBJECTIVE / TURN_IN stay as-is (TURN_IN only set when READY).
+        dist = self.quest_giver.get("dist", float("inf"))
+        if dist is None:
+            dist = self._calc_dist_to_giver(info)
 
-    def is_active(self) -> bool:
-        return self.goal in ACTIVE_GOALS
+        if dist <= INTERACT_RANGE:
+            self.state = QuestState.ACCEPT
+            return "accept_quest", {"npc": self.quest_giver}
+        else:
+            return "navigate", {
+                "target": self.quest_giver,
+                "reason": "approaching_giver"
+            }
 
-    def __repr__(self):
-        return f"GoalFSM(goal={self.goal}, quest={self.quest_id})"
+    def _handle_accept(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Принимаем квест."""
+        if self.quest_giver:
+            self.state = QuestState.VERIFY_ACCEPT
+            return "accept_quest", {"npc": self.quest_giver}
+        self.state = QuestState.QUEST_NONE
+        return "explore", {"reason": "no_giver"}
 
-# Контракт Q11 (со-архитектор, 2026-08-24): даже легитимная смена цели не
-# чаще одного раза на MIN_DWELL_STEPS шагов. Замер до правки:
-# goal_switches = 2141 на 3000 шагов (0.71/шаг) -> цель не жила до
-# завершения многошаговой доставки. Цель метрики: < 0.05/шаг.
-MIN_DWELL_STEPS = 20
+    def _handle_verify_accept(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Верифицируем, что квест принят."""
+        quest_status = ws.get("quest_status", "NONE")
+        if quest_status == "ACTIVE":
+            self.state = QuestState.DO_OBJECTIVE
+            # Известим DO_OBJECTIVE с пустым контекстом
+            return self._handle_do_objective(ws, info)
+        # Не принят — пробуем снова
+        self.failure_reason = FailureReason.QUEST_STATE_FAILURE
+        self._record_failure(FailureReason.QUEST_STATE_FAILURE)
+        self.state = QuestState.ACCEPT
+        return "accept_quest", {"npc": self.quest_giver}
+
+    def _handle_do_objective(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Выполняем объектив квеста (фарм, лут, сбор)."""
+        quest_status = ws.get("quest_status", "NONE")
+        if quest_status == "READY_TO_TURN_IN":
+            self.state = QuestState.RETURN_TO_GIVER
+            return self._handle_return_to_giver(ws, info)
+        if quest_status != "ACTIVE":
+            self.state = QuestState.ERROR
+            return "explore", {"reason": "quest_not_active"}
+
+        # Есть мобы — фармим
+        has_mob = ws.get("has_mob", False)
+        if has_mob:
+            return "farm", {"reason": "objective_mob"}
+
+        # Есть труп — лут
+        has_corpse = ws.get("has_corpse", False)
+        if has_corpse:
+            return "loot", {"reason": "objective_corpse"}
+
+        # Нет целей — исследуем
+        return "explore", {"reason": "no_objective_target"}
+
+    def _handle_verify_progress(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Проверяем прогресс квеста."""
+        quest_status = ws.get("quest_status", "NONE")
+        if quest_status == "READY_TO_TURN_IN":
+            self.state = QuestState.RETURN_TO_GIVER
+            return self._handle_return_to_giver(ws, info)
+        if quest_status == "ACTIVE":
+            self.state = QuestState.DO_OBJECTIVE
+            return self._handle_do_objective(ws, info)
+        self.state = QuestState.ERROR
+        return "explore", {"reason": "quest_state_unknown"}
+
+    def _handle_return_to_giver(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Возвращаемся к квестгиверу для сдачи."""
+        if not self.quest_giver:
+            self.state = QuestState.QUEST_NONE
+            return "explore", {"reason": "no_giver"}
+
+        dist = self._calc_dist_to_giver(info)
+        if dist <= INTERACT_RANGE:
+            self.state = QuestState.TURN_IN
+            return "turn_in_quest", {"npc": self.quest_giver}
+        return "navigate", {
+            "target": self.quest_giver,
+            "reason": "returning_to_giver"
+        }
+
+    def _handle_turn_in(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Сдаём квест."""
+        if self.quest_giver:
+            self.state = QuestState.VERIFY_TURN_IN
+            return "turn_in_quest", {"npc": self.quest_giver}
+        self.state = QuestState.QUEST_NONE
+        return "explore", {"reason": "no_giver"}
+
+    def _handle_verify_turn_in(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Верифицируем сдачу квеста."""
+        quest_status = ws.get("quest_status", "NONE")
+        if quest_status == "DONE":
+            self.state = QuestState.DONE
+            return "explore", {"reason": "quest_complete"}
+        # Не сдан — проверяем READY
+        if quest_status == "READY_TO_TURN_IN":
+            self.state = QuestState.TURN_IN
+            return "turn_in_quest", {"npc": self.quest_giver}
+        # Неизвестное состояние
+        self.failure_reason = FailureReason.QUEST_STATE_FAILURE
+        self._record_failure(FailureReason.QUEST_STATE_FAILURE)
+        self.state = QuestState.RETURN_TO_GIVER
+        return "explore", {"reason": "turn_in_failed"}
+
+    def _handle_done(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Квест завершён — ищем следующий."""
+        self.reset()
+        return "explore", {"reason": "quest_done_search_next"}
+
+    # ---- Навигационная память и обнаружение застревания ----
+
+    def _update_navigation_memory(self, ws: dict, info: dict):
+        """Обновляет историю позиций и дистанций."""
+        pos = ws.get("player_pos") or info.get("player_pos")
+        if pos and len(pos) >= 2:
+            self.navigation_memory["last_positions"].append((pos[0], pos[2]))
+            # Храним только последние N позиций
+            if len(self.navigation_memory["last_positions"]) > 50:
+                self.navigation_memory["last_positions"] = self.navigation_memory["last_positions"][-50:]
+
+        dist = ws.get("distance_to_giver")
+        if dist is not None:
+            self.navigation_memory["last_distances"].append(dist)
+            if len(self.navigation_memory["last_distances"]) > 50:
+                self.navigation_memory["last_distances"] = self.navigation_memory["last_distances"][-50:]
+
+            if dist < self.navigation_memory["best_distance"]:
+                self.navigation_memory["best_distance"] = dist
+                self.navigation_memory["no_progress_steps"] = 0
+            else:
+                self.navigation_memory["no_progress_steps"] += 1
+
+    def _detect_stuck(self) -> bool:
+        """Определяет, застрял ли агент."""
+        return self.navigation_memory["no_progress_steps"] >= STUCK_THRESHOLD
+
+    def _handle_stuck(self, ws: dict, info: dict) -> Tuple[str, Dict]:
+        """Реакция на застревание — смена стратегии."""
+        self.navigation_memory["stuck_detected"] = True
+        self._record_failure(FailureReason.STUCK_FAILURE)
+        # Сброс счётчика для следующей итерации
+        self.navigation_memory["no_progress_steps"] = 0
+        return "explore", {"reason": "unstick"}
+
+    def _record_failure(self, reason: FailureReason):
+        """Записывает причину неудачи для анализа."""
+        self.failure_count[reason] = self.failure_count.get(reason, 0) + 1
+        self.save()
+
+    def _calc_dist_to_giver(self, info: dict) -> Optional[float]:
+        """Вычисляет расстояние до квестгивера."""
+        if not self.quest_giver:
+            return None
+        gx, gz = self.quest_giver.get("x"), self.quest_giver.get("z")
+        px, pz = 0, 0
+        nearby = info.get("nearby", []) or []
+        for e in nearby:
+            if e.get("kind") == "player":
+                px, pz = e.get("x", 0), e.get("z", 0)
+                break
+        if gx is not None and gz is not None:
+            return math.sqrt((gx - px) ** 2 + (gz - pz) ** 2)
+        return None
+
+    def get_diagnostics(self) -> Dict:
+        """Возвращает диагностическую информацию."""
+        return {
+            "state": self.state.name,
+            "failure_reason": self.failure_reason.name,
+            "failure_count": {k.name: v for k, v in self.failure_count.items()},
+            "navigation_memory": {
+                "last_positions_count": len(self.navigation_memory["last_positions"]),
+                "best_distance": self.navigation_memory["best_distance"],
+                "no_progress_steps": self.navigation_memory["no_progress_steps"],
+                "stuck_detected": self.navigation_memory["stuck_detected"],
+            },
+            "step_count": self.step_count,
+        }

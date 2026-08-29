@@ -851,7 +851,7 @@ function createActions({ gameClient, buildSnapshot, tickMs = 220 }) {
         await gameClient.evaluate(() => {
           const sim = window.__game.sim;
           if (typeof sim.resurrectAtSpiritHealer === 'function') {
-            return sim.resurrectAtSpiritHealer().then(() => true).catch(() => false);
+            return sim.resurrectAtSpiritHealer();
           }
           return false;
         }).catch(() => false);
