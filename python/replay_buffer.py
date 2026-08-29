@@ -24,9 +24,13 @@ from typing import Dict, List, Optional
 
 
 def set_to_list(o):
-    """JSON serializer для множеств (transition может нести set, напр. keepIds)."""
+    """JSON serializer — поддержка set, frozenset, NpcRegistry и объектов с __json__."""
     if isinstance(o, (set, frozenset)):
         return list(o)
+    if hasattr(o, '__json__'):
+        return o.__json__()
+    if hasattr(o, 'to_dict'):
+        return o.to_dict()
     raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
 

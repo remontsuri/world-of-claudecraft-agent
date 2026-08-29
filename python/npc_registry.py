@@ -237,6 +237,14 @@ class NpcRegistry:
         """Все NPC."""
         return dict(self._npcs)
 
+    def to_dict(self) -> Dict[str, Dict[str, Any]]:
+        """Сериализация в dict для JSON."""
+        return dict(self._npcs)
+
+    def __json__(self):
+        """JSON serialization hook."""
+        return self.to_dict()
+
     @staticmethod
     def _roles_from_def(npc_def: Dict[str, Any]) -> List[str]:
         """Извлечь роли из определения NPC."""
