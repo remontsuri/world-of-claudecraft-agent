@@ -363,7 +363,7 @@ def main():
     logf = open(LOG_PATH, "a", encoding="utf-8")
 
     def snap(info):
-        ws = build_world_state(info)
+        ws = build_world_state(info, world_mem=world_mem)
         return ws
 
     # INIT RESPAWN: if the character is already dead (ghost / hp depleted) at

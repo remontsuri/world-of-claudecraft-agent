@@ -73,7 +73,7 @@ from item_prices import is_junk_item as _is_junk_item
 from npc_registry import NpcRegistry
 
 
-def build_world_state(info: Dict) -> Dict:
+def build_world_state(info: Dict, world_mem=None) -> Dict:
     """Flatten env info into the complete WorldState.
 
     Superset of what three consumers need:
@@ -82,6 +82,13 @@ def build_world_state(info: Dict) -> Dict:
       - policy._candidates(): hp_frac (+ raw info for entity lists)
       - reward.outcome_reward(): xp, copper, kills, quests_done, deaths,
         inv_slots, quest_progress, distance_to_giver
+
+    P0 fix (2026-08-29): world_mem (WorldMemory) provides persisted giver
+    positions learned at accept time. When the live snapshot's turnInNpc is
+    null/missing (common in this build), fall back to WorldMemory so that
+    distance_to_giver reflects reality instead of the 999.0 sentinel. Without
+    this, reward.dist_progress sees 999->999 even when the agent actually
+    walked 120->80, and Q-learning gets a zero signal for return_to_giver.
     """
     p = info.get("player", {}) or {}
     hp = p.get("hp")
@@ -250,6 +257,21 @@ def build_world_state(info: Dict) -> Dict:
                 # keep the CLOSEST turn-in NPC, not the last one iterated
                 if d < distance_to_giver:
                     distance_to_giver = d
+
+            # P0 fix: when the live snapshot has no turnInNpc (common in this
+            # build), fall back to WorldMemory's persisted giver position so
+            # distance_to_giver reflects reality instead of the 999.0 sentinel.
+            if distance_to_giver >= 999.0 and world_mem is not None:
+                for q in all_q:
+                    qid = q.get("id") or q.get("questId")
+                    if not qid:
+                        continue
+                    gpos = world_mem.giver_pos(str(qid))
+                    if gpos and gpos.get("x") is not None:
+                        px, pz = info.get("player_pos", [0, 0])
+                        d = ((gpos["x"] - px) ** 2 + (gpos["z"] - pz) ** 2) ** 0.5
+                        if d < distance_to_giver:
+                            distance_to_giver = d
         # quest_status is finalized below (after the chosen quest q / qcomplete
         # are computed) so it reflects the TRUTH, not a raw incomplete-scan.
 
