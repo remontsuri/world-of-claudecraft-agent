@@ -232,7 +232,7 @@ class GoalManager:
         buckets never matched, so lessons were unreadable by the decision path
         (measured by _diag_bucket.py). One builder = one bucket key.
         """
-        return build_world_state(info)
+        return build_world_state(info, getattr(self, "world_mem", None))
 
     # ---- candidate skills from current world ----
     def _candidates(self, info: dict, ws: dict, goal: str = None,

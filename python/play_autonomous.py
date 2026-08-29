@@ -459,7 +459,7 @@ def main():
                         if i > 0 and i % BRAIN_EVERY == 0:
                             from world_state import build_world_state as _bws
                             _live_info = getattr(env, "_last_info", None) or {}
-                            _live_ws = _bws(_live_info)
+                            _live_ws = _bws(_live_info, world_mem=world_mem)
                             world_payload = build_brain_payload(_live_ws, _live_info, new_qid)
                             fails = episodes.recent_failures(n=3)
                             lessons = [c.get("detail") for c in refl.journal[-5:]]
@@ -484,7 +484,7 @@ def main():
                         _live_info = getattr(env, "_last_info", None) or {}
                         if _live_info:
                             from world_state import build_world_state as _bws2
-                            _live_ws = _bws2(_live_info)
+                            _live_ws = _bws2(_live_info, world_mem=world_mem)
                             # кандидаты берём у САМОЙ политики (её интерфейс —
                             # _candidates/decide, у неё нет .actions)
                             try:
@@ -550,7 +550,7 @@ def main():
                             from world_state import build_world_state as _bws3
                             _ares = autonomy.after_action(
                                 (rec or {}).get("action") or "noop",
-                                _after, _bws3(_after),
+                                _after, _bws3(_after, world_mem=world_mem),
                                 reward=float((rec or {}).get("reward") or 0.0))
                             # V0 baseline: причина КАЖДОГО не-успеха. Раньше
                             # возврат after_action отбрасывался, поэтому после

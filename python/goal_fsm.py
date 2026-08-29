@@ -63,6 +63,7 @@ class GoalFSM:
         # Сохраняем квест/гивера перед смертью для восстановления после респауна
         self._pre_death_quest: Optional[Dict] = None
         self._pre_death_giver: Optional[Dict] = None
+        self.world_mem = None  # WorldMemory для доступа к giver_pos
         self.navigation_memory: Dict[str, Any] = {
             "last_positions": [],
             "last_distances": [],
@@ -275,6 +276,21 @@ class GoalFSM:
 
     def _handle_find_giver(self, ws: dict, info: dict) -> Tuple[str, Dict]:
         """Идём к квестгиверу, взаимодействуем для получения квеста."""
+        # Если гивер не запомнен — ищем NPC в nearby
+        if not self.quest_giver:
+            nearby = info.get("nearby", []) or []
+            quest_npcs = [
+                e for e in nearby
+                if (e.get("kind") == "npc" or e.get("type") == "npc")
+                and (e.get("questIds") or e.get("questId"))
+            ]
+            if quest_npcs:
+                quest_npcs.sort(key=lambda n: n.get("dist", float("inf")))
+                self.quest_giver = quest_npcs[0]
+            else:
+                # Нет NPC рядом — исследуем
+                return "explore", {"reason": "no_giver_nearby"}
+
         if not self.quest_giver:
             self.state = QuestState.QUEST_NONE
             return "explore", {"reason": "no_giver"}
@@ -405,7 +421,6 @@ class GoalFSM:
         pos = ws.get("player_pos") or info.get("player_pos")
         if pos and len(pos) >= 2:
             self.navigation_memory["last_positions"].append((pos[0], pos[2]))
-            # Храним только последние N позиций
             if len(self.navigation_memory["last_positions"]) > 50:
                 self.navigation_memory["last_positions"] = self.navigation_memory["last_positions"][-50:]
 
@@ -420,6 +435,20 @@ class GoalFSM:
                 self.navigation_memory["no_progress_steps"] = 0
             else:
                 self.navigation_memory["no_progress_steps"] += 1
+
+        # Если distance_to_giver не обновляется (999), используем WorldMemory
+        if ws.get("distance_to_giver", 999) >= 999 and hasattr(self, "world_mem") and self.world_mem:
+            giver_pos = self.world_mem.giver_pos(
+                ws.get("quest", {}).get("id") if ws.get("quest") else None
+            )
+            if giver_pos and giver_pos.get("x") is not None:
+                ppos = info.get("player_pos") or [0, 0]
+                alt_dist = ((giver_pos["x"] - ppos[0]) ** 2 + (giver_pos["z"] - ppos[1]) ** 2) ** 0.5
+                if alt_dist < self.navigation_memory["best_distance"]:
+                    self.navigation_memory["best_distance"] = alt_dist
+                    self.navigation_memory["no_progress_steps"] = 0
+                else:
+                    self.navigation_memory["no_progress_steps"] += 1
 
     def _detect_stuck(self) -> bool:
         """Определяет, застрял ли агент."""
@@ -448,19 +477,14 @@ class GoalFSM:
         logger.info(msg)
 
     def _calc_dist_to_giver(self, info: dict) -> Optional[float]:
-        """Вычисляет расстояние до квестгивера."""
+        """Вычисляет расстояние до квестгивера, используя WorldMemory если нужно."""
         if not self.quest_giver:
             return None
         gx, gz = self.quest_giver.get("x"), self.quest_giver.get("z")
-        px, pz = 0, 0
-        nearby = info.get("nearby", []) or []
-        for e in nearby:
-            if e.get("kind") == "player":
-                px, pz = e.get("x", 0), e.get("z", 0)
-                break
-        if gx is not None and gz is not None:
-            return math.sqrt((gx - px) ** 2 + (gz - pz) ** 2)
-        return None
+        if gx is None or gz is None:
+            return None
+        ppos = info.get("player_pos") or [0, 0]
+        return math.sqrt((gx - ppos[0]) ** 2 + (gz - ppos[1]) ** 2)
 
     def get_diagnostics(self) -> Dict:
         """Возвращает диагностическую информацию."""

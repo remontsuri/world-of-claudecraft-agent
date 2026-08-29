@@ -100,6 +100,8 @@ class Agent:
         # GoalFSM: explicit current_goal, persisted to goal_state.json so an
         # infra restart resumes the in-progress quest instead of NO_QUEST.
         self.fsm = fsm
+        if self.fsm is not None:
+            self.fsm.world_mem = self.world_mem
         # ReplayBuffer: rare-event-prioritized transitions (not just last).
         self.replay = replay
         # StrategyMemory: per-(quest,skill) success/fail generalizations.
