@@ -47,13 +47,14 @@ ACT_TURN_RIGHT = 4
 ACT_STRAFE_RIGHT = 6
 ACT_TARGET_NEAREST = 8
 ACT_ATTACK = 9
+ACT_FARM = 0  # bridge case 0 = FARM combo (chase + targetEntity + startAutoAttack until death)
 ACT_INTERACT = 58
 ACT_EAT_DRINK = 60
 ACT_NOOP = 0  # stop moving + stop attacking not in obs.ts ACTIONS; use noop
 
 # How many low-level steps a skill may run before returning control.
 # unsupported-in-headless skills (craft/equip/buy) run 1 step (honest noop).
-SKILL_STEPS = {"farm": 10, "loot": 30, "accept_quest": 10, "turn_in_quest": 10,
+SKILL_STEPS = {"farm": 1, "loot": 30, "accept_quest": 10, "turn_in_quest": 10,
                "sell_junk": 1, "gather": 20, "craft": 1, "heal": 30, "equip": 1, "buy": 1}
 
 
@@ -219,17 +220,23 @@ class HierarchicalWoWEnv(gym.Env):
             # via loot_corpse, not a 5-tuple)
             obs, r, term, trunc, info = None, 0.0, False, False, self._last_info
             if name == "farm":
-                # navigate toward nearest mob, then attack (headless world IS populated;
-                # mobs spawn ~46u from start, so we must move toward them)
-                self.base.step(ACT_TARGET_NEAREST)
-                in_range = self._navigate_to_target(max_steps=30)
-                if in_range and self._last_info.get("targetId") is not None:
-                    obs, r, term, trunc, info = self.base.step(ACT_ATTACK)
-                else:
-                    # not reachable this skill-call: stop pushing (avoids server
-                    # crash from grinding forward into a wall / void). Control
-                    # returns to the GoalManager, which can roam or pick another goal.
-                    break
+                # 2026-08-30 FIX (live-proven): ACT_TARGET_NEAREST=8 maps to bridge
+                # case 8 = EQUIP, ACT_ATTACK=9 maps to case 9 = BUY. Neither targets
+                # or hits a mob, so farm reported success (bridge ok:true) while
+                # kills stayed 0. The correct action is bridge case 0 = FARM, which
+                # selects the nearest hostile (or quest) mob, chases to range, calls
+                # sim.targetEntity + startAutoAttack, and loops until the mob dies.
+                # We hand the quest mob id when known so the bridge honors quest priority.
+                quest_mob = None
+                for q in (self._last_info.get("quests", {}).get("active") or []):
+                    tm = q.get("targetMobId") or q.get("killTargetId")
+                    if tm is not None:
+                        quest_mob = tm
+                        break
+                obs, r, term, trunc, info = self.base.step(
+                    ACT_FARM, {"targetMobId": quest_mob} if quest_mob is not None else None
+                )
+                self._last_info = info
             elif name == "loot":
                 # loot via dedicated command (command teleports player onto the
                 # corpse and force-unlocks FFA, so no in-world navigation needed)
@@ -245,13 +252,59 @@ class HierarchicalWoWEnv(gym.Env):
                         info = self.base.loot_corpse(int(cid))
                         self._last_info = info
             elif name == "accept_quest":
-                # interact (loot corpse / talk to quest npc per obs.ts priority)
-                obs, r, term, trunc, info = self.base.step(ACT_INTERACT)
+                # 2026-08-30 FIX: раньше был тупой ACT_INTERACT без подхода к
+                # гиверу -> acceptQuest в мосту отклонялся (игрок далеко),
+                # скилл вечно inconclusive. Теперь: выбираем ближайшего гивера с
+                # available-квестом из nearby, навигируем к нему, затем шлём
+                # целевой acceptQuest(qid, npcId) (мост case 2).
+                giver = None
+                givers = [e for e in (self._last_info.get("nearby") or [])
+                          if (e.get("kind") == "npc" or e.get("type") == "npc")
+                          and (e.get("questIds") or e.get("questId"))]
+                if givers:
+                    qstates = self._last_info.get("quest_states") or {}
+                    for e in sorted(givers, key=lambda x: x.get("dist", 1e9)):
+                        qids = e.get("questIds") or e.get("questId") or []
+                        if isinstance(qids, str):
+                            qids = [qids]
+                        avail = [q for q in qids if qstates.get(q) == "available"]
+                        if avail:
+                            giver = e
+                            giver["_qid"] = avail[0]
+                            break
+                if giver is None:
+                    obs, r, term, trunc, info = self.base.step(ACT_NOOP)
+                    break
+                # подойти к гиверу (interact range ~7yd; идём до <6)
+                self._navigate_to_coord(giver.get("x"), giver.get("z"), max_steps=80)
+                # повторная проверка дистанции
+                px, pz = self._last_info.get("player_pos", [0, 0])
+                gx, gz = giver.get("x"), giver.get("z")
+                d1 = ((gx - px) ** 2 + (gz - pz) ** 2) ** 0.5
+                if d1 > 8:
+                    # не дошли за этот лег — PARTIAL, вернём управление
+                    obs, r, term, trunc, info = self.base.step(ACT_NOOP)
+                    break
+                # в радиусе взаимодействия -> целевой acceptQuest
+                qid = giver.get("_qid")
+                npcId = giver.get("id")
+                resp = self.base._post({"action": "step", "idx": 2,
+                                        "questId": str(qid), "npcId": str(npcId)})
+                info = resp.get("info") or self._last_info
+                self._last_info = info
             elif name == "turn_in_quest":
-                # turn in via dedicated command (requires the quest to be ready
-                # and the giver adjacent — server anti-bot, per adapter_v1 findings)
+                # 2026-08-30 FIX: игра помечает готовый квест state='done'
+                # (не 'ready'/'complete'), поэтому старый фильтр (ready/complete)
+                # его не находил -> агент шёл в accept_quest (inconclusive) и
+                # зацикливался. Ищем ЛЮБОЙ активный/готовый квест (active,
+                # ready, complete, done) и сдаём его. Дистанция до гивера
+                # проверяется в questNpcFor (INTERACT_RANGE+2) — если далеко,
+                # turnInQuest вернёт 'Too far away', но агент должен подойти
+                # (return_to_giver делает navigate).
                 q = next((q for q in (self._last_info.get("quests", {}).get("active") or [])
-                          if q.get("ready") or q.get("state") in ("ready", "complete")), None)
+                          if (q.get("ready")
+                              or q.get("state") in ("ready", "complete", "done", "active")
+                              or q.get("state") is None)), None)
                 if q is not None:
                     info = self.base.turn_in_quest(str(q.get("id")))
                     self._last_info = info
@@ -287,6 +340,21 @@ class HierarchicalWoWEnv(gym.Env):
                     else:
                         obs, r, term, trunc, info = self.base.step(ACT_NOOP)
             elif name == "heal":
+                # 2026-08-30 FIX: если в инвентаре НЕТ еды, ACT_EAT_DRINK всё
+                # равно возвращает failure и агент тратит шаг впустую (измерено:
+                # 209 heal_rejected за цикл). Проверяем наличие еды ДО вызова —
+                # нет еды -> сразу break (считаем, что лечиться нечем), пусть
+                # policy выберет retreat/farm. Без этого агент зацикливается на
+                # heal_failure при пустом баге.
+                _inv = self._last_info.get("inventory") or []
+                _has_food = any(
+                    (i.get("itemId") or "") in
+                    ("baked_bread", "spring_water", "conjured_bread")
+                    or "food" in str(i.get("itemId", "")).lower()
+                    for i in _inv if i)
+                if not _has_food:
+                    obs, r, term, trunc, info = self.base.step(ACT_NOOP)
+                    break
                 # eat/drink to recover HP (noop if already full — sim ignores).
                 # 2026-08-23: eating while a mob swings at you is blocked
                 # ("You can't do that while in combat") — measured 173/192 heal
