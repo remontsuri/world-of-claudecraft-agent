@@ -108,7 +108,7 @@ function readGameState() {
     if (!e.pos) continue;
     const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
     const dist = Math.hypot(dx, dz);
-    if (dist > 70) continue;
+    if (dist > 90) continue;
     nearby.push({
       id: e.id, kind: e.kind, type: e.kind, name: e.name,
       x: e.pos.x, z: e.pos.z, hp: e.hp, maxHp: e.maxHp,

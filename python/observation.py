@@ -20,7 +20,7 @@ from item_prices import is_junk_item as _is_junk_item
 INTERACT_RANGE = 5.0
 QUEST_RANGE = 7.0
 VENDOR_RANGE = 12.0
-MOB_SCAN_RANGE = 45.0
+MOB_SCAN_RANGE = 90.0
 
 # Из какого блока ws["world"] какой kind восстанавливать (см. _entities).
 _KIND_BY_WORLD_KEY = {

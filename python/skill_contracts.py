@@ -76,9 +76,15 @@ SKILL_CONTRACTS: Dict[str, Dict[str, Any]] = {
     },
     "heal": {
         "preconditions": ["hp_not_full"],
-        "action": "cast_heal_or_eat -> wait -> verify_hp",
+        "action": "cast_heal_or_eat -> stop_combat -> wait -> verify_hp",
         "postconditions": ["hp_increased"],
-        "failure_reasons": ["hp_full", "no_heal_available", "in_combat"],
+        # NOTE: `in_combat` intentionally REMOVED from failure_reasons.
+        # In this game HP regen only runs OUT of combat, so heal MUST be able to
+        # fire while in combat: the bridge's case 7 calls sim.stopAutoAttack()
+        # first, disengaging so regen can fill HP. Treating in_combat as a hard
+        # rejection (observed: heal_rejected x211 at hp 0.02-0.42) starved the
+        # agent of healing and produced the crit-HP death loop.
+        "failure_reasons": ["hp_full", "no_heal_available"],
     },
     "equip": {
         "preconditions": ["item_in_bags", "item_equippable"],
@@ -97,6 +103,12 @@ SKILL_CONTRACTS: Dict[str, Dict[str, Any]] = {
         "action": "releaseSpirit -> resurrectAtSpiritHealer -> wait_alive",
         "postconditions": ["is_alive"],
         "failure_reasons": ["not_dead", "respawn_unavailable"],
+    },
+    "return_to_giver": {
+        "preconditions": ["giver_position_known"],
+        "action": "navigate_to_giver -> verify_near_giver",
+        "postconditions": ["near_giver"],
+        "failure_reasons": ["no_giver", "giver_too_far"],
     },
     "explore": {
         "preconditions": [],
@@ -182,12 +194,19 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "giver_exists":
         return (world.get("quest_givers") or 0) > 0
     if name == "giver_position_known":
-        # P0-B: позиция гивера известна (из npc_registry в obs)
+        # Позиция гивера известна, если рядом ВИДЕН гивер (он в nearby со
+        # своими координатами — encode_observation кладёт giver_distance).
+        # BUG FIX: раньше без активного квеста (_qid is None) предикат всегда
+        # возвращал False, поэтому accept_quest был вечно замаскирован и агент
+        # крутился в explore, никогда не беря квест. Но именно на фазе
+        # "квест ещё не взят" мы ИЩЕМ гивера в зоне видимости — его координаты
+        # нам известны из snapshot. Точный registry-lookup нужен ТОЛЬКО после
+        # взятия квеста (когда надо вернуться к конкретному гиверу по id).
+        if (world.get("quest_givers") or 0) > 0:
+            return True
         _reg = obs.get("npc_registry")
         if _reg is None:
-            # Fallback: проверяем расстояние в quest
             return (quest.get("giver_distance") or 999) < 999
-        # Ищем гивера для текущего квеста
         _qid = quest.get("id") or quest.get("questId")
         if not _qid:
             return False

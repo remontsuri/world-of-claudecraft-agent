@@ -498,11 +498,16 @@ class GoalManager:
             cands.append(SKILL_BUY)
         # explore: plain forward walk. Genuine capability the policy may learn,
         # but NOT always-available: when a quest is active/ready the agent must
-        # progress it (return_to_giver / turn_in), not drift to fences. Offer
-        # explore only when there is NO active/ready quest AND no quest NPC is
-        # nearby to interact with — i.e. early free-roam / discovery only.
-        # Gate on the structured truth (quest_accepted), not the raw info lists.
-        quest_active = quest_accepted or quest_complete
+        # progress it (return_to_giver / turn_in / farm), not drift to fences.
+        # Offer explore only when there is NO active/ready quest AND no quest NPC
+        # is nearby to interact with — i.e. early free-roam / discovery only.
+        # Gate on the STRUCTURED quest_status (authoritative, from sim.questLog),
+        # not on quest_accepted alone: the latter was observed to desync from the
+        # FSM goal (fsm stayed NO_QUEST while quest_status==ACTIVE), which let
+        # explore slip in and the agent wandered to dist=290yd away from the
+        # giver. quest_status is the single source of truth for "is a quest on?".
+        quest_status = ws.get("quest_status")
+        quest_active = quest_status in ("ACTIVE", "READY_TO_TURN_IN", "DONE")
         quest_npc_near = bool(quest_npcs)
         if not quest_active and not quest_npc_near:
             cands.append(SKILL_EXPLORE)
@@ -698,8 +703,20 @@ class GoalManager:
                 cands = filtered
             elif "explore" in _masked:
                 cands = ["explore"]
-            # Forced skill from recovery/loop is a preference, not a command.
-            # It stays in cands; softmax decides.
+            # Forced skill (recovery/anchor) may NOT be in policy._candidates
+            # (e.g. return_to_giver when the agent wandered far). The autonomy
+            # loop explicitly asked for it and verified its precondition, so we
+            # must surface it as a candidate — otherwise the filter above drops
+            # it and the agent keeps farming at dist=270 instead of returning.
+            _fs = getattr(context, "forced_skill", None)
+            if _fs and _fs in _masked and _fs not in cands:
+                cands = [_fs] + cands
+            # HARD OVERRIDE: when the autonomy loop forces a skill (anchor/loop/
+            # recovery), it has already verified the precondition and decided it
+            # is the ONLY safe action (e.g. return_to_giver at dist=270). Soft-
+            # max must NOT override it back to farm — that would undo the anchor.
+            if _fs and _fs in cands:
+                return _fs, {}
         elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
             # Legacy fallback: still support hints for backward compatibility
             _masked = self.hints.get("masked_candidates")

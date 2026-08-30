@@ -36,12 +36,17 @@ def complete_quest_objective(env, ctx: dict, max_substeps: int = 12) -> str:
     tNpc = q.get("turnInNpc") or {}
     npc_x, npc_z = tNpc.get("x"), tNpc.get("z")
 
-    # ENV SAFETY LIMIT: if drifted past hunt radius, refuse to farm further and
-    # walk back via short nav. (Policy may also choose return_to_giver instead.)
+    # NAVIGATE: walk back to the turn-in NPC. No distance gate here — the
+    # caller (Policy) has already decided to return. Using a local dNpc gate
+    # against env._last_info["player_pos"] was WRONG: player_pos can be stale
+    # (snapshot lag) while the real distance_to_giver is large, so the agent
+    # believed it was "close enough" (dNpc<50) and never moved — stranding it
+    # 280yd from the giver. Now we always navigate when npc_x is known and we
+    # are not already within interact range.
     if npc_x is not None:
         px, pz = env._last_info.get("player_pos", [0, 0])
         dNpc = ((npc_x - px) ** 2 + (npc_z - pz) ** 2) ** 0.5
-        if dNpc > HUNT_RADIUS:
+        if dNpc > 7.0:  # INTERACT_RANGE+2 for turn-in; only skip nav when adjacent
             if tNpc.get("navPath"):
                 env._navigate_along_path(tNpc["navPath"], max_steps_per_leg=80)
             else:

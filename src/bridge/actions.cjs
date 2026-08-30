@@ -449,9 +449,12 @@ async function applyAction(idx, cmd, gameClient) {
       if (!ate) {
         // No potion and no food. The game auto-regens HP out of combat
         // (measured: 50 -> 95 over 10s), so heal is NOT a dead end — wait
-        // for regen instead of a silent no-op. If still in combat, the
-        // agent's flee logic (hierarchical_env heal branch) should have moved
-        // it away first; here we just give regen time to run.
+        // for regen instead of a silent no-op. We MUST drop combat first:
+        // while auto-attack is live, inCombat stays true and regen never
+        // kicks in, so the agent would hang at crit HP (observed: heal ->
+        // failure at hp 0.05-0.31 while still swinging). stopAutoAttack
+        // disengages so regen can fill HP.
+        try { sim.stopAutoAttack(sim.player ? sim.player.id : undefined); } catch (_) {}
         let regened = false;
         for (let i = 0; i < 12; i++) {
           const st = await gameClient.evaluate(() => {

@@ -155,6 +155,14 @@ class AutonomyLoop:
                 if sk == "explore" or check_preconditions(sk, obs)["ok"]:
                     forced = sk
 
+        # 0. ANCHOR: если агент ушёл далеко от гивера при активном квесте,
+        # принудительно возвращаемся.
+        _giver_dist = ws.get("distance_to_giver", 999.0)
+        _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
+        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80:
+            forced = "return_to_giver"
+            print(f"[anchor] dist={_giver_dist:.1f} -> forced return_to_giver", flush=True)
+
         if forced is None and self.guard.is_looping():
             trip = self.guard.trip()
             self.stats["loops_tripped"] += 1
@@ -185,10 +193,18 @@ class AutonomyLoop:
             # предусловий -> forced=explore -> шаг на месте, pos не менялась
             # (живой замер: 8 шагов FIND_MOB, pos=(0,0), nav_commands=0).
             if kind and nav_command is None and (subgoal or {}).get("skill") == "explore":
-                nav_command, nav_status = self._nav_to(
-                    obs, kind, (subgoal or {}).get("target"))
-                if nav_command:
-                    forced = "explore"
+                # Если моб УЖЕ в зоне видимости (nearby_mobs>0), НЕ форсируем
+                # слепой explore — это уводило агента на 290yd от гивера
+                # (живой замер: dist=267..290 при qs=ACTIVE). farm (scripted
+                # chase) сам дойдёт до моба и добьёт его; оставляем выбор
+                # политики. Explore оставляем только для РЕАЛЬНОГО поиска,
+                # когда мобов нет в радиусе сканирования.
+                _nearby_mobs = (obs.get("world") or {}).get("nearby_mobs", 0) or 0
+                if _nearby_mobs <= 0:
+                    nav_command, nav_status = self._nav_to(
+                        obs, kind, (subgoal or {}).get("target"))
+                    if nav_command:
+                        forced = "explore"
 
         if forced and forced not in masked:
             # форсируем только исполнимое
