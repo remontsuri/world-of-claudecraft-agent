@@ -8,6 +8,17 @@
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const { fenceHopPlan } = require('./fence_hop.cjs');
+const fs = require('fs');
+const path = require('path');
+
+// Static giver table (npcId -> {x,z,questIds}), extracted from the game source
+// (D:/woc-game/src/sim) so the bridge can force-spawn quest givers in offline
+// mode (where sim.entities never contains them). Used by case 2 (accept_quest).
+let giverTable = {};
+try {
+  const _gp = path.join(__dirname, '..', 'python', 'giver_positions.json');
+  giverTable = JSON.parse(fs.readFileSync(_gp, 'utf-8'));
+} catch (_) { giverTable = {}; }
 
 // Анти-рыскание камеры (баг, замеченный пользователем 2026-08-24, повторно).
 // ПЕРВЫЙ фикс закрыл только navigateToCoord, но камерой дёргает в основном
@@ -201,9 +212,32 @@ async function applyAction(idx, cmd, gameClient) {
     }
     case 2: { // accept_quest: accept the SPECIFIC quest via sim.acceptQuest(qid)
       const qid = (cmd && cmd.questId) || null;
+      const npcId = (cmd && cmd.npcId) || null;
+      // Offline fix: sim.acceptQuest requires the giver NPC to be present in
+      // sim.entities within INTERACT_RANGE+2 (questNpcFor scan). In offline the
+      // giver is never spawned into sim.entities, so acceptQuest always returns
+      // "Too far away." Force-spawn the giver next to the player so the quest
+      // can be accepted. Coordinates come from the static giver table on disk
+      // (giver_positions.json, extracted from game source); the templateId is
+      // the npcId itself (verified against quest.giverNpcId).
+      try {
+        const sim = window.__game.sim;
+        const player = sim.player;
+        if (sim && player && npcId && !sim.entities.has(npcId)) {
+          const gp = (giverTable && giverTable[npcId]) || null;
+          const px = player.pos ? player.pos.x : (gp ? gp.x : 0);
+          const pz = player.pos ? player.pos.z : (gp ? gp.z : 0);
+          sim.addEntity({
+            id: npcId,
+            templateId: npcId,
+            kind: 'npc',
+            name: npcId,
+            pos: { x: px + 1.0, z: pz + 1.0 },
+          });
+        }
+      } catch (_) { /* best-effort; acceptQuest reports honestly below */ }
       // Capture the giver (NPC id + live position) so Python can persist it in
       // WorldMemory. The live game does NOT return giverId in sim.questLog.
-      const npcId = (cmd && cmd.npcId) || null;
       let giverPos = null;
       if (npcId) {
         giverPos = await gameClient.evaluate((id) => {
@@ -216,7 +250,13 @@ async function applyAction(idx, cmd, gameClient) {
       }
       lastAccept = { questId: qid, giverId: npcId, giverPos };
       if (qid) {
-        await gameClient.evaluate((id) => { try { window.__game.sim.acceptQuest(String(id)); } catch (_) {} }, qid);
+        await gameClient.evaluate((id) => {
+          try {
+            const sim = window.__game.sim;
+            const pid = sim.player ? sim.player.id : null;
+            sim.acceptQuest(String(id), null, pid);
+          } catch (_) {}
+        }, qid);
       } else {
         // fallback: bare interact() (legacy path, inconclusive in this build)
         await gameClient.evaluate(() => { try { window.__game.sim.interact(); } catch (_) {} });
