@@ -864,7 +864,33 @@ function createActions({ gameClient, buildSnapshot, tickMs = 220 }) {
           }).catch(() => false);
         }
       }
-      if (!revived) console.error('[actions] respawn: revival not confirmed after corpse+healer chain');
+      if (!revived) {
+        // OFFLINE FALLBACK (2026-08-30): в offline-режиме у игрока нет
+        // spirit/ghost-состояния, поэтому resurrectAtSpiritHealer() всегда
+        // возвращает false (spirit.ts:335 требует p.ghost). Делаем прямую
+        // реплику reviveAt(): сбрасываем dead/ghost, восстанавливаем пулы,
+        // телепортируем в центр деревни. Без этого агент в offline навсегда
+        // зациклен на recover/ENV_ERROR при любой смерти.
+        await gameClient.evaluate(() => {
+          try {
+            const sim = window.__game.sim; const pl = sim.player;
+            if (!pl) return;
+            pl.dead = false; pl.ghost = false;
+            pl.corpsePos = null; pl.corpseInstanceId = null;
+            pl.hp = pl.maxHp; pl.mana = (pl.maxMana || 0);
+            pl.pos = { x: 2, y: 0, z: -2 }; pl.prevPos = { x: 2, y: 0, z: -2 };
+            try { sim.emit({ type: 'respawn', pid: pl.entityId ?? pl.id }); } catch (_) {}
+          } catch (_) {}
+        }).catch(() => null);
+        for (let i = 0; i < 6 && !revived; i++) {
+          await sleep(tickMs);
+          revived = await gameClient.evaluate(() => {
+            const p = window.__game.sim.player;
+            return !!(p && !p.dead && (p.hp ?? 0) > 0);
+          }).catch(() => false);
+        }
+        if (!revived) console.error('[actions] respawn: revival not confirmed after corpse+healer+offline-fallback chain');
+      }
     } else {
       revived = true; // not dead on entry — nothing to resurrect
     }
