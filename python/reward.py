@@ -35,6 +35,12 @@ WEIGHTS = {
     "drift_per_unit": -0.01,
     "drift_cap": -2.0,
     "dist_progress": 0.02,   # reward per unit distance DECREASED toward giver
+    # low_hp: survival lesson. Penalize HP LOSS (before - after, when positive),
+    # NOT absolute low HP — so natural out-of-combat regen is never punished and
+    # the agent learns "taking damage is bad" instead of "being hurt is bad".
+    # Without this, reward only fires on death (-5.0) and the Q-table learns
+    # "combat = death -> avoid all combat", never "retreat at low HP".
+    "low_hp": -1.5,          # per 1.0 of HP fraction LOST in a step
 }
 
 
@@ -121,5 +127,11 @@ def outcome_reward(
     elif verdict == "FAILURE":
         # провал наказывается ВСЕГДА, независимо от дельты: попытка была
         reward += c["failure_penalty"]
+
+    # low_hp survival lesson: penalize HP LOSS this step (before - after > 0).
+    # Regen (after > before) is 0 — natural healing in/out of combat is fine.
+    hp_loss = _safe_get(before, "hp_frac") - _safe_get(after, "hp_frac")
+    if hp_loss > 0:
+        reward += hp_loss * c["low_hp"]
 
     return round(reward, 4)
