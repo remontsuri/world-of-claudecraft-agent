@@ -213,6 +213,82 @@ class Agent:
                 return after, verdict, "OK"
             else:
                 # standard skill via hierarchical env (farm/loot/heal/accept/sell/gather)
+                # Contract (skill_contracts.py): accept_quest = navigate_to_giver ->
+                # acceptQuest -> verify_quest_log. The bridge's acceptQuest is a no-op
+                # unless the player is already in INTERACT_RANGE, so we MUST walk to the
+                # giver first. Coordinates come from the LIVE snapshot (info.nearby), NOT
+                # ctx (policy does not guarantee ctx["npc"]["x"/"z"]).
+                if action == "accept_quest":
+                    _json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "giver_positions.json")
+                    _fsm = getattr(self, "fsm", None)
+                    _qg = getattr(_fsm, "quest_giver", None) if _fsm is not None else None
+                    _giver_id = (ctx.get("npcId")
+                                 or (ctx.get("npc") or {}).get("id")
+                                 or (_qg.get("id") if isinstance(_qg, dict) else None))
+                    _gpos = None
+                    _nearby = (info_before.get("nearby") if isinstance(info_before, dict)
+                               else (self.env._last_info or {}).get("nearby")) or []
+                    if _giver_id is not None:
+                        for _e in _nearby:
+                            if str(_e.get("id")) == str(_giver_id):
+                                _gpos = (_e.get("x"), _e.get("z"))
+                                break
+                    if _gpos is None:
+                        _qnpcs = [_e for _e in _nearby
+                                   if isinstance(_e, dict)
+                                   and (_e.get("questIds") or _e.get("questId") or _e.get("questGiver"))]
+                        _qnpcs.sort(key=lambda n: n.get("dist", float("inf")))
+                        if _qnpcs:
+                            _gn = _qnpcs[0]
+                            _gpos = (_gn.get("x"), _gn.get("z"))
+                    if _gpos is None and isinstance(_qg, dict) and _qg.get("x") is not None:
+                        _gpos = (_qg.get("x"), _qg.get("z"))
+                    if _gpos is None and getattr(self, "world_mem", None):
+                        _gm = getattr(self.world_mem, "quest_givers", None) or {}
+                        for _gd in _gm.values():
+                            _gp = _gd.get("giver_pos") or {}
+                            if _gp.get("x") is not None:
+                                _gpos = (_gp.get("x"), _gp.get("z"))
+                                break
+                    if _gpos is None:
+                        # Final fallback: STATIC giver table extracted from the
+                        # game source (D:/woc-game/src/sim). world_mem can hold
+                        # stale coordinates; the game's own NPC table is truth.
+                        # Pick the nearest giver to the player's current position.
+                        if not hasattr(self, "_giver_positions"):
+                            try:
+                                import json as _json
+                                with open(_json_path, "r", encoding="utf-8") as _f:
+                                    self._giver_positions = _json.load(_f)
+                            except Exception:
+                                self._giver_positions = {}
+                        _pp = (info_before.get("player_pos") if isinstance(info_before, dict) else None) or (self.env._last_info or {}).get("player_pos") or [0, 0]
+                        _best = None
+                        _best_d = float("inf")
+                        for _gid, _gd in (self._giver_positions or {}).items():
+                            _d = (_gd.get("x", 0) - _pp[0]) ** 2 + (_gd.get("z", 0) - _pp[1]) ** 2
+                            if _d < _best_d:
+                                _best_d = _d
+                                _best = _gd
+                        if _best is not None:
+                            _gpos = (_best.get("x"), _best.get("z"))
+                    if _gpos is not None:
+                        try:
+                            _arrived = self.env._navigate_to_coord(_gpos[0], _gpos[1], max_steps=80)
+                        except Exception:
+                            pass  # best-effort; accept_quest reports honestly if still far
+                    if _gpos is None:
+                        # Giver not visible in the live snapshot (out of scan
+                        # range). Standing still and calling acceptQuest is a
+                        # guaranteed INCONCLUSIVE loop. Instead, walk the world
+                        # to bring a giver into view — the Policy will learn that
+                        # accept_quest with no visible giver is a no-op and stop
+                        # selecting it in empty zones (self-correction loop).
+                        try:
+                            self.env.explore_walk(steps=12)
+                        except Exception:
+                            pass
+                        return info_before, "FAILURE", "OK"
                 idx = SKILL_INDEX.get(action)
                 if idx is None:
                     return info_before, "FAILURE", "OK"

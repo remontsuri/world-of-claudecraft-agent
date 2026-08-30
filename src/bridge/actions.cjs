@@ -615,15 +615,24 @@ async function navigateToCoord(gameClient, x, z, maxSteps) {
       const desired = Math.atan2(dx, dz);
       let off = desired - p.facing;
       off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-      try { g.controller.face(desired); } catch (_) {}
+      // NOTE: controller.face() is a no-op in offline mode (verified: facing
+      // unchanged after face()). Steer with move({turnLeft/turnRight}) instead —
+      // that path applies in offline (confirmed via raw_move). Turn while also
+      // pushing forward so we don't stall spinning in place.
+      const _turn = off > 0 ? 'turnLeft' : 'turnRight';
+      const _turnAmt = Math.min(1, Math.abs(off) / 0.5); // full turn when far off
       // Проактивный хоп: если прошлый тик почти не дал прогресса, а мы на
       // земле — вероятен забор/бордюр впереди. Клик-мышью (main.ts:3959)
       // ставит jump у каждого забора; мы делаем то же по наблюдаемому
       // отсутствию прогресса, т.к. pathCrossesFence в страницу не экспонирован.
       const slow = window.__navLastD !== undefined && (window.__navLastD - d) < 0.25;
       window.__navLastD = d;
-      g.controller.move((slow && p.onGround) ? { forward: true, jump: true }
-                                            : { forward: true });
+      if (Math.abs(off) > 0.12) {
+        g.controller.move({ [_turn]: true, forward: Math.abs(off) < 1.2 });
+      } else {
+        g.controller.move((slow && p.onGround) ? { forward: true, jump: true }
+                                                : { forward: true });
+      }
       return { arrived: false, d, x: p.pos.x, z: p.pos.z, off: Math.round(off * 100) / 100 };
     }, x, z);
     if (st && st.arrived) { arrived = true; break; }
