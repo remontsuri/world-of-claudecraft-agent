@@ -74,6 +74,20 @@ def _world_state_dict(info: dict, world_mem=None) -> dict:
     return build_world_state(info, world_mem)
 
 
+# CRITICAL_HP_OVERRIDE (2026-08-30): the policy softmax only appends SKILL_HEAL
+# to candidates (policy.py:520-522) but never forces it — at hp=0.03 the agent
+# picked explore and died. GoalFSM.decide() DOES force heal at hp_frac < 0.2
+# (goal_fsm.py:229-230) but that method is a DEAD branch (never called from the
+# live path). So we force it here, in the real decision path, before the skill
+# runs. Survival > phase: a dead agent completes zero quests.
+CRITICAL_HP = 0.2
+
+
+def should_force_heal(ws: dict) -> bool:
+    """True when HP is critically low and the agent MUST heal, bypassing softmax."""
+    return (ws.get("hp_frac", 1.0) or 1.0) < CRITICAL_HP
+
+
 class Agent:
     def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None,
                  world_mem: "WorldMemory" = None, fsm=None, replay=None,
@@ -433,6 +447,15 @@ class Agent:
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
                                           goal=fsm_goal, **_decide_kwargs)
+
+        # CRITICAL_HP_OVERRIDE (2026-08-30): force heal at critical HP, bypassing
+        # the policy softmax. The live path calls policy.decide() (not the dead
+        # GoalFSM.decide()), and policy only appends heal to candidates without
+        # forcing it — so at hp<0.2 the agent could pick explore and die. Survival
+        # beats phase: override here, in the real path, before the skill runs.
+        if should_force_heal(ws_before) and action != "heal":
+            action = "heal"
+            ctx = {"reason": "critical_hp", "forced": True}
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
