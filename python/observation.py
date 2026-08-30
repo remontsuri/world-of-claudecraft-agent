@@ -330,6 +330,48 @@ def encode_observation(ws: Dict[str, Any],
     vendors.sort(key=lambda r: r["_dist"])
     givers.sort(key=lambda r: r["_dist"])
 
+    # --- quest objective (needed BEFORE mobs_vec for quest_target flag) --------
+    # NOTE: computed here (not below) so the per-mob spatial vector can mark
+    # which mobs match the active kill objective. The target-selection block
+    # (target/_pick_target) stays below where it was.
+    _active_q, _ready_q, _done_q = _quest_lists(ws, info)
+    _nxt = _next_objective(_active_q)
+    _quest_mob = (_nxt or {}).get("target_mob_id") if (
+        (_nxt or {}).get("type") == "kill") else None
+
+    # --- Milestone 1 (2026-08-30): per-mob SPATIAL observation ---------------
+    # Policy must LEARN navigation from this, not be told where to go. Each
+    # live mob becomes a relative vector from the player. dx/dz are world
+    # deltas (mob - player); angle is the bearing RELATIVE to player facing
+    # (0 = straight ahead), not world north. Source is exclusively the live
+    # entity list — no static tables.
+    facing = _num(player.get("facing", ws.get("player_facing")))
+
+    def _relative_angle(e: Dict[str, Any]) -> float:
+        world_bearing = _bearing_of(e, px, pz)
+        rel = world_bearing - facing
+        while rel > math.pi:
+            rel -= 2 * math.pi
+        while rel < -math.pi:
+            rel += 2 * math.pi
+        return rel
+
+    mobs_vec = []
+    for e in mobs:  # mobs = live, non-dead only (filtered above)
+        mx = _num(e.get("x"), (e.get("pos") or {}).get("x"))
+        mz = _num(e.get("z"), (e.get("pos") or {}).get("z"))
+        dx = mx - px
+        dz = mz - pz
+        mobs_vec.append({
+            "dx": round(dx, 3),
+            "dz": round(dz, 3),
+            "distance": round(_num(e.get("_dist"), math.hypot(dx, dz)), 3),
+            "angle": round(_relative_angle(e), 4),
+            "hp": _num(e.get("hp")),
+            "hostile": bool(e.get("hostile") or not e.get("friendly")),
+            "quest_target": _mob_matches(e, _quest_mob),
+        })
+
     # ЦЕЛЬ выбирается ПОСЛЕ расчёта объектива (см. ниже, после _next_objective):
     # квестовый моб приоритетнее ближайшего (P0.5).
     p_level = _num(player.get("level"), 0.0)
@@ -345,10 +387,8 @@ def encode_observation(ws: Dict[str, Any],
     # и волке в 12 yd observation указывал на кабана, а planner — на волка.
     # Политика била не того моба: прогресс квеста не шёл, но обучение
     # получало положительный сигнал за kills.
-    quest_mob = (nxt or {}).get("target_mob_id") if (
-        (nxt or {}).get("type") == "kill") else None
-    target = _pick_target(mobs, quest_mob)
-    target_is_quest = bool(target) and _mob_matches(target, quest_mob)
+    target = _pick_target(mobs, _quest_mob)
+    target_is_quest = bool(target) and _mob_matches(target, _quest_mob)
 
     # junk-детект (P0.1): считается ОДИН раз в world_state (canonical
     # inventory.junk_count) — здесь только читаем. Fallback на info оставлен
@@ -408,7 +448,7 @@ def encode_observation(ws: Dict[str, Any],
             "in_melee_range": bool(target) and target["_dist"] <= INTERACT_RANGE,
             # цель выбрана ПО КВЕСТУ, а не просто ближайшая
             "is_quest_target": target_is_quest,
-            "quest_mob_id": quest_mob,
+            "quest_mob_id": _quest_mob,
         },
         "quest": {
             "active": len(active),
@@ -462,7 +502,11 @@ def encode_observation(ws: Dict[str, Any],
             # questState(questId) == 'available'. Раньше было bool(givers),
             # что означало "NPC имеет questIds", а не "quest сейчас available".
             # Источник истины — sim.questState() через snapshot.quest_states.
-            "quest_available": _quest_available_from_states(ws, givers),
+            # BUG FIX: quest_states живёт в RAW info (snapshot), НЕ в ws
+            # (build_world_state не копирует его). Передаём info, иначе
+            # ws.get("quest_states") всегда {} -> accept_quest вечно замаскирован
+            # -> агент крутится в explore (наблюдалось: 118+ шагов, 0 accept).
+            "quest_available": _quest_available_from_states(info, givers),
         },
         "navigation": {
             "target_distance": round(target["_dist"], 2) if target else 999.0,
@@ -474,6 +518,10 @@ def encode_observation(ws: Dict[str, Any],
         # сырые сущности с посчитанной дистанцией — чтобы навигация брала
         # КООРДИНАТЫ ИЗ ИГРЫ, а не из статических таблиц
         "_entities": (mobs + npcs + nodes + corpses),
+        # Milestone 1 (2026-08-30): per-mob spatial vectors for the policy to
+        # LEARN navigation from. Relative to player (dx/dz) + angle vs facing.
+        # Observation only — the policy chooses turn/forward/attack itself.
+        "mobs": mobs_vec,
         # P0-A: Canonical NPC registry
         "npc_registry": ws.get("npc_registry"),
     }
