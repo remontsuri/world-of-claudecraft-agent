@@ -225,53 +225,21 @@ class Agent:
                     _giver_id = (ctx.get("npcId")
                                  or (ctx.get("npc") or {}).get("id")
                                  or (_qg.get("id") if isinstance(_qg, dict) else None))
-                    _gpos = None
                     _nearby = (info_before.get("nearby") if isinstance(info_before, dict)
                                else (self.env._last_info or {}).get("nearby")) or []
-                    if _giver_id is not None:
-                        for _e in _nearby:
-                            if str(_e.get("id")) == str(_giver_id):
-                                _gpos = (_e.get("x"), _e.get("z"))
-                                break
-                    if _gpos is None:
-                        _qnpcs = [_e for _e in _nearby
-                                   if isinstance(_e, dict)
-                                   and (_e.get("questIds") or _e.get("questId") or _e.get("questGiver"))]
-                        _qnpcs.sort(key=lambda n: n.get("dist", float("inf")))
-                        if _qnpcs:
-                            _gn = _qnpcs[0]
-                            _gpos = (_gn.get("x"), _gn.get("z"))
-                    if _gpos is None and isinstance(_qg, dict) and _qg.get("x") is not None:
-                        _gpos = (_qg.get("x"), _qg.get("z"))
-                    if _gpos is None and getattr(self, "world_mem", None):
-                        _gm = getattr(self.world_mem, "quest_givers", None) or {}
-                        for _gd in _gm.values():
-                            _gp = _gd.get("giver_pos") or {}
-                            if _gp.get("x") is not None:
-                                _gpos = (_gp.get("x"), _gp.get("z"))
-                                break
-                    if _gpos is None:
-                        # Final fallback: STATIC giver table extracted from the
-                        # game source (D:/woc-game/src/sim). world_mem can hold
-                        # stale coordinates; the game's own NPC table is truth.
-                        # Pick the nearest giver to the player's current position.
-                        if not hasattr(self, "_giver_positions"):
-                            try:
-                                import json as _json
-                                with open(_json_path, "r", encoding="utf-8") as _f:
-                                    self._giver_positions = _json.load(_f)
-                            except Exception:
-                                self._giver_positions = {}
-                        _pp = (info_before.get("player_pos") if isinstance(info_before, dict) else None) or (self.env._last_info or {}).get("player_pos") or [0, 0]
-                        _best = None
-                        _best_d = float("inf")
-                        for _gid, _gd in (self._giver_positions or {}).items():
-                            _d = (_gd.get("x", 0) - _pp[0]) ** 2 + (_gd.get("z", 0) - _pp[1]) ** 2
-                            if _d < _best_d:
-                                _best_d = _d
-                                _best = _gd
-                        if _best is not None:
-                            _gpos = (_best.get("x"), _best.get("z"))
+                    if not hasattr(self, "_giver_positions"):
+                        try:
+                            import json as _json
+                            with open(_json_path, "r", encoding="utf-8") as _f:
+                                self._giver_positions = _json.load(_f)
+                        except Exception:
+                            self._giver_positions = {}
+                    _pp = (info_before.get("player_pos") if isinstance(info_before, dict) else None) or (self.env._last_info or {}).get("player_pos") or [0, 0]
+                    _gpos = resolve_giver_pos(
+                        _giver_id, _nearby, _qg, getattr(self, "world_mem", None),
+                        getattr(self, "_giver_positions", {}), _pp)
+                    import sys as _sys
+                    _sys.stderr.write("[DBG aq] giver_id=%r gpos=%r pp=%r nearby_n=%d\n" % (_giver_id, _gpos, _pp, len(_nearby)))
                     if _gpos is not None:
                         try:
                             _arrived = self.env._navigate_to_coord(_gpos[0], _gpos[1], max_steps=80)
@@ -629,3 +597,55 @@ if __name__ == "__main__":
         for a, v in sorted(acts.items(), key=lambda kv: -kv[1]):
             print(f"    {a:14s} {v:+.3f}")
     env.close()
+
+def resolve_giver_pos(giver_id, nearby, quest_giver, world_mem, json_givers, player_pos):
+    """Resolve giver (x, z) for accept_quest navigation.
+
+    Order (game truth wins over runtime memory that can drift/stale):
+      1. live snapshot: info.nearby by giver_id
+      2. live snapshot: nearest quest-NPC in nearby
+      3. fsm.quest_giver x/z
+      4. STATIC game table (giver_positions.json) - authoritative
+      5. world_mem.quest_givers - LAST (observed holding stale coords)
+    Returns (x, z) or None.
+    """
+    gpos = None
+    if giver_id is not None:
+        for e in nearby:
+            if str(e.get("id")) == str(giver_id):
+                gpos = (e.get("x"), e.get("z"))
+                break
+    if gpos is None:
+        qnpcs = [e for e in nearby
+                 if isinstance(e, dict)
+                 and (e.get("questIds") or e.get("questId") or e.get("questGiver"))]
+        qnpcs.sort(key=lambda n: n.get("dist", float("inf")))
+        if qnpcs:
+            gn = qnpcs[0]
+            gpos = (gn.get("x"), gn.get("z"))
+    if gpos is None and isinstance(quest_giver, dict) and quest_giver.get("x") is not None:
+        gpos = (quest_giver.get("x"), quest_giver.get("z"))
+    if gpos is None and json_givers:
+        # Exact match by giver_id first (policy named a specific NPC).
+        if giver_id is not None and str(giver_id) in json_givers:
+            _gd = json_givers[str(giver_id)]
+            gpos = (_gd.get("x"), _gd.get("z"))
+        else:
+            best = None
+            best_d = float("inf")
+            px, pz = (player_pos or [0, 0])[0], (player_pos or [0, 0])[1]
+            for gid, gd in json_givers.items():
+                d = (gd.get("x", 0) - px) ** 2 + (gd.get("z", 0) - pz) ** 2
+                if d < best_d:
+                    best_d = d
+                    best = gd
+            if best is not None:
+                gpos = (best.get("x"), best.get("z"))
+    if gpos is None and world_mem:
+        gm = getattr(world_mem, "quest_givers", None) or {}
+        for gd in gm.values():
+            gp = gd.get("giver_pos") or {}
+            if gp.get("x") is not None:
+                gpos = (gp.get("x"), gp.get("z"))
+                break
+    return gpos
