@@ -49,8 +49,7 @@ ACT_TARGET_NEAREST = 8
 ACT_ATTACK = 9
 ACT_FARM = 0  # bridge case 0 = FARM combo (chase + targetEntity + startAutoAttack until death)
 ACT_INTERACT = 58
-ACT_EAT_DRINK = 60
-ACT_NOOP = 0  # stop moving + stop attacking not in obs.ts ACTIONS; use noop
+ACT_EAT_DRINK = 7  # bridge case 7 = heal (potion/food, then out-of-combat regen)
 
 # How many low-level steps a skill may run before returning control.
 # unsupported-in-headless skills (craft/equip/buy) run 1 step (honest noop).

@@ -446,7 +446,25 @@ async function applyAction(idx, cmd, gameClient) {
         }
         return false;
       });
-      if (!ate) console.warn('[actions] heal: no potion and no food in bag -> honest no-op');
+      if (!ate) {
+        // No potion and no food. The game auto-regens HP out of combat
+        // (measured: 50 -> 95 over 10s), so heal is NOT a dead end — wait
+        // for regen instead of a silent no-op. If still in combat, the
+        // agent's flee logic (hierarchical_env heal branch) should have moved
+        // it away first; here we just give regen time to run.
+        let regened = false;
+        for (let i = 0; i < 12; i++) {
+          const st = await gameClient.evaluate(() => {
+            const p = window.__game.sim.player;
+            return { hp: p.hp ?? 0, maxHp: p.maxHp ?? 1, inCombat: !!p.inCombat, dead: !!p.dead };
+          }).catch(() => null);
+          if (!st || st.dead) break;
+          if (!st.inCombat && st.hp >= st.maxHp) { regened = true; break; }
+          if (!st.inCombat && st.hp > (st.maxHp * 0.9)) { regened = true; break; }
+          await sleep(gameClient.tickMs * 2);
+        }
+        if (!regened) console.warn('[actions] heal: no potion/food and regen stalled (still in combat?)');
+      }
       break;
     }
     case 8: { // equip: equip the first unequipped gear item (if any)
