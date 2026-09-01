@@ -5,8 +5,12 @@
 // here — the caller (actions.js / dispatch) turns null into {ok:false,error}.
 
 const path = require('path');
-const { QUEST_OBJECTIVES } = require('./quest_objectives.cjs');
-const fs = require('fs');
+// Game data: generated from D:\woc-game\src\sim\content\zone*.ts by
+// python/generate_game_export.py. This is a DERIVED cache — not a second
+// source-of-truth. Regenerate with `python python/generate_game_export.py`.
+const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'python', 'game_agent_export.json'), 'utf-8'));
+const QUEST_OBJECTIVES = EXPORT.quest_objectives || {};
+const QUEST_GIVERS = EXPORT.quest_givers || {};
 
 // Static Farshore NPC positions + quest -> turn-in NPC, sourced from
 // src/sim/content/farshore.ts (FARSHORE_NPCS / FARSHORE_QUESTS). The live game
@@ -44,8 +48,6 @@ const FARSHORE_QUEST_TURNIN = {
 // Нужна потому, что таблицы ниже покрывают только обычные квесты, а у
 // профессиональных (q_prof_*) turnInNpc оставался null -> агент не мог
 // дойти до гивера (замер 2026-08-24: loom 6/6, 14 шагов на месте).
-const { npcIdForQuest } = require('./quest_turnin.cjs');
-
 const EASTBROOK_NPC_POS = {
   the_merchant: { x: 0, z: 9.5 },
   marshal_redbrook: { x: 4.5, z: 5.5 },
@@ -101,7 +103,7 @@ function readGameState() {
   // через .toString() и исполняется ВНУТРИ страницы, где Node-require
   // недоступен (баг 2026-08-25: "QUEST_OBJECTIVES is not defined" ронял
   // весь snapshot -> агент не запускался).
-  const QUEST_OBJECTIVES = {"q_prof_intro":[{"type":"gather","nodeType":"ore","count":5}],"q_wolves":[{"type":"kill","targetMobId":"forest_wolf","count":8}],"q_greyjaw":[{"type":"collect","itemId":"greyjaw_fang","count":1}],"q_boars":[{"type":"collect","itemId":"boar_hide","count":5}],"q_spiders":[{"type":"kill","targetMobId":"webwood_spider","count":6},{"type":"collect","itemId":"webwood_silk","count":4}],"q_murlocs":[{"type":"kill","targetMobId":"mudfin_murloc","count":8}],"q_bandits":[{"type":"kill","targetMobId":"vale_bandit","count":10}],"q_prof_workorder_kitchens":[{"type":"collect","itemId":"game_meat","count":8}],"q_prof_workorder_loom":[{"type":"collect","itemId":"spider_silk","count":6}],"q_prof_attune_smith":[{"type":"gather","nodeType":"ore","count":3}],"q_prof_workorder_forge":[{"type":"collect","itemId":"copper_ore","count":8}],"q_prof_workorder_toolworks":[{"type":"collect","itemId":"ironbark_log","count":8}]};
+  const QUEST_OBJECTIVES = {"q_prof_intro":[{"type":"gather","nodeType":"ore","count":5}],"q_wolves":[{"type":"kill","targetMobId":"forest_wolf","count":8}],"q_greyjaw":[{"type":"collect","itemId":"greyjaw_fang","count":1}],"q_boars":[{"type":"collect","itemId":"boar_hide","count":5}],"q_spiders":[{"type":"kill","targetMobId":"webwood_spider","count":6},{"type":"collect","itemId":"webwood_silk","count":4}],"q_murlocs":[{"type":"kill","targetMobId":"mudfin_murloc","count":8}],"q_prowlers":[{"type":"kill","targetMobId":"mire_prowler","count":12}],"q_bandits":[{"type":"kill","targetMobId":"vale_bandit","count":10}],"q_prof_workorder_kitchens":[{"type":"collect","itemId":"game_meat","count":8}],"q_prof_workorder_loom":[{"type":"collect","itemId":"spider_silk","count":6}],"q_prof_attune_smith":[{"type":"gather","nodeType":"ore","count":3}],"q_prof_workorder_forge":[{"type":"collect","itemId":"copper_ore","count":8}],"q_prof_workorder_toolworks":[{"type":"collect","itemId":"ironbark_log","count":8}]};
   const g = window.__game, sim = g.sim, p = sim.player;
   const nearby = [];
   for (const e of sim.entities.values()) {
@@ -378,8 +380,7 @@ function resolveTurnIn(r) {
       // and walking to a stale spot = "Too far away" at the real NPC.
       // id гивера: сначала сгенерированная из zone1.ts карта (покрывает
       // профессиональные квесты), затем прежние статические таблицы.
-      const turnInId = npcIdForQuest(q.id)
-        || FARSHORE_QUEST_TURNIN[q.id] || EASTBROOK_QUEST_TURNIN[q.id] || null;
+      const turnInId = QUEST_GIVERS[q.id] || null;
       // ЖИВАЯ позиция сущности авторитетна: статические таблицы дрейфуют
       // (apothecary_lin в таблице (11,-3) против живых (2.8,9.7)), а поход в
       // устаревшую точку = "Too far away." у настоящего NPC.

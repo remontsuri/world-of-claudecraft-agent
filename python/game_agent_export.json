@@ -1,0 +1,2468 @@
+{
+  "version": "0.38.4",
+  "generated_at": "2026-09-01T14:01:44.582282Z",
+  "source": "D:\\woc-game\\src\\sim\\content\\zone*.ts",
+  "quests": {
+    "q_prof_intro": {
+      "id": "q_prof_intro",
+      "name": "A Trade for Every Hand",
+      "giverNpcId": "foreman_odell",
+      "turnInNpcId": "foreman_odell",
+      "xpReward": 150,
+      "copperReward": 50,
+      "objectives": [
+        {
+          "type": "gather",
+          "nodeType": "ore",
+          "count": 5,
+          "label": "Ore vein harvested"
+        }
+      ]
+    },
+    "q_wolves": {
+      "id": "q_wolves",
+      "name": "Wolves at the Door",
+      "giverNpcId": "marshal_redbrook",
+      "turnInNpcId": "marshal_redbrook",
+      "xpReward": 250,
+      "copperReward": 75,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "forest_wolf",
+          "count": 8,
+          "label": "Forest Wolf slain"
+        }
+      ]
+    },
+    "q_greyjaw": {
+      "id": "q_greyjaw",
+      "name": "The Old Wolf",
+      "giverNpcId": "marshal_redbrook",
+      "turnInNpcId": "marshal_redbrook",
+      "xpReward": 450,
+      "copperReward": 150,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "greyjaw_fang",
+          "count": 1,
+          "label": "Old Greyjaw"
+        }
+      ]
+    },
+    "q_boars": {
+      "id": "q_boars",
+      "name": "Bristly Boar Hides",
+      "giverNpcId": "trader_wilkes",
+      "turnInNpcId": "trader_wilkes",
+      "xpReward": 350,
+      "copperReward": 120,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "boar_hide",
+          "count": 5,
+          "label": "Bristly Boar Hide"
+        }
+      ]
+    },
+    "q_spiders": {
+      "id": "q_spiders",
+      "name": "Sableweb Menace",
+      "giverNpcId": "apothecary_lin",
+      "turnInNpcId": "apothecary_lin",
+      "xpReward": 420,
+      "copperReward": 140,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "webwood_spider",
+          "count": 6,
+          "label": "Sableweb Lurker slain"
+        },
+        {
+          "type": "collect",
+          "itemId": "webwood_silk",
+          "count": 4,
+          "label": "Sableweb Silk Gland"
+        }
+      ]
+    },
+    "q_murlocs": {
+      "id": "q_murlocs",
+      "name": "Trouble at the Lake",
+      "giverNpcId": "fisherman_brandt",
+      "turnInNpcId": "fisherman_brandt",
+      "xpReward": 520,
+      "copperReward": 180,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "mudfin_murloc",
+          "count": 8,
+          "label": "Mudfin Skulker slain"
+        }
+      ]
+    },
+    "q_mine": {
+      "id": "q_mine",
+      "name": "Rats in the Mine",
+      "giverNpcId": "foreman_odell",
+      "turnInNpcId": "foreman_odell",
+      "xpReward": 620,
+      "copperReward": 220,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "tunnel_rat",
+          "count": 10,
+          "label": "Deeprock Digger slain"
+        }
+      ]
+    },
+    "q_bones": {
+      "id": "q_bones",
+      "name": "The Restless Dead",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 700,
+      "copperReward": 260,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "restless_skull",
+          "count": 8,
+          "label": "Restless Skulls recovered"
+        }
+      ]
+    },
+    "q_supplies": {
+      "id": "q_supplies",
+      "name": "Stolen Supplies",
+      "giverNpcId": "trader_wilkes",
+      "turnInNpcId": "trader_wilkes",
+      "xpReward": 550,
+      "copperReward": 250,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "supply_crate",
+          "count": 4,
+          "label": "Stolen Supply Crate"
+        }
+      ]
+    },
+    "q_whispers": {
+      "id": "q_whispers",
+      "name": "Whispers Below",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 400,
+      "copperReward": 150,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "gravecaller_sigil",
+          "count": 1,
+          "label": "Gravecaller"
+        }
+      ]
+    },
+    "q_names_of_the_dead": {
+      "id": "q_names_of_the_dead",
+      "name": "The Names of the Dead",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 600,
+      "copperReward": 250,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "weathered_ledger_page",
+          "count": 3,
+          "label": "Weathered Ledger Page"
+        }
+      ]
+    },
+    "q_silence_the_call": {
+      "id": "q_silence_the_call",
+      "name": "Silence the Call",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 750,
+      "copperReward": 300,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "restless_bones",
+          "count": 12,
+          "label": "Restless Bones silenced"
+        }
+      ]
+    },
+    "q_rite": {
+      "id": "q_rite",
+      "name": "The Binding Rite",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 700,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "blessed_wax",
+          "count": 4,
+          "label": "Blessed Tallow"
+        },
+        {
+          "type": "collect",
+          "itemId": "ghostly_essence",
+          "count": 6,
+          "label": "Ghostly Essence"
+        }
+      ]
+    },
+    "q_hollow": {
+      "id": "q_hollow",
+      "name": "Into the Hollow",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 1500,
+      "copperReward": 10000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "morthen",
+          "count": 1,
+          "label": "Morthen the Gravecaller slain"
+        }
+      ]
+    },
+    "q_sexton": {
+      "id": "q_sexton",
+      "name": "The Sexton",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 1000,
+      "copperReward": 600,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "sexton_marrow",
+          "count": 1,
+          "label": "Sexton Marrow laid to rest"
+        }
+      ]
+    },
+    "q_gravecallers_trail": {
+      "id": "q_gravecallers_trail",
+      "name": "The Gravecaller",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 900,
+      "copperReward": 400,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "morthen_grimoire",
+          "count": 1,
+          "label": "Morthen"
+        }
+      ]
+    },
+    "q_divine_tome": {
+      "id": "q_divine_tome",
+      "name": "The Dawnbound Tome",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "brother_aldric",
+      "xpReward": 650,
+      "copperReward": 200,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "restless_bones",
+          "count": 6,
+          "label": "Restless Bones laid to rest"
+        }
+      ]
+    },
+    "q_bandits": {
+      "id": "q_bandits",
+      "name": "Bandits of the Vale",
+      "giverNpcId": "marshal_redbrook",
+      "turnInNpcId": "marshal_redbrook",
+      "xpReward": 550,
+      "copperReward": 200,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "vale_bandit",
+          "count": 10,
+          "label": "Vale Bandit slain"
+        }
+      ]
+    },
+    "q_ringleader": {
+      "id": "q_ringleader",
+      "name": "The Ringleader",
+      "giverNpcId": "marshal_redbrook",
+      "turnInNpcId": "marshal_redbrook",
+      "xpReward": 800,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "gorrak",
+          "count": 1,
+          "label": "Gorrak the Ruthless slain"
+        }
+      ]
+    },
+    "q_mogger": {
+      "id": "q_mogger",
+      "name": "Mogger Must Fall",
+      "giverNpcId": "marshal_redbrook",
+      "turnInNpcId": "marshal_redbrook",
+      "xpReward": 1200,
+      "copperReward": 900,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "mogger",
+          "count": 1,
+          "label": "Mogger slain"
+        }
+      ]
+    },
+    "q_prof_attune_smith": {
+      "id": "q_prof_attune_smith",
+      "name": "The Smith",
+      "giverNpcId": "forgemistress_darva",
+      "turnInNpcId": "forgemistress_darva",
+      "xpReward": 150,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "gather",
+          "nodeType": "ore",
+          "count": 3,
+          "label": "Ore vein harvested"
+        }
+      ]
+    },
+    "q_prof_attune_outfitter": {
+      "id": "q_prof_attune_outfitter",
+      "name": "The Outfitter",
+      "giverNpcId": "weaver_ottilie",
+      "turnInNpcId": "weaver_ottilie",
+      "xpReward": 150,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "webwood_spider",
+          "count": 4,
+          "label": "Sableweb Lurker culled"
+        }
+      ]
+    },
+    "q_prof_attune_apothecary": {
+      "id": "q_prof_attune_apothecary",
+      "name": "A Recipe Worth Keeping",
+      "giverNpcId": "cook_marlow",
+      "turnInNpcId": "cook_marlow",
+      "xpReward": 150,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "wild_boar",
+          "count": 4,
+          "label": "Wild Boar hunted"
+        }
+      ]
+    },
+    "q_prof_attune_bombardier": {
+      "id": "q_prof_attune_bombardier",
+      "name": "A Volatile Arrangement",
+      "giverNpcId": "tinker_gizzel",
+      "turnInNpcId": "tinker_gizzel",
+      "xpReward": 150,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "gather",
+          "nodeType": "herb",
+          "count": 3,
+          "label": "Herb patch harvested"
+        }
+      ]
+    },
+    "q_prof_amends_smith": {
+      "id": "q_prof_amends_smith",
+      "name": "Back to the Forge",
+      "giverNpcId": "forgemistress_darva",
+      "turnInNpcId": "forgemistress_darva",
+      "xpReward": 100,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "forest_wolf",
+          "count": 5,
+          "label": "Forest Wolf slain"
+        }
+      ]
+    },
+    "q_prof_amends_outfitter": {
+      "id": "q_prof_amends_outfitter",
+      "name": "Threads Rejoined",
+      "giverNpcId": "weaver_ottilie",
+      "turnInNpcId": "weaver_ottilie",
+      "xpReward": 100,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "webwood_spider",
+          "count": 5,
+          "label": "Sableweb Lurker culled"
+        }
+      ]
+    },
+    "q_prof_amends_apothecary": {
+      "id": "q_prof_amends_apothecary",
+      "name": "Back on the Stove",
+      "giverNpcId": "cook_marlow",
+      "turnInNpcId": "cook_marlow",
+      "xpReward": 100,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "wild_boar",
+          "count": 5,
+          "label": "Wild Boar hunted"
+        }
+      ]
+    },
+    "q_prof_amends_bombardier": {
+      "id": "q_prof_amends_bombardier",
+      "name": "The Ledger Grows",
+      "giverNpcId": "tinker_gizzel",
+      "turnInNpcId": "tinker_gizzel",
+      "xpReward": 100,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "tunnel_rat",
+          "count": 5,
+          "label": "Deeprock Digger exterminated"
+        }
+      ]
+    },
+    "q_prof_workorder_forge": {
+      "id": "q_prof_workorder_forge",
+      "name": "Forge Work Order",
+      "giverNpcId": "forgemistress_darva",
+      "turnInNpcId": "forgemistress_darva",
+      "xpReward": 100,
+      "copperReward": 16,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "copper_ore",
+          "count": 8,
+          "label": "Copper Ore delivered"
+        }
+      ]
+    },
+    "q_prof_workorder_kitchens": {
+      "id": "q_prof_workorder_kitchens",
+      "name": "Kitchens Work Order",
+      "giverNpcId": "cook_marlow",
+      "turnInNpcId": "cook_marlow",
+      "xpReward": 100,
+      "copperReward": 16,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "game_meat",
+          "count": 8,
+          "label": "Game Meat delivered"
+        }
+      ]
+    },
+    "q_prof_workorder_loom": {
+      "id": "q_prof_workorder_loom",
+      "name": "Loom Work Order",
+      "giverNpcId": "weaver_ottilie",
+      "turnInNpcId": "weaver_ottilie",
+      "xpReward": 100,
+      "copperReward": 15,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "spider_silk",
+          "count": 6,
+          "label": "Spider Silk delivered"
+        }
+      ]
+    },
+    "q_prof_workorder_toolworks": {
+      "id": "q_prof_workorder_toolworks",
+      "name": "Toolworks Work Order",
+      "giverNpcId": "tinker_gizzel",
+      "turnInNpcId": "tinker_gizzel",
+      "xpReward": 100,
+      "copperReward": 16,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "ironbark_log",
+          "count": 8,
+          "label": "Ironbark Log delivered"
+        }
+      ]
+    },
+    "q_prof_hobby_switch": {
+      "id": "q_prof_hobby_switch",
+      "name": "A Different Pastime",
+      "giverNpcId": "smith_haldren",
+      "turnInNpcId": "smith_haldren",
+      "xpReward": 0,
+      "copperReward": 0,
+      "objectives": [
+        {
+          "type": "gather",
+          "nodeType": "herb",
+          "count": 3,
+          "label": "Herb patch harvested"
+        }
+      ]
+    },
+    "q_fenbridge_muster": {
+      "id": "q_fenbridge_muster",
+      "name": "Muster at Fenbridge",
+      "giverNpcId": "brother_aldric",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 300,
+      "copperReward": 200,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "fen_muster_order",
+          "count": 1,
+          "label": "Fenbridge Muster Order"
+        }
+      ]
+    },
+    "q_prowlers": {
+      "id": "q_prowlers",
+      "name": "Teeth of the Fen",
+      "giverNpcId": "warden_fenwick",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 800,
+      "copperReward": 300,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "mire_prowler",
+          "count": 12,
+          "label": "Mire Prowler slain"
+        }
+      ]
+    },
+    "q_prowler_pelts": {
+      "id": "q_prowler_pelts",
+      "name": "Pelts for the Causeway",
+      "giverNpcId": "provisioner_hale",
+      "turnInNpcId": "provisioner_hale",
+      "xpReward": 850,
+      "copperReward": 350,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "mire_prowler_pelt",
+          "count": 8,
+          "label": "Mire Prowler Pelt"
+        }
+      ]
+    },
+    "q_fen_supplies": {
+      "id": "q_fen_supplies",
+      "name": "The Lost Caravan",
+      "giverNpcId": "provisioner_hale",
+      "turnInNpcId": "provisioner_hale",
+      "xpReward": 900,
+      "copperReward": 350,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "lost_caravan_goods",
+          "count": 5,
+          "label": "Lost Caravan Goods"
+        }
+      ]
+    },
+    "q_the_codfather": {
+      "id": "q_the_codfather",
+      "name": "The Codfather",
+      "giverNpcId": "provisioner_hale",
+      "turnInNpcId": "provisioner_hale",
+      "xpReward": 950,
+      "copperReward": 450,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "the_codfather",
+          "count": 1,
+          "label": "The Codfather"
+        }
+      ]
+    },
+    "q_deepfen": {
+      "id": "q_deepfen",
+      "name": "The Deepfen Stirs",
+      "giverNpcId": "warden_fenwick",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 1000,
+      "copperReward": 400,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "deepfen_murloc",
+          "count": 12,
+          "label": "Deepfen Snapper slain"
+        }
+      ]
+    },
+    "q_idols": {
+      "id": "q_idols",
+      "name": "Idols of the Deep",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1050,
+      "copperReward": 400,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "waterlogged_idol",
+          "count": 5,
+          "label": "Waterlogged Idol"
+        }
+      ]
+    },
+    "q_aldrics_fallen_star": {
+      "id": "q_aldrics_fallen_star",
+      "name": "Aldric",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 900,
+      "copperReward": 300,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "unknown_alien_weaponry",
+          "count": 1,
+          "label": "Unknown Alien Weaponry"
+        }
+      ]
+    },
+    "q_deepfen_purge": {
+      "id": "q_deepfen_purge",
+      "name": "Back to the Shallows",
+      "giverNpcId": "warden_fenwick",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 1100,
+      "copperReward": 450,
+      "objectives": [
+        {
+          "type": "interact",
+          "count": 5,
+          "label": "Mudfin huts burned"
+        }
+      ]
+    },
+    "q_widows": {
+      "id": "q_widows",
+      "name": "Silk and Venom",
+      "giverNpcId": "herbalist_yara",
+      "turnInNpcId": "herbalist_yara",
+      "xpReward": 1200,
+      "copperReward": 450,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "mire_widow",
+          "count": 10,
+          "label": "Mirefen Widow slain"
+        },
+        {
+          "type": "collect",
+          "itemId": "widow_venom_sac",
+          "count": 6,
+          "label": "Widow Venom Sac"
+        }
+      ]
+    },
+    "q_broodmother": {
+      "id": "q_broodmother",
+      "name": "The Broodmother",
+      "giverNpcId": "herbalist_yara",
+      "turnInNpcId": "herbalist_yara",
+      "xpReward": 1250,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "spider_egg",
+          "count": 8,
+          "label": "Broodmother eggs destroyed"
+        },
+        {
+          "type": "kill",
+          "targetMobId": "mirefen_broodmother",
+          "count": 1,
+          "label": "The Broodmother slain"
+        }
+      ]
+    },
+    "q_drowned": {
+      "id": "q_drowned",
+      "name": "The Drowned Dead",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1400,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "drowned_dead",
+          "count": 12,
+          "label": "Drowned Dead laid to rest"
+        }
+      ]
+    },
+    "q_drowned_censers": {
+      "id": "q_drowned_censers",
+      "name": "Censers from the Deep",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1300,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "rusted_censer",
+          "count": 4,
+          "label": "Rusted Censer"
+        }
+      ]
+    },
+    "q_no_rest": {
+      "id": "q_no_rest",
+      "name": "No Rest in the Reeds",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1500,
+      "copperReward": 550,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "drowned_warlord",
+          "count": 1,
+          "label": "The Drowned Warlord slain"
+        }
+      ]
+    },
+    "q_rite_of_redemption": {
+      "id": "q_rite_of_redemption",
+      "name": "The Rite of Recall",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1800,
+      "copperReward": 600,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "drowned_dead",
+          "count": 8,
+          "label": "Drowned Dead laid to rest"
+        }
+      ]
+    },
+    "q_trolls": {
+      "id": "q_trolls",
+      "name": "Mounds of the Mirefen",
+      "giverNpcId": "warden_fenwick",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 1600,
+      "copperReward": 600,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "fen_troll",
+          "count": 12,
+          "label": "Mirefen Troll slain"
+        }
+      ]
+    },
+    "q_troll_fetishes": {
+      "id": "q_troll_fetishes",
+      "name": "Fetish and Bone",
+      "giverNpcId": "scout_maren",
+      "turnInNpcId": "scout_maren",
+      "xpReward": 1650,
+      "copperReward": 600,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "troll_fetish",
+          "count": 8,
+          "label": "Mirefen Troll Fetish"
+        }
+      ]
+    },
+    "q_grubjaw": {
+      "id": "q_grubjaw",
+      "name": "The Glutton",
+      "giverNpcId": "provisioner_hale",
+      "turnInNpcId": "provisioner_hale",
+      "xpReward": 1700,
+      "copperReward": 700,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "grubjaw_tusk",
+          "count": 1,
+          "label": "Grubjaw"
+        }
+      ]
+    },
+    "q_cult_camp": {
+      "id": "q_cult_camp",
+      "name": "Robes in the Reeds",
+      "giverNpcId": "scout_maren",
+      "turnInNpcId": "scout_maren",
+      "xpReward": 1800,
+      "copperReward": 700,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "gravecaller_cultist",
+          "count": 12,
+          "label": "Gravecaller Cultist slain"
+        }
+      ]
+    },
+    "q_summoners": {
+      "id": "q_summoners",
+      "name": "Stopping the Summoning",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1900,
+      "copperReward": 750,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "gravecaller_summoner",
+          "count": 8,
+          "label": "Gravecaller Summoner slain"
+        },
+        {
+          "type": "collect",
+          "itemId": "cult_cipher",
+          "count": 4,
+          "label": "Gravecaller Cipher"
+        }
+      ]
+    },
+    "q_deacon": {
+      "id": "q_deacon",
+      "name": "The Deacon of the Mire",
+      "giverNpcId": "warden_fenwick",
+      "turnInNpcId": "warden_fenwick",
+      "xpReward": 2200,
+      "copperReward": 1000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "deacon_voss",
+          "count": 1,
+          "label": "Deacon Voss slain"
+        }
+      ]
+    },
+    "q_bastion_door": {
+      "id": "q_bastion_door",
+      "name": "The Sunken Bastion",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 1200,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "bastion_ward_stone",
+          "count": 1,
+          "label": "Bastion Ward Stone"
+        }
+      ]
+    },
+    "q_olen": {
+      "id": "q_olen",
+      "name": "The Knight-Commander",
+      "giverNpcId": "scout_maren",
+      "turnInNpcId": "scout_maren",
+      "xpReward": 1800,
+      "copperReward": 800,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "knight_commander_olen",
+          "count": 1,
+          "label": "Knight-Commander Olen laid to rest"
+        }
+      ]
+    },
+    "q_mistcaller": {
+      "id": "q_mistcaller",
+      "name": "The Fogbinder",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "brother_aldric_fen",
+      "xpReward": 2800,
+      "copperReward": 2500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "vael_the_mistcaller",
+          "count": 1,
+          "label": "Vael the Fogbinder slain"
+        }
+      ]
+    },
+    "q_prof_workorder_tannery": {
+      "id": "q_prof_workorder_tannery",
+      "name": "Tannery Work Order",
+      "giverNpcId": "tanner_hesk",
+      "turnInNpcId": "tanner_hesk",
+      "xpReward": 100,
+      "copperReward": 20,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "rough_hide",
+          "count": 8,
+          "label": "Rough Hide delivered"
+        }
+      ]
+    },
+    "q_highwatch_summons": {
+      "id": "q_highwatch_summons",
+      "name": "The Watch on the Peaks",
+      "giverNpcId": "brother_aldric_fen",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 500,
+      "copperReward": 500,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "highwatch_summons",
+          "count": 1,
+          "label": "Highwatch Summons"
+        }
+      ]
+    },
+    "q_stalkers": {
+      "id": "q_stalkers",
+      "name": "Stalkers on the Ridge",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 2200,
+      "copperReward": 1000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "ridge_stalker",
+          "count": 12,
+          "label": "Ridge Stalker slain"
+        }
+      ]
+    },
+    "q_stalker_pelts": {
+      "id": "q_stalker_pelts",
+      "name": "First Frost at Highwatch",
+      "giverNpcId": "quartermaster_bree",
+      "turnInNpcId": "quartermaster_bree",
+      "xpReward": 2300,
+      "copperReward": 1000,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "ridge_stalker_pelt",
+          "count": 8,
+          "label": "Ridge Stalker Pelt"
+        }
+      ]
+    },
+    "q_stalkers_return": {
+      "id": "q_stalkers_return",
+      "name": "The Stalkers Return",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 2400,
+      "copperReward": 1100,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "ridge_stalker",
+          "count": 14,
+          "label": "Ridge Stalker slain"
+        }
+      ]
+    },
+    "q_stalker_cloaks": {
+      "id": "q_stalker_cloaks",
+      "name": "Cloaks for the Watch",
+      "giverNpcId": "quartermaster_bree",
+      "turnInNpcId": "quartermaster_bree",
+      "xpReward": 2400,
+      "copperReward": 1200,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "ridge_stalker_pelt",
+          "count": 10,
+          "label": "Ridge Stalker Pelt"
+        }
+      ]
+    },
+    "q_old_cragmaw": {
+      "id": "q_old_cragmaw",
+      "name": "Old Cragmaw",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 2700,
+      "copperReward": 1500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "old_cragmaw",
+          "count": 1,
+          "label": "Old Cragmaw slain"
+        }
+      ]
+    },
+    "q_kobold_tunnels": {
+      "id": "q_kobold_tunnels",
+      "name": "Deeprock Trouble",
+      "giverNpcId": "loremaster_caddis",
+      "turnInNpcId": "loremaster_caddis",
+      "xpReward": 2500,
+      "copperReward": 1200,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "deeprock_kobold",
+          "count": 12,
+          "label": "Deeprock Tunneler slain"
+        }
+      ]
+    },
+    "q_glowing_wax": {
+      "id": "q_glowing_wax",
+      "name": "Strange Wax",
+      "giverNpcId": "quartermaster_bree",
+      "turnInNpcId": "quartermaster_bree",
+      "xpReward": 2500,
+      "copperReward": 1200,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "glowing_wax",
+          "count": 6,
+          "label": "Glowing Wax"
+        }
+      ]
+    },
+    "q_ogre_edges": {
+      "id": "q_ogre_edges",
+      "name": "Ogres at the Foothills",
+      "giverNpcId": "scout_maren_highwatch",
+      "turnInNpcId": "scout_maren_highwatch",
+      "xpReward": 2900,
+      "copperReward": 1400,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "thornpeak_ogre",
+          "count": 12,
+          "label": "Thornpeak Ogre slain"
+        }
+      ]
+    },
+    "q_ogre_totems": {
+      "id": "q_ogre_totems",
+      "name": "Totems of War",
+      "giverNpcId": "scout_maren_highwatch",
+      "turnInNpcId": "scout_maren_highwatch",
+      "xpReward": 2800,
+      "copperReward": 1400,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "ogre_war_totem",
+          "count": 6,
+          "label": "Ogre War Totem"
+        }
+      ]
+    },
+    "q_ogre_bounty": {
+      "id": "q_ogre_bounty",
+      "name": "The Captain",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 3000,
+      "copperReward": 1500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "brakka_wallbreaker",
+          "count": 1,
+          "label": "Brakka the Wallbreaker slain"
+        }
+      ]
+    },
+    "q_crushers": {
+      "id": "q_crushers",
+      "name": "Break the War-Camp",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 3600,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "ogre_crusher",
+          "count": 10,
+          "label": "Thornpeak Crusher slain"
+        }
+      ]
+    },
+    "q_drogmar": {
+      "id": "q_drogmar",
+      "name": "Warlord Drogmar",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 4000,
+      "copperReward": 2500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "warlord_drogmar",
+          "count": 1,
+          "label": "Warlord Drogmar slain"
+        }
+      ]
+    },
+    "q_elementals": {
+      "id": "q_elementals",
+      "name": "The Mountain Wakes",
+      "giverNpcId": "loremaster_caddis",
+      "turnInNpcId": "loremaster_caddis",
+      "xpReward": 3600,
+      "copperReward": 1800,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "stormcrag_elemental",
+          "count": 12,
+          "label": "Stormcrag Elemental slain"
+        }
+      ]
+    },
+    "q_shard_cores": {
+      "id": "q_shard_cores",
+      "name": "Cores of the Storm",
+      "giverNpcId": "loremaster_caddis",
+      "turnInNpcId": "loremaster_caddis",
+      "xpReward": 3700,
+      "copperReward": 1800,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "storm_core",
+          "count": 6,
+          "label": "Storm Core"
+        }
+      ]
+    },
+    "q_kazzix": {
+      "id": "q_kazzix",
+      "name": "The Shardlord",
+      "giverNpcId": "loremaster_caddis",
+      "turnInNpcId": "loremaster_caddis",
+      "xpReward": 3800,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "kazzix_heartshard",
+          "count": 1,
+          "label": "Kazzix"
+        }
+      ]
+    },
+    "q_zealots": {
+      "id": "q_zealots",
+      "name": "Chants on the Wind",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4000,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "wyrmcult_zealot",
+          "count": 12,
+          "label": "Wyrmcult Zealot slain"
+        }
+      ]
+    },
+    "q_cult_orders": {
+      "id": "q_cult_orders",
+      "name": "Orders from Below",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 3800,
+      "copperReward": 1800,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "wyrmcult_orders",
+          "count": 1,
+          "label": "Orders from Below"
+        }
+      ]
+    },
+    "q_necromancers": {
+      "id": "q_necromancers",
+      "name": "The Phylactery Ring",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4200,
+      "copperReward": 2200,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "ritual_phylactery",
+          "count": 5,
+          "label": "Ritual Phylactery"
+        }
+      ]
+    },
+    "q_revenants": {
+      "id": "q_revenants",
+      "name": "The Revenant Fields",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 4300,
+      "copperReward": 2200,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "boneclad_revenant",
+          "count": 12,
+          "label": "Boneclad Revenant slain"
+        }
+      ]
+    },
+    "q_revenant_vanguard": {
+      "id": "q_revenant_vanguard",
+      "name": "Bones of the Vanguard",
+      "giverNpcId": "captain_thessaly",
+      "turnInNpcId": "captain_thessaly",
+      "xpReward": 4500,
+      "copperReward": 2400,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "vanguard_bone",
+          "count": 10,
+          "label": "Vanguard Bone recovered"
+        }
+      ]
+    },
+    "q_wyrm_sigils": {
+      "id": "q_wyrm_sigils",
+      "name": "Sigils of the Wyrm",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 3600,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "gravewyrm_sigil",
+          "count": 3,
+          "label": "Gravewyrm Sigil"
+        }
+      ]
+    },
+    "q_breaking_the_seal": {
+      "id": "q_breaking_the_seal",
+      "name": "Breaking the Seal",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4200,
+      "copperReward": 2200,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "blessed_embers",
+          "count": 5,
+          "label": "Blessed Embers"
+        }
+      ]
+    },
+    "q_voice_below": {
+      "id": "q_voice_below",
+      "name": "The Voice Below",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4400,
+      "copperReward": 2400,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "threnos_first_voice",
+          "count": 1,
+          "label": "Threnos the First Voice silenced"
+        },
+        {
+          "type": "kill",
+          "targetMobId": "wyrmcult_necromancer",
+          "count": 6,
+          "label": "Wyrmcult Necromancer slain"
+        }
+      ]
+    },
+    "q_sanctum_gate": {
+      "id": "q_sanctum_gate",
+      "name": "The Sanctum Gate",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4000,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "sanctum_key_shard",
+          "count": 3,
+          "label": "Sanctum Key Shard"
+        }
+      ]
+    },
+    "q_korgath": {
+      "id": "q_korgath",
+      "name": "The Bound Guardian",
+      "giverNpcId": "scout_maren_highwatch",
+      "turnInNpcId": "scout_maren_highwatch",
+      "xpReward": 4200,
+      "copperReward": 2500,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "korgath_the_bound",
+          "count": 1,
+          "label": "Korgath the Bound slain"
+        }
+      ]
+    },
+    "q_velkhar": {
+      "id": "q_velkhar",
+      "name": "The Grand Necromancer",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4500,
+      "copperReward": 3000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "grand_necromancer_velkhar",
+          "count": 1,
+          "label": "Grand Necromancer Velkhar slain"
+        }
+      ]
+    },
+    "q_gravewyrm": {
+      "id": "q_gravewyrm",
+      "name": "Korzul the Gravewyrm",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 5300,
+      "copperReward": 25000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "korzul_the_gravewyrm",
+          "count": 1,
+          "label": "Korzul the Gravewyrm slain"
+        }
+      ]
+    },
+    "q_nythraxis_restless_dead": {
+      "id": "q_nythraxis_restless_dead",
+      "name": "Unrest in the Bonefields",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4200,
+      "copperReward": 2000,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "runed_bone_shard",
+          "count": 10,
+          "label": "Runed Bone Shard"
+        }
+      ]
+    },
+    "q_nythraxis_graves": {
+      "id": "q_nythraxis_graves",
+      "name": "Graves of the Forgotten",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4300,
+      "copperReward": 2200,
+      "objectives": [
+        {
+          "type": "interact",
+          "count": 1,
+          "label": "Vision at the Grave of Captain Aldren"
+        },
+        {
+          "type": "interact",
+          "count": 1,
+          "label": "Vision at the Grave of High Priest Malric"
+        },
+        {
+          "type": "interact",
+          "count": 1,
+          "label": "Vision at the Grave of Royal Assassin Voss"
+        }
+      ]
+    },
+    "q_nythraxis_sealed_crypt": {
+      "id": "q_nythraxis_sealed_crypt",
+      "name": "The Abandoned Crypt",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 4600,
+      "copperReward": 2500,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "captains_crest",
+          "count": 1,
+          "label": "Crypt Keystone Upper"
+        },
+        {
+          "type": "collect",
+          "itemId": "priests_sigil",
+          "count": 1,
+          "label": "Crypt Keystone Lower"
+        },
+        {
+          "type": "collect",
+          "itemId": "royal_seal",
+          "count": 1,
+          "label": "Ancient Diary"
+        }
+      ]
+    },
+    "q_nythraxis_bound_guardian": {
+      "id": "q_nythraxis_bound_guardian",
+      "name": "The Bound Guardian",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 5200,
+      "copperReward": 3500,
+      "objectives": [
+        {
+          "type": "interact",
+          "count": 1,
+          "label": "Crypt Keystone used at the ritual circle"
+        },
+        {
+          "type": "kill",
+          "targetMobId": "bound_guardian",
+          "count": 1,
+          "label": "The Bound Guardian defeated"
+        },
+        {
+          "type": "collect",
+          "itemId": "kings_signet",
+          "count": 1,
+          "label": "King"
+        }
+      ]
+    },
+    "q_nythraxis_scourges_end": {
+      "id": "q_nythraxis_scourges_end",
+      "name": "Scourge",
+      "giverNpcId": "brother_aldric_highwatch",
+      "turnInNpcId": "brother_aldric_highwatch",
+      "xpReward": 0,
+      "copperReward": 25000,
+      "objectives": [
+        {
+          "type": "kill",
+          "targetMobId": "nythraxis_scourge_of_thornpeak",
+          "count": 1,
+          "label": "Nythraxis slain"
+        }
+      ]
+    },
+    "q_prof_workorder_apothecary": {
+      "id": "q_prof_workorder_apothecary",
+      "name": "Apothecary Work Order",
+      "giverNpcId": "alchemist_verane",
+      "turnInNpcId": "alchemist_verane",
+      "xpReward": 100,
+      "copperReward": 45,
+      "objectives": [
+        {
+          "type": "collect",
+          "itemId": "goldleaf_herb",
+          "count": 6,
+          "label": "Goldleaf Herb delivered"
+        }
+      ]
+    },
+    "q_riding_lessons": {
+      "id": "q_riding_lessons",
+      "name": "Riding Lessons",
+      "giverNpcId": "stablemaster_marla",
+      "turnInNpcId": "stablemaster_marla",
+      "xpReward": 3000,
+      "copperReward": 5000,
+      "objectives": [
+        {
+          "type": "interact",
+          "count": 1,
+          "label": "Tame the Valorsteed"
+        }
+      ]
+    }
+  },
+  "quest_givers": {
+    "q_prof_intro": "foreman_odell",
+    "q_wolves": "marshal_redbrook",
+    "q_greyjaw": "marshal_redbrook",
+    "q_boars": "trader_wilkes",
+    "q_spiders": "apothecary_lin",
+    "q_murlocs": "fisherman_brandt",
+    "q_mine": "foreman_odell",
+    "q_bones": "brother_aldric",
+    "q_supplies": "trader_wilkes",
+    "q_whispers": "brother_aldric",
+    "q_names_of_the_dead": "brother_aldric",
+    "q_silence_the_call": "brother_aldric",
+    "q_rite": "brother_aldric",
+    "q_hollow": "brother_aldric",
+    "q_sexton": "brother_aldric",
+    "q_gravecallers_trail": "brother_aldric",
+    "q_divine_tome": "brother_aldric",
+    "q_bandits": "marshal_redbrook",
+    "q_ringleader": "marshal_redbrook",
+    "q_mogger": "marshal_redbrook",
+    "q_prof_attune_smith": "forgemistress_darva",
+    "q_prof_attune_outfitter": "weaver_ottilie",
+    "q_prof_attune_apothecary": "cook_marlow",
+    "q_prof_attune_bombardier": "tinker_gizzel",
+    "q_prof_amends_smith": "forgemistress_darva",
+    "q_prof_amends_outfitter": "weaver_ottilie",
+    "q_prof_amends_apothecary": "cook_marlow",
+    "q_prof_amends_bombardier": "tinker_gizzel",
+    "q_prof_workorder_forge": "forgemistress_darva",
+    "q_prof_workorder_kitchens": "cook_marlow",
+    "q_prof_workorder_loom": "weaver_ottilie",
+    "q_prof_workorder_toolworks": "tinker_gizzel",
+    "q_prof_hobby_switch": "smith_haldren",
+    "q_fenbridge_muster": "brother_aldric",
+    "q_prowlers": "warden_fenwick",
+    "q_prowler_pelts": "provisioner_hale",
+    "q_fen_supplies": "provisioner_hale",
+    "q_the_codfather": "provisioner_hale",
+    "q_deepfen": "warden_fenwick",
+    "q_idols": "brother_aldric_fen",
+    "q_aldrics_fallen_star": "brother_aldric_fen",
+    "q_deepfen_purge": "warden_fenwick",
+    "q_widows": "herbalist_yara",
+    "q_broodmother": "herbalist_yara",
+    "q_drowned": "brother_aldric_fen",
+    "q_drowned_censers": "brother_aldric_fen",
+    "q_no_rest": "brother_aldric_fen",
+    "q_rite_of_redemption": "brother_aldric_fen",
+    "q_trolls": "warden_fenwick",
+    "q_troll_fetishes": "scout_maren",
+    "q_grubjaw": "provisioner_hale",
+    "q_cult_camp": "scout_maren",
+    "q_summoners": "brother_aldric_fen",
+    "q_deacon": "warden_fenwick",
+    "q_bastion_door": "brother_aldric_fen",
+    "q_olen": "scout_maren",
+    "q_mistcaller": "brother_aldric_fen",
+    "q_prof_workorder_tannery": "tanner_hesk",
+    "q_highwatch_summons": "brother_aldric_fen",
+    "q_stalkers": "captain_thessaly",
+    "q_stalker_pelts": "quartermaster_bree",
+    "q_stalkers_return": "captain_thessaly",
+    "q_stalker_cloaks": "quartermaster_bree",
+    "q_old_cragmaw": "captain_thessaly",
+    "q_kobold_tunnels": "loremaster_caddis",
+    "q_glowing_wax": "quartermaster_bree",
+    "q_ogre_edges": "scout_maren_highwatch",
+    "q_ogre_totems": "scout_maren_highwatch",
+    "q_ogre_bounty": "captain_thessaly",
+    "q_crushers": "captain_thessaly",
+    "q_drogmar": "captain_thessaly",
+    "q_elementals": "loremaster_caddis",
+    "q_shard_cores": "loremaster_caddis",
+    "q_kazzix": "loremaster_caddis",
+    "q_zealots": "brother_aldric_highwatch",
+    "q_cult_orders": "brother_aldric_highwatch",
+    "q_necromancers": "brother_aldric_highwatch",
+    "q_revenants": "captain_thessaly",
+    "q_revenant_vanguard": "captain_thessaly",
+    "q_wyrm_sigils": "brother_aldric_highwatch",
+    "q_breaking_the_seal": "brother_aldric_highwatch",
+    "q_voice_below": "brother_aldric_highwatch",
+    "q_sanctum_gate": "brother_aldric_highwatch",
+    "q_korgath": "scout_maren_highwatch",
+    "q_velkhar": "brother_aldric_highwatch",
+    "q_gravewyrm": "brother_aldric_highwatch",
+    "q_nythraxis_restless_dead": "brother_aldric_highwatch",
+    "q_nythraxis_graves": "brother_aldric_highwatch",
+    "q_nythraxis_sealed_crypt": "brother_aldric_highwatch",
+    "q_nythraxis_bound_guardian": "brother_aldric_highwatch",
+    "q_nythraxis_scourges_end": "brother_aldric_highwatch",
+    "q_prof_workorder_apothecary": "alchemist_verane",
+    "q_riding_lessons": "stablemaster_marla"
+  },
+  "quest_objectives": {
+    "q_prof_intro": [
+      {
+        "type": "gather",
+        "nodeType": "ore",
+        "count": 5,
+        "label": "Ore vein harvested"
+      }
+    ],
+    "q_wolves": [
+      {
+        "type": "kill",
+        "targetMobId": "forest_wolf",
+        "count": 8,
+        "label": "Forest Wolf slain"
+      }
+    ],
+    "q_greyjaw": [
+      {
+        "type": "collect",
+        "itemId": "greyjaw_fang",
+        "count": 1,
+        "label": "Old Greyjaw"
+      }
+    ],
+    "q_boars": [
+      {
+        "type": "collect",
+        "itemId": "boar_hide",
+        "count": 5,
+        "label": "Bristly Boar Hide"
+      }
+    ],
+    "q_spiders": [
+      {
+        "type": "kill",
+        "targetMobId": "webwood_spider",
+        "count": 6,
+        "label": "Sableweb Lurker slain"
+      },
+      {
+        "type": "collect",
+        "itemId": "webwood_silk",
+        "count": 4,
+        "label": "Sableweb Silk Gland"
+      }
+    ],
+    "q_murlocs": [
+      {
+        "type": "kill",
+        "targetMobId": "mudfin_murloc",
+        "count": 8,
+        "label": "Mudfin Skulker slain"
+      }
+    ],
+    "q_mine": [
+      {
+        "type": "kill",
+        "targetMobId": "tunnel_rat",
+        "count": 10,
+        "label": "Deeprock Digger slain"
+      }
+    ],
+    "q_bones": [
+      {
+        "type": "collect",
+        "itemId": "restless_skull",
+        "count": 8,
+        "label": "Restless Skulls recovered"
+      }
+    ],
+    "q_supplies": [
+      {
+        "type": "collect",
+        "itemId": "supply_crate",
+        "count": 4,
+        "label": "Stolen Supply Crate"
+      }
+    ],
+    "q_whispers": [
+      {
+        "type": "collect",
+        "itemId": "gravecaller_sigil",
+        "count": 1,
+        "label": "Gravecaller"
+      }
+    ],
+    "q_names_of_the_dead": [
+      {
+        "type": "collect",
+        "itemId": "weathered_ledger_page",
+        "count": 3,
+        "label": "Weathered Ledger Page"
+      }
+    ],
+    "q_silence_the_call": [
+      {
+        "type": "kill",
+        "targetMobId": "restless_bones",
+        "count": 12,
+        "label": "Restless Bones silenced"
+      }
+    ],
+    "q_rite": [
+      {
+        "type": "collect",
+        "itemId": "blessed_wax",
+        "count": 4,
+        "label": "Blessed Tallow"
+      },
+      {
+        "type": "collect",
+        "itemId": "ghostly_essence",
+        "count": 6,
+        "label": "Ghostly Essence"
+      }
+    ],
+    "q_hollow": [
+      {
+        "type": "kill",
+        "targetMobId": "morthen",
+        "count": 1,
+        "label": "Morthen the Gravecaller slain"
+      }
+    ],
+    "q_sexton": [
+      {
+        "type": "kill",
+        "targetMobId": "sexton_marrow",
+        "count": 1,
+        "label": "Sexton Marrow laid to rest"
+      }
+    ],
+    "q_gravecallers_trail": [
+      {
+        "type": "collect",
+        "itemId": "morthen_grimoire",
+        "count": 1,
+        "label": "Morthen"
+      }
+    ],
+    "q_divine_tome": [
+      {
+        "type": "kill",
+        "targetMobId": "restless_bones",
+        "count": 6,
+        "label": "Restless Bones laid to rest"
+      }
+    ],
+    "q_bandits": [
+      {
+        "type": "kill",
+        "targetMobId": "vale_bandit",
+        "count": 10,
+        "label": "Vale Bandit slain"
+      }
+    ],
+    "q_ringleader": [
+      {
+        "type": "kill",
+        "targetMobId": "gorrak",
+        "count": 1,
+        "label": "Gorrak the Ruthless slain"
+      }
+    ],
+    "q_mogger": [
+      {
+        "type": "kill",
+        "targetMobId": "mogger",
+        "count": 1,
+        "label": "Mogger slain"
+      }
+    ],
+    "q_prof_attune_smith": [
+      {
+        "type": "gather",
+        "nodeType": "ore",
+        "count": 3,
+        "label": "Ore vein harvested"
+      }
+    ],
+    "q_prof_attune_outfitter": [
+      {
+        "type": "kill",
+        "targetMobId": "webwood_spider",
+        "count": 4,
+        "label": "Sableweb Lurker culled"
+      }
+    ],
+    "q_prof_attune_apothecary": [
+      {
+        "type": "kill",
+        "targetMobId": "wild_boar",
+        "count": 4,
+        "label": "Wild Boar hunted"
+      }
+    ],
+    "q_prof_attune_bombardier": [
+      {
+        "type": "gather",
+        "nodeType": "herb",
+        "count": 3,
+        "label": "Herb patch harvested"
+      }
+    ],
+    "q_prof_amends_smith": [
+      {
+        "type": "kill",
+        "targetMobId": "forest_wolf",
+        "count": 5,
+        "label": "Forest Wolf slain"
+      }
+    ],
+    "q_prof_amends_outfitter": [
+      {
+        "type": "kill",
+        "targetMobId": "webwood_spider",
+        "count": 5,
+        "label": "Sableweb Lurker culled"
+      }
+    ],
+    "q_prof_amends_apothecary": [
+      {
+        "type": "kill",
+        "targetMobId": "wild_boar",
+        "count": 5,
+        "label": "Wild Boar hunted"
+      }
+    ],
+    "q_prof_amends_bombardier": [
+      {
+        "type": "kill",
+        "targetMobId": "tunnel_rat",
+        "count": 5,
+        "label": "Deeprock Digger exterminated"
+      }
+    ],
+    "q_prof_workorder_forge": [
+      {
+        "type": "collect",
+        "itemId": "copper_ore",
+        "count": 8,
+        "label": "Copper Ore delivered"
+      }
+    ],
+    "q_prof_workorder_kitchens": [
+      {
+        "type": "collect",
+        "itemId": "game_meat",
+        "count": 8,
+        "label": "Game Meat delivered"
+      }
+    ],
+    "q_prof_workorder_loom": [
+      {
+        "type": "collect",
+        "itemId": "spider_silk",
+        "count": 6,
+        "label": "Spider Silk delivered"
+      }
+    ],
+    "q_prof_workorder_toolworks": [
+      {
+        "type": "collect",
+        "itemId": "ironbark_log",
+        "count": 8,
+        "label": "Ironbark Log delivered"
+      }
+    ],
+    "q_prof_hobby_switch": [
+      {
+        "type": "gather",
+        "nodeType": "herb",
+        "count": 3,
+        "label": "Herb patch harvested"
+      }
+    ],
+    "q_fenbridge_muster": [
+      {
+        "type": "collect",
+        "itemId": "fen_muster_order",
+        "count": 1,
+        "label": "Fenbridge Muster Order"
+      }
+    ],
+    "q_prowlers": [
+      {
+        "type": "kill",
+        "targetMobId": "mire_prowler",
+        "count": 12,
+        "label": "Mire Prowler slain"
+      }
+    ],
+    "q_prowler_pelts": [
+      {
+        "type": "collect",
+        "itemId": "mire_prowler_pelt",
+        "count": 8,
+        "label": "Mire Prowler Pelt"
+      }
+    ],
+    "q_fen_supplies": [
+      {
+        "type": "collect",
+        "itemId": "lost_caravan_goods",
+        "count": 5,
+        "label": "Lost Caravan Goods"
+      }
+    ],
+    "q_the_codfather": [
+      {
+        "type": "collect",
+        "itemId": "the_codfather",
+        "count": 1,
+        "label": "The Codfather"
+      }
+    ],
+    "q_deepfen": [
+      {
+        "type": "kill",
+        "targetMobId": "deepfen_murloc",
+        "count": 12,
+        "label": "Deepfen Snapper slain"
+      }
+    ],
+    "q_idols": [
+      {
+        "type": "collect",
+        "itemId": "waterlogged_idol",
+        "count": 5,
+        "label": "Waterlogged Idol"
+      }
+    ],
+    "q_aldrics_fallen_star": [
+      {
+        "type": "collect",
+        "itemId": "unknown_alien_weaponry",
+        "count": 1,
+        "label": "Unknown Alien Weaponry"
+      }
+    ],
+    "q_deepfen_purge": [
+      {
+        "type": "interact",
+        "count": 5,
+        "label": "Mudfin huts burned"
+      }
+    ],
+    "q_widows": [
+      {
+        "type": "kill",
+        "targetMobId": "mire_widow",
+        "count": 10,
+        "label": "Mirefen Widow slain"
+      },
+      {
+        "type": "collect",
+        "itemId": "widow_venom_sac",
+        "count": 6,
+        "label": "Widow Venom Sac"
+      }
+    ],
+    "q_broodmother": [
+      {
+        "type": "kill",
+        "targetMobId": "spider_egg",
+        "count": 8,
+        "label": "Broodmother eggs destroyed"
+      },
+      {
+        "type": "kill",
+        "targetMobId": "mirefen_broodmother",
+        "count": 1,
+        "label": "The Broodmother slain"
+      }
+    ],
+    "q_drowned": [
+      {
+        "type": "kill",
+        "targetMobId": "drowned_dead",
+        "count": 12,
+        "label": "Drowned Dead laid to rest"
+      }
+    ],
+    "q_drowned_censers": [
+      {
+        "type": "collect",
+        "itemId": "rusted_censer",
+        "count": 4,
+        "label": "Rusted Censer"
+      }
+    ],
+    "q_no_rest": [
+      {
+        "type": "kill",
+        "targetMobId": "drowned_warlord",
+        "count": 1,
+        "label": "The Drowned Warlord slain"
+      }
+    ],
+    "q_rite_of_redemption": [
+      {
+        "type": "kill",
+        "targetMobId": "drowned_dead",
+        "count": 8,
+        "label": "Drowned Dead laid to rest"
+      }
+    ],
+    "q_trolls": [
+      {
+        "type": "kill",
+        "targetMobId": "fen_troll",
+        "count": 12,
+        "label": "Mirefen Troll slain"
+      }
+    ],
+    "q_troll_fetishes": [
+      {
+        "type": "collect",
+        "itemId": "troll_fetish",
+        "count": 8,
+        "label": "Mirefen Troll Fetish"
+      }
+    ],
+    "q_grubjaw": [
+      {
+        "type": "collect",
+        "itemId": "grubjaw_tusk",
+        "count": 1,
+        "label": "Grubjaw"
+      }
+    ],
+    "q_cult_camp": [
+      {
+        "type": "kill",
+        "targetMobId": "gravecaller_cultist",
+        "count": 12,
+        "label": "Gravecaller Cultist slain"
+      }
+    ],
+    "q_summoners": [
+      {
+        "type": "kill",
+        "targetMobId": "gravecaller_summoner",
+        "count": 8,
+        "label": "Gravecaller Summoner slain"
+      },
+      {
+        "type": "collect",
+        "itemId": "cult_cipher",
+        "count": 4,
+        "label": "Gravecaller Cipher"
+      }
+    ],
+    "q_deacon": [
+      {
+        "type": "kill",
+        "targetMobId": "deacon_voss",
+        "count": 1,
+        "label": "Deacon Voss slain"
+      }
+    ],
+    "q_bastion_door": [
+      {
+        "type": "collect",
+        "itemId": "bastion_ward_stone",
+        "count": 1,
+        "label": "Bastion Ward Stone"
+      }
+    ],
+    "q_olen": [
+      {
+        "type": "kill",
+        "targetMobId": "knight_commander_olen",
+        "count": 1,
+        "label": "Knight-Commander Olen laid to rest"
+      }
+    ],
+    "q_mistcaller": [
+      {
+        "type": "kill",
+        "targetMobId": "vael_the_mistcaller",
+        "count": 1,
+        "label": "Vael the Fogbinder slain"
+      }
+    ],
+    "q_prof_workorder_tannery": [
+      {
+        "type": "collect",
+        "itemId": "rough_hide",
+        "count": 8,
+        "label": "Rough Hide delivered"
+      }
+    ],
+    "q_highwatch_summons": [
+      {
+        "type": "collect",
+        "itemId": "highwatch_summons",
+        "count": 1,
+        "label": "Highwatch Summons"
+      }
+    ],
+    "q_stalkers": [
+      {
+        "type": "kill",
+        "targetMobId": "ridge_stalker",
+        "count": 12,
+        "label": "Ridge Stalker slain"
+      }
+    ],
+    "q_stalker_pelts": [
+      {
+        "type": "collect",
+        "itemId": "ridge_stalker_pelt",
+        "count": 8,
+        "label": "Ridge Stalker Pelt"
+      }
+    ],
+    "q_stalkers_return": [
+      {
+        "type": "kill",
+        "targetMobId": "ridge_stalker",
+        "count": 14,
+        "label": "Ridge Stalker slain"
+      }
+    ],
+    "q_stalker_cloaks": [
+      {
+        "type": "collect",
+        "itemId": "ridge_stalker_pelt",
+        "count": 10,
+        "label": "Ridge Stalker Pelt"
+      }
+    ],
+    "q_old_cragmaw": [
+      {
+        "type": "kill",
+        "targetMobId": "old_cragmaw",
+        "count": 1,
+        "label": "Old Cragmaw slain"
+      }
+    ],
+    "q_kobold_tunnels": [
+      {
+        "type": "kill",
+        "targetMobId": "deeprock_kobold",
+        "count": 12,
+        "label": "Deeprock Tunneler slain"
+      }
+    ],
+    "q_glowing_wax": [
+      {
+        "type": "collect",
+        "itemId": "glowing_wax",
+        "count": 6,
+        "label": "Glowing Wax"
+      }
+    ],
+    "q_ogre_edges": [
+      {
+        "type": "kill",
+        "targetMobId": "thornpeak_ogre",
+        "count": 12,
+        "label": "Thornpeak Ogre slain"
+      }
+    ],
+    "q_ogre_totems": [
+      {
+        "type": "collect",
+        "itemId": "ogre_war_totem",
+        "count": 6,
+        "label": "Ogre War Totem"
+      }
+    ],
+    "q_ogre_bounty": [
+      {
+        "type": "kill",
+        "targetMobId": "brakka_wallbreaker",
+        "count": 1,
+        "label": "Brakka the Wallbreaker slain"
+      }
+    ],
+    "q_crushers": [
+      {
+        "type": "kill",
+        "targetMobId": "ogre_crusher",
+        "count": 10,
+        "label": "Thornpeak Crusher slain"
+      }
+    ],
+    "q_drogmar": [
+      {
+        "type": "kill",
+        "targetMobId": "warlord_drogmar",
+        "count": 1,
+        "label": "Warlord Drogmar slain"
+      }
+    ],
+    "q_elementals": [
+      {
+        "type": "kill",
+        "targetMobId": "stormcrag_elemental",
+        "count": 12,
+        "label": "Stormcrag Elemental slain"
+      }
+    ],
+    "q_shard_cores": [
+      {
+        "type": "collect",
+        "itemId": "storm_core",
+        "count": 6,
+        "label": "Storm Core"
+      }
+    ],
+    "q_kazzix": [
+      {
+        "type": "collect",
+        "itemId": "kazzix_heartshard",
+        "count": 1,
+        "label": "Kazzix"
+      }
+    ],
+    "q_zealots": [
+      {
+        "type": "kill",
+        "targetMobId": "wyrmcult_zealot",
+        "count": 12,
+        "label": "Wyrmcult Zealot slain"
+      }
+    ],
+    "q_cult_orders": [
+      {
+        "type": "collect",
+        "itemId": "wyrmcult_orders",
+        "count": 1,
+        "label": "Orders from Below"
+      }
+    ],
+    "q_necromancers": [
+      {
+        "type": "collect",
+        "itemId": "ritual_phylactery",
+        "count": 5,
+        "label": "Ritual Phylactery"
+      }
+    ],
+    "q_revenants": [
+      {
+        "type": "kill",
+        "targetMobId": "boneclad_revenant",
+        "count": 12,
+        "label": "Boneclad Revenant slain"
+      }
+    ],
+    "q_revenant_vanguard": [
+      {
+        "type": "collect",
+        "itemId": "vanguard_bone",
+        "count": 10,
+        "label": "Vanguard Bone recovered"
+      }
+    ],
+    "q_wyrm_sigils": [
+      {
+        "type": "collect",
+        "itemId": "gravewyrm_sigil",
+        "count": 3,
+        "label": "Gravewyrm Sigil"
+      }
+    ],
+    "q_breaking_the_seal": [
+      {
+        "type": "collect",
+        "itemId": "blessed_embers",
+        "count": 5,
+        "label": "Blessed Embers"
+      }
+    ],
+    "q_voice_below": [
+      {
+        "type": "kill",
+        "targetMobId": "threnos_first_voice",
+        "count": 1,
+        "label": "Threnos the First Voice silenced"
+      },
+      {
+        "type": "kill",
+        "targetMobId": "wyrmcult_necromancer",
+        "count": 6,
+        "label": "Wyrmcult Necromancer slain"
+      }
+    ],
+    "q_sanctum_gate": [
+      {
+        "type": "collect",
+        "itemId": "sanctum_key_shard",
+        "count": 3,
+        "label": "Sanctum Key Shard"
+      }
+    ],
+    "q_korgath": [
+      {
+        "type": "kill",
+        "targetMobId": "korgath_the_bound",
+        "count": 1,
+        "label": "Korgath the Bound slain"
+      }
+    ],
+    "q_velkhar": [
+      {
+        "type": "kill",
+        "targetMobId": "grand_necromancer_velkhar",
+        "count": 1,
+        "label": "Grand Necromancer Velkhar slain"
+      }
+    ],
+    "q_gravewyrm": [
+      {
+        "type": "kill",
+        "targetMobId": "korzul_the_gravewyrm",
+        "count": 1,
+        "label": "Korzul the Gravewyrm slain"
+      }
+    ],
+    "q_nythraxis_restless_dead": [
+      {
+        "type": "collect",
+        "itemId": "runed_bone_shard",
+        "count": 10,
+        "label": "Runed Bone Shard"
+      }
+    ],
+    "q_nythraxis_graves": [
+      {
+        "type": "interact",
+        "count": 1,
+        "label": "Vision at the Grave of Captain Aldren"
+      },
+      {
+        "type": "interact",
+        "count": 1,
+        "label": "Vision at the Grave of High Priest Malric"
+      },
+      {
+        "type": "interact",
+        "count": 1,
+        "label": "Vision at the Grave of Royal Assassin Voss"
+      }
+    ],
+    "q_nythraxis_sealed_crypt": [
+      {
+        "type": "collect",
+        "itemId": "captains_crest",
+        "count": 1,
+        "label": "Crypt Keystone Upper"
+      },
+      {
+        "type": "collect",
+        "itemId": "priests_sigil",
+        "count": 1,
+        "label": "Crypt Keystone Lower"
+      },
+      {
+        "type": "collect",
+        "itemId": "royal_seal",
+        "count": 1,
+        "label": "Ancient Diary"
+      }
+    ],
+    "q_nythraxis_bound_guardian": [
+      {
+        "type": "interact",
+        "count": 1,
+        "label": "Crypt Keystone used at the ritual circle"
+      },
+      {
+        "type": "kill",
+        "targetMobId": "bound_guardian",
+        "count": 1,
+        "label": "The Bound Guardian defeated"
+      },
+      {
+        "type": "collect",
+        "itemId": "kings_signet",
+        "count": 1,
+        "label": "King"
+      }
+    ],
+    "q_nythraxis_scourges_end": [
+      {
+        "type": "kill",
+        "targetMobId": "nythraxis_scourge_of_thornpeak",
+        "count": 1,
+        "label": "Nythraxis slain"
+      }
+    ],
+    "q_prof_workorder_apothecary": [
+      {
+        "type": "collect",
+        "itemId": "goldleaf_herb",
+        "count": 6,
+        "label": "Goldleaf Herb delivered"
+      }
+    ],
+    "q_riding_lessons": [
+      {
+        "type": "interact",
+        "count": 1,
+        "label": "Tame the Valorsteed"
+      }
+    ]
+  }
+}

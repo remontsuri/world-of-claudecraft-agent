@@ -120,7 +120,7 @@
 | `memory.py` | ExperienceStore (Q-table + replay) |
 | `self_reflection.py` | Анализ паттернов, генерация hints |
 | `class_config.py` | Конфигурация классов (warrior/mage/hunter) |
-| `quest_objectives.cjs` | Статическая таблица квестов |
+| `game_agent_export.json` | Derived cache from `D:\woc-game` (generated) |
 | `npc_registry.py` | Canonical NPC registry (P0-A) |
 | `observation.py` | Кодирование состояния в obs (6 блоков) |
 | `skill_contracts.py` | Контракты навыков (pre/postconditions) |
