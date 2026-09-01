@@ -117,6 +117,7 @@ function readGameState() {
       x: e.pos.x, z: e.pos.z, hp: e.hp, maxHp: e.maxHp,
       hostile: !!e.hostile, dead: !!e.dead, lootable: !!e.lootable, looted: !!e.looted,
       dist,
+      templateId: e.templateId || e.mobId || null,
       questIds: e.questIds || e.questId || null,
       // vendor marker for the Python sell/buy gate: a merchant is an NPC with a
       // non-empty vendorItems stock (verified live: trader_wilkes vi=13, plain
