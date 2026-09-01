@@ -897,13 +897,28 @@ class GoalManager:
                 for e in (info.get("nearby") or []):
                     if (e.get("kind") == "npc" or e.get("type") == "npc") and (e.get("questIds") or e.get("questId")):
                         ctx["npc"] = e
-                        # CRITICAL: the questId must come from THIS npc's own
-                        # questIds, NOT the first active quest (which may belong to
-                        # a different NPC -> game rejects "quest unavailable").
-                        qids = e.get("questIds") or e.get("questId") or []
-                        if qids:
-                            ctx["questId"] = qids[0] if isinstance(qids, (list, tuple)) else qids
                         ctx["npcId"] = e.get("id")
+                        qids = e.get("questIds") or e.get("questId") or []
+                        qids_list = qids if isinstance(qids, (list, tuple)) else [qids]
+                        # Prefer an AVAILABLE quest for this NPC — avoids picking
+                        # a questId that isn't actually offered (turnInNpc=None
+                        # -> resolve_giver_pos fails -> dist=999 loop).
+                        avail = (quests.get("available") or [])
+                        chosen = None
+                        for qid in qids_list:
+                            if any((aq.get("id") == qid or aq.get("questId") == qid) for aq in avail):
+                                chosen = qid
+                                # also pass the full quest object so
+                                # resolve_giver_pos can use turnInNpc coords
+                                for aq in avail:
+                                    if (aq.get("id") == qid or aq.get("questId") == qid):
+                                        ctx["quest"] = aq
+                                        break
+                                break
+                        if chosen is None and qids_list:
+                            chosen = qids_list[0]
+                        if chosen:
+                            ctx["questId"] = chosen
                         break
             elif action == SKILL_TURN_IN:
                 # surface the ready quest's id so browser_env sends it
@@ -920,6 +935,10 @@ class GoalManager:
                     tNpc = q.get("turnInNpc") or {}
                     if tNpc.get("id") is not None:
                         ctx["npcId"] = str(tNpc["id"])
+                        ctx["quest"] = q
+                        rid = q.get("id") or q.get("questId")
+                        if rid:
+                            ctx["questId"] = rid
                         break
         return action, ctx
 

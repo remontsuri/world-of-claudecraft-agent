@@ -213,6 +213,8 @@ async function applyAction(idx, cmd, gameClient) {
     case 2: { // accept_quest: accept the SPECIFIC quest via sim.acceptQuest(qid)
       const qid = (cmd && cmd.questId) || null;
       const npcId = (cmd && cmd.npcId) || null;
+      console.log('[BRIDGE accept_quest] CMD RECEIVED:', JSON.stringify(cmd));
+      console.log('[BRIDGE accept_quest] qid=%o npcId=%o', qid, npcId);
       // Offline fix: sim.acceptQuest requires the giver NPC to be present in
       // sim.entities within INTERACT_RANGE+2 (questNpcFor scan). In offline the
       // giver is never spawned into sim.entities, so acceptQuest always returns
@@ -223,10 +225,15 @@ async function applyAction(idx, cmd, gameClient) {
       try {
         const sim = window.__game.sim;
         const player = sim.player;
+        const npcCountBefore = Array.from(sim.entities.values()).filter(e => e.kind === 'npc').length;
+        console.log('[BRIDGE accept_quest] entities before: npcs=%d total=%d has(npcId)=%s',
+          npcCountBefore, sim.entities.size, npcId ? sim.entities.has(npcId) : 'N/A');
         if (sim && player && npcId && !sim.entities.has(npcId)) {
           const gp = (giverTable && giverTable[npcId]) || null;
           const px = player.pos ? player.pos.x : (gp ? gp.x : 0);
           const pz = player.pos ? player.pos.z : (gp ? gp.z : 0);
+          console.log('[BRIDGE accept_quest] force-spawning npcId=%o at (%o, %o) giverTable=%s',
+            npcId, px + 1.0, pz + 1.0, gp ? 'found' : 'miss');
           sim.addEntity({
             id: npcId,
             templateId: npcId,
@@ -234,8 +241,13 @@ async function applyAction(idx, cmd, gameClient) {
             name: npcId,
             pos: { x: px + 1.0, z: pz + 1.0 },
           });
+          console.log('[BRIDGE accept_quest] after spawn: has(npcId)=%s', sim.entities.has(npcId));
+        } else if (npcId) {
+          console.log('[BRIDGE accept_quest] npcId already in entities, skip spawn');
+        } else {
+          console.log('[BRIDGE accept_quest] WARNING: npcId is null, cannot force-spawn giver');
         }
-      } catch (_) { /* best-effort; acceptQuest reports honestly below */ }
+      } catch (e) { console.error('[BRIDGE accept_quest] spawn error:', e && e.message); }
       // Capture the giver (NPC id + live position) so Python can persist it in
       // WorldMemory. The live game does NOT return giverId in sim.questLog.
       let giverPos = null;
@@ -247,18 +259,26 @@ async function applyAction(idx, cmd, gameClient) {
           }
           return null;
         }, npcId).catch(() => null);
+        console.log('[BRIDGE accept_quest] giverPos captured:', giverPos);
       }
       lastAccept = { questId: qid, giverId: npcId, giverPos };
       if (qid) {
-        await gameClient.evaluate((id) => {
+        const acceptResult = await gameClient.evaluate((id) => {
           try {
             const sim = window.__game.sim;
             const pid = sim.player ? sim.player.id : null;
-            sim.acceptQuest(String(id), null, pid);
-          } catch (_) {}
+            console.log('[BRIDGE accept_quest] calling acceptQuest(%o) pid=%o', id, pid);
+            const result = sim.acceptQuest(String(id), null, pid);
+            console.log('[BRIDGE accept_quest] acceptQuest returned:', result);
+            // Check quest state after
+            const state = sim.questState(String(id));
+            console.log('[BRIDGE accept_quest] questState after:', state);
+            return { result, state };
+          } catch (e) { return { error: e.message }; }
         }, qid);
+        console.log('[BRIDGE accept_quest] acceptResult:', JSON.stringify(acceptResult));
       } else {
-        // fallback: bare interact() (legacy path, inconclusive in this build)
+        console.log('[BRIDGE accept_quest] WARNING: qid is null, falling back to interact()');
         await gameClient.evaluate(() => { try { window.__game.sim.interact(); } catch (_) {} });
       }
       break;

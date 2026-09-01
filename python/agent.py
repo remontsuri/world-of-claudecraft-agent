@@ -17,6 +17,11 @@ skill executes; memory changes the policy. That's the whole design.
 
 ENV_ERROR (headless server crash) is reported as outcome_kind="ENV_ERROR" and yields
 reward 0.0 — it must NOT poison the policy with a false "farm is bad" lesson.
+
+Source of truth for game facts (NPCs, quests, positions, ranges): D:\woc (official
+levy-street/world-of-claudecraft). Agent repo MUST NOT duplicate game data — only
+caches, normalized snapshots, learned memory, own stats. GameSource (game_source.py)
+is the dynamic CDP adapter; static JSON (giver_positions.json) is deprecated.
 """
 
 import os
@@ -33,6 +38,7 @@ from reward import outcome_reward
 from world_state import build_world_state
 import quest_skill
 from quest_capability import QuestCapability
+from game_source import GameSource
 
 # P0.3: трассировка горячего цикла за env-гейтом. Раньше _cycle() делал
 # 4 безусловных open()+write()+close() в _cycle.log на КАЖДОМ шаге — на
@@ -110,6 +116,12 @@ class Agent:
         # 3 is enough to survive a transient healer rejection without burning the
         # whole run; beyond that it is a real recovery failure, not bad luck.
         self.RESPAWN_MAX_ATTEMPTS = 3
+        # Dynamic game truth adapter — reads window.__game.sim.worldContent.npcs
+        # (91 NPCs with questIds) via CDP. This is the canonical source for giver
+        # positions; static giver_positions.json is DEPRECATED. Initialized lazily
+        # on first accept_quest so we don't pay CDP connect cost when the agent
+        # never needs quests.
+        self._game_source = None
 
     def refresh_hints(self):
         """Reload reflection hints from the journal into the live policy.
@@ -219,6 +231,11 @@ class Agent:
                 # giver first. Coordinates come from the LIVE snapshot (info.nearby), NOT
                 # ctx (policy does not guarantee ctx["npc"]["x"/"z"]).
                 if action == "accept_quest":
+                    import sys as _sys
+                    _sys.stderr.write("\n[AGENT accept_quest] === START ===\n")
+                    _sys.stderr.write("[AGENT accept_quest] ctx keys: %r\n" % list(ctx.keys()))
+                    _sys.stderr.write("[AGENT accept_quest] ctx.npcId=%r ctx.questId=%r\n" % (ctx.get("npcId"), ctx.get("questId")))
+                    _sys.stderr.write("[AGENT accept_quest] ctx[npc]=%r\n" % str((ctx.get("npc") or {}))[:200])
                     _json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "giver_positions.json")
                     _fsm = getattr(self, "fsm", None)
                     _qg = getattr(_fsm, "quest_giver", None) if _fsm is not None else None
@@ -227,6 +244,10 @@ class Agent:
                                  or (_qg.get("id") if isinstance(_qg, dict) else None))
                     _nearby = (info_before.get("nearby") if isinstance(info_before, dict)
                                else (self.env._last_info or {}).get("nearby")) or []
+                    _npcs_with_quests = [e for e in _nearby if isinstance(e, dict) and (e.get("questIds") or e.get("questId"))]
+                    _sys.stderr.write("[AGENT accept_quest] giver_id=%r nearby_n=%d npcs_with_quests=%d\n" % (_giver_id, len(_nearby), len(_npcs_with_quests)))
+                    for _qn in _npcs_with_quests[:3]:
+                        _sys.stderr.write("  [AGENT nearby qnpc] %s id=%s dist=%s questIds=%s\n" % (_qn.get("name"), _qn.get("id"), _qn.get("dist"), _qn.get("questIds")))
                     if not hasattr(self, "_giver_positions"):
                         try:
                             import json as _json
@@ -235,11 +256,27 @@ class Agent:
                         except Exception:
                             self._giver_positions = {}
                     _pp = (info_before.get("player_pos") if isinstance(info_before, dict) else None) or (self.env._last_info or {}).get("player_pos") or [0, 0]
+                    _quest_id = ctx.get("questId") or (ctx.get("npc") or {}).get("questIds", [None])[0]
+                    _gs = getattr(self, "_game_source", None)
+                    if _gs is None:
+                        try:
+                            _gs = GameSource()
+                            _gs.connect()
+                            self._game_source = _gs
+                        except Exception:
+                            _gs = None
+                    _tNpc_coords = None
+                    _q = ctx.get("quest")
+                    if isinstance(_q, dict):
+                        _tNpc = _q.get("turnInNpc") or {}
+                        if _tNpc.get("x") is not None:
+                            _tNpc_coords = (_tNpc.get("x"), _tNpc.get("z"))
                     _gpos = resolve_giver_pos(
-                        _giver_id, _nearby, _qg, getattr(self, "world_mem", None),
-                        getattr(self, "_giver_positions", {}), _pp)
-                    import sys as _sys
-                    _sys.stderr.write("[DBG aq] giver_id=%r gpos=%r pp=%r nearby_n=%d\n" % (_giver_id, _gpos, _pp, len(_nearby)))
+                        _quest_id, _giver_id, _nearby, _qg, getattr(self, "world_mem", None),
+                        getattr(self, "_giver_positions", {}), _pp,
+                        game_source=_gs,
+                        turnInNpc_coords=_tNpc_coords)
+                    _sys.stderr.write("[AGENT accept_quest] gpos=%r json_givers_count=%d quest_id=%r\n" % (_gpos, len(getattr(self, "_giver_positions", {})), _quest_id))
                     if _gpos is not None:
                         try:
                             _arrived = self.env._navigate_to_coord(_gpos[0], _gpos[1], max_steps=80)
@@ -261,8 +298,14 @@ class Agent:
                 if idx is None:
                     return info_before, "FAILURE", "OK"
                 before = info_before
+                if action == "accept_quest":
+                    import sys as _sys
+                    _sys.stderr.write("[AGENT accept_quest] payload to bridge: idx=%d ctx=%r\n" % (idx, {k: ctx.get(k) for k in ["npcId", "questId", "quest", "npc"]}))
                 self.env.step(idx, ctx)
                 after = self.env._last_info
+                if action == "accept_quest":
+                    import sys as _sys
+                    _sys.stderr.write("[AGENT accept_quest] bridge returned: giver=%r\n" % (getattr(self.env, "last_giver", None)))
                 # Persist the turn-in NPC in WorldMemory when we just accepted a quest.
                 # The live game does NOT return giverId in sim.questLog, so this is
                 # the ONLY place the agent acquires "quest X -> NPC Y at (x,z)".
@@ -598,17 +641,26 @@ if __name__ == "__main__":
             print(f"    {a:14s} {v:+.3f}")
     env.close()
 
-def resolve_giver_pos(giver_id, nearby, quest_giver, world_mem, json_givers, player_pos):
+def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
+                      json_givers, player_pos, game_source=None,
+                      turnInNpc_coords=None):
     """Resolve giver (x, z) for accept_quest navigation.
 
     Order (game truth wins over runtime memory that can drift/stale):
+      0. turnInNpc_coords — if active quest already has turnInNpc x/z, use that
+         directly. This avoids stale static JSON when policy has the full quest.
       1. live snapshot: info.nearby by giver_id
       2. live snapshot: nearest quest-NPC in nearby
+      2.5. GameSource (dynamic, from window.__game.sim.worldContent.npcs)
       3. fsm.quest_giver x/z
-      4. STATIC game table (giver_positions.json) - authoritative
-      5. world_mem.quest_givers - LAST (observed holding stale coords)
+      4. STATIC game table (giver_positions.json) — DEPRECATED
+      5. world_mem.quest_givers - LAST
     Returns (x, z) or None.
     """
+    # Priority 0: active quest turnInNpc — authoritative, never stale.
+    if turnInNpc_coords and turnInNpc_coords[0] is not None:
+        return turnInNpc_coords
+
     gpos = None
     if giver_id is not None:
         for e in nearby:
@@ -623,9 +675,21 @@ def resolve_giver_pos(giver_id, nearby, quest_giver, world_mem, json_givers, pla
         if qnpcs:
             gn = qnpcs[0]
             gpos = (gn.get("x"), gn.get("z"))
+    # Dynamic game truth: GameSource reads window.__game.sim.worldContent.npcs
+    # which has 91 NPCs with questIds — this is where offline NPC positions live,
+    # since offline does NOT spawn NPCs into sim.entities (info.nearby is empty
+    # for NPCs offline). Use it before falling back to stale static JSON.
+    if gpos is None and game_source is not None and quest_id:
+        try:
+            _gs_pos = game_source.get_giver_pos_for_quest(quest_id)
+            if _gs_pos is not None:
+                gpos = _gs_pos
+        except Exception:
+            pass  # best-effort; fall through to stale fallbacks
     if gpos is None and isinstance(quest_giver, dict) and quest_giver.get("x") is not None:
         gpos = (quest_giver.get("x"), quest_giver.get("z"))
     if gpos is None and json_givers:
+        # DEPRECATED — static duplicate, kept only until GameSource proven stable.
         # Exact match by giver_id first (policy named a specific NPC).
         if giver_id is not None and str(giver_id) in json_givers:
             _gd = json_givers[str(giver_id)]

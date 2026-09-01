@@ -402,7 +402,10 @@ function resolveTurnIn(r) {
 async function buildSnapshot(gameClient) {
   if (!gameClient) return null;
   const raw = await gameClient.evaluate(readGameState);
-  if (raw == null) return null;
+  if (raw == null) {
+    console.error('[snapshot] readGameState returned null/undefined');
+    return null;
+  }
   return resolveTurnIn(raw);
 }
 
