@@ -4,11 +4,12 @@
 // flat object, or null if the page/game is unavailable. No response wrapping
 // here — the caller (actions.js / dispatch) turns null into {ok:false,error}.
 
+const fs = require('fs');
 const path = require('path');
 // Game data: generated from D:\woc-game\src\sim\content\zone*.ts by
 // python/generate_game_export.py. This is a DERIVED cache — not a second
 // source-of-truth. Regenerate with `python python/generate_game_export.py`.
-const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'python', 'game_agent_export.json'), 'utf-8'));
+const EXPORT = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'python', 'game_agent_export.json'), 'utf-8'));
 const QUEST_OBJECTIVES = EXPORT.quest_objectives || {};
 const QUEST_GIVERS = EXPORT.quest_givers || {};
 
