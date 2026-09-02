@@ -106,27 +106,65 @@ function readGameState() {
   // весь snapshot -> агент не запускался).
   const QUEST_OBJECTIVES = {"q_prof_intro":[{"type":"gather","nodeType":"ore","count":5}],"q_wolves":[{"type":"kill","targetMobId":"forest_wolf","count":8}],"q_greyjaw":[{"type":"collect","itemId":"greyjaw_fang","count":1}],"q_boars":[{"type":"collect","itemId":"boar_hide","count":5}],"q_spiders":[{"type":"kill","targetMobId":"webwood_spider","count":6},{"type":"collect","itemId":"webwood_silk","count":4}],"q_murlocs":[{"type":"kill","targetMobId":"mudfin_murloc","count":8}],"q_prowlers":[{"type":"kill","targetMobId":"mire_prowler","count":12}],"q_bandits":[{"type":"kill","targetMobId":"vale_bandit","count":10}],"q_prof_workorder_kitchens":[{"type":"collect","itemId":"game_meat","count":8}],"q_prof_workorder_loom":[{"type":"collect","itemId":"spider_silk","count":6}],"q_prof_attune_smith":[{"type":"gather","nodeType":"ore","count":3}],"q_prof_workorder_forge":[{"type":"collect","itemId":"copper_ore","count":8}],"q_prof_workorder_toolworks":[{"type":"collect","itemId":"ironbark_log","count":8}]};
   const g = window.__game, sim = g.sim, p = sim.player;
+  // Сначала собираем targetMobId из АКТИВНЫХ квестов — чтобы маркировать мобов в nearby
+  const activeQuestMobIds = new Set();
+  const _qlog = sim.questLog || (g.world && g.world.questLog) || null;
+  const _qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
+  if (_qlog && typeof _qlog.forEach === 'function') {
+    _qlog.forEach((qp, qid) => {
+      const st = qp.state || 'active';
+      if (st !== 'active') return;
+      const def = (_qdefs && (_qdefs.get ? _qdefs.get(qid) : _qdefs[qid])) || null;
+      const fallback = QUEST_OBJECTIVES[qid] || null;
+      const nObj = Math.max((qp.counts || []).length, (def && Array.isArray(def.objectives)) ? def.objectives.length : 0, (fallback && fallback.length) || 0);
+      for (let i = 0; i < nObj; i++) {
+        const o = (def && Array.isArray(def.objectives)) ? def.objectives[i] : null;
+        const fb = (fallback && fallback[i]) || null;
+        const tid = (o && o.targetMobId) || (fb && fb.targetMobId) || null;
+        if (tid) activeQuestMobIds.add(tid);
+      }
+    });
+  }
   const nearby = [];
   for (const e of sim.entities.values()) {
     if (!e.pos) continue;
     const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
     const dist = Math.hypot(dx, dz);
     if (dist > 90) continue;
+    const isMob = e.kind === 'mob';
+    const tid = e.templateId || e.mobId || null;
     nearby.push({
       id: e.id, kind: e.kind, type: e.kind, name: e.name,
       x: e.pos.x, z: e.pos.z, hp: e.hp, maxHp: e.maxHp,
       hostile: !!e.hostile, dead: !!e.dead, lootable: !!e.lootable, looted: !!e.looted,
       dist,
-      templateId: e.templateId || e.mobId || null,
+      templateId: tid,
       questIds: e.questIds || e.questId || null,
-      // vendor marker for the Python sell/buy gate: a merchant is an NPC with a
-      // non-empty vendorItems stock (verified live: trader_wilkes vi=13, plain
-      // NPCs vi=0). Without this flag sell_junk/buy never become candidates.
+      quest_target: isMob && tid != null && activeQuestMobIds.has(tid),
       vendor: (e.kind === 'npc' && Array.isArray(e.vendorItems) && e.vendorItems.length > 0),
       vendorItemsCount: (Array.isArray(e.vendorItems) ? e.vendorItems.length : 0),
     });
   }
-  // Real active quests live in sim.questLog (Map<questId, QuestProgress>).
+  // targetId: ID ближайшего враждебного моба (для policy farm gating).
+  // Приоритет: quest_target mobs (активный квест) > ближайший hostile.
+  let targetId = null;
+  let bestDist = Infinity;
+  let qtDist = Infinity;
+  let qtId = null;
+  for (const e of nearby) {
+    if ((e.kind === 'mob') && e.hostile && !e.dead) {
+      if (e.quest_target && e.dist < qtDist) {
+        qtDist = e.dist;
+        qtId = e.id;
+      }
+      if (e.dist < bestDist) {
+        bestDist = e.dist;
+        targetId = e.id;
+      }
+    }
+  }
+  // Если есть quest_target mob в пределах 100yd — атаковать его
+  if (qtId !== null && qtDist <= 100) targetId = qtId;
   // REQUIRED counts come from qp.resolvedCounts[i] (authoritative, rank/talent
   // resolved — e.g. q_mine needs 10 kills, q_spiders obj2 needs 4), falling back
   // to the def objective count. NEVER qp.counts (that's CURRENT progress) — the
@@ -135,12 +173,10 @@ function readGameState() {
   // questDefs reported 0/0 forever. That mismatch is what drove the circling:
   // the agent saw "0/0 ACTIVE" on genuinely ready quests and vice versa.
   let active = [], ready = [], done = [];
-  const qlog = sim.questLog || (g.world && g.world.questLog) || null;
-  const qdefs = sim.questDefs || (g.world && g.world.questDefs) || null;
-  if (qlog && typeof qlog.forEach === 'function') {
-    qlog.forEach((qp, qid) => {
+  if (_qlog && typeof _qlog.forEach === 'function') {
+    _qlog.forEach((qp, qid) => {
       const st = qp.state || 'active';
-      const def = (qdefs && (qdefs.get ? qdefs.get(qid) : qdefs[qid])) || null;
+      const def = (_qdefs && (_qdefs.get ? _qdefs.get(qid) : _qdefs[qid])) || null;
       const fallback = QUEST_OBJECTIVES[qid] || null;
       // nObj ДОЛЖЕН учитывать fallback: игра не отдаёт questDefs, и если
       // qp.counts пуст, без fallback.length цикл не создаст ни одного
@@ -161,6 +197,10 @@ function readGameState() {
         });
       }
       const entry = { id: qid, state: st, objectives: objs, turnInNpc: null };
+      // Пробрасываем targetMobId на верхний уровень для Python farm skill
+      if (objs.length > 0 && objs[0].targetMobId) {
+        entry.targetMobId = objs[0].targetMobId;
+      }
       if (st === 'active') active.push(entry);
       else if (st === 'ready') ready.push(entry);
       else if (st === 'done') done.push(entry);
@@ -231,10 +271,11 @@ function readGameState() {
     });
   }
   return {
-    player: { hp: p.hp, maxHp: p.maxHp, level: p.level, dead: !!p.dead },
+    player: { hp: p.hp, maxHp: p.maxHp, level: p.level, facing: p.facing, dead: !!p.dead },
     mana: p.resource, maxMana: p.maxResource,
     abilities,
     player_pos: [p.pos.x, p.pos.z],
+    targetId,
     // Сумки: реальная вместимость из игры (BACKPACK_SLOTS + сумки)
     bags: sim.bags || [],
     bagCapacity: (typeof sim.bagCapacity === 'number') ? sim.bagCapacity : 16,

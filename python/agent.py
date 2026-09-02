@@ -32,13 +32,22 @@ from browser_env import BrowserBridgeError
 
 from hierarchical_env import HierarchicalWoWEnv, ACT_FORWARD, ACT_TURN_LEFT, SKILLS
 from verifiers_py import verify_skill
-from policy import GoalManager
+from policy import GoalManager, _has_healing
 from memory import ExperienceStore, _bucket, WorldMemory
 from reward import outcome_reward
 from world_state import build_world_state
 import quest_skill
 from quest_capability import QuestCapability
 from game_source import GameSource
+
+# Survival override constants (P1: extracted from magic literals in cycle()).
+# DANGER_HP_THRESHOLD < 1.0 — at which we stop farming strong mobs and prefer heal.
+# STRONG_MOB_MULTIPLIER — when target.maxHp exceeds player.maxHp by this factor,
+#   the policy currently farms anyway but agent.py overrides it (safety net).
+# These are conservative defaults; tune after measuring actual DPS curves per class.
+CRITICAL_HP_THRESHOLD = 0.25
+DANGER_HP_THRESHOLD = 0.40
+STRONG_MOB_MULTIPLIER = 2.5
 
 # P0.3: трассировка горячего цикла за env-гейтом. Раньше _cycle() делал
 # 4 безусловных open()+write()+close() в _cycle.log на КАЖДОМ шаге — на
@@ -476,6 +485,38 @@ class Agent:
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
                                           goal=fsm_goal, **_decide_kwargs)
+
+        # SURVIVAL OVERRIDE — the softmax policy doesn't value survival.
+        # If HP is critically low, force heal (exit combat + regen). The bridge
+        # executes whatever the agent decides, so without this the agent picks
+        # farm/explore at hp=0.2 and dies. Reward shaping alone cannot fix this:
+        # Q-values need hundreds of trials to converge, but the agent dies on
+        # the first trial.
+        hp_frac = ws_before.get('hp_frac', 1.0)
+        if hp_frac < CRITICAL_HP_THRESHOLD:
+            if _has_healing(info_before, ws_before):
+                action, ctx = 'heal', {}
+            elif action in ('farm', 'explore', 'return_to_giver', 'turn_in'):
+                # No potions and about to do something dangerous at crit HP.
+                # Force explore (walk away from mobs) as last resort.
+                action = 'explore'
+                ctx = {}
+        elif hp_frac < DANGER_HP_THRESHOLD and action == 'farm':
+            # Soft gate: only farm if the target mob is weak enough to finish
+            # quickly. Strong mobs at low HP = death sentence.
+            _near = info_before.get('nearby') or []
+            _target_max_hp = 0
+            for _e in _near:
+                if _e.get('id') == info_before.get('targetId'):
+                    _target_max_hp = float(_e.get('maxHp') or 0)
+                    break
+            _player_max = float((info_before.get('player') or {}).get('maxHp') or 1)
+            if _target_max_hp > _player_max * STRONG_MOB_MULTIPLIER:
+                # Only force heal if we actually have healing — otherwise
+                # heal is a no-op (bridge case 7 without potions does nothing)
+                # and we'd be stuck. Fall back to farm — at least we fight.
+                if _has_healing(info_before, ws_before):
+                    action, ctx = 'heal', {}
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)

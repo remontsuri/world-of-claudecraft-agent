@@ -106,3 +106,17 @@ python/goal_state.json
 python/self_reflection.json
 python/world_memory.json
 python/strategy_memory.json
+
+# agent debug artifacts (untracked _*.py, _*.cjs, _*.ps1, _*.png)
+_*.cjs
+_*.py
+_*.ps1
+_*.png
+_*.json
+_h*.json
+_snap*.json
+_*.tmp
+.hermes-tmp.*
+.rb_*.tmp
+bridge_pid.txt
+/python/.rb_*.tmp
