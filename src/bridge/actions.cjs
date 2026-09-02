@@ -103,7 +103,13 @@ async function applyAction(idx, cmd, gameClient) {
           // квестовый приоритет: совпадение по templateId/mobId
           if (qm && tid === qm && d < qbd) { qbd = d; questBest = e; }
         }
-        return questBest ? questBest.id : (best ? best.id : null);
+        // Предпочитаем quest mob только в радиусе QUEST_PREFER_RANGE.
+        // Иначе игрок идёт через толпу hostile мобов и дохнет (deaths=40).
+        // Ближайший hostile чинит путь, quest mob берём когда он рядом.
+        const QUEST_PREFER_RANGE = 40;
+        return (questBest && qbd < QUEST_PREFER_RANGE)
+          ? questBest.id
+          : (best ? best.id : null);
       }, questMobId);
       if (targetId == null) break; // no hostile mob in range: inconclusive, not an error
       for (let t = 0; t < 80; t++) {
@@ -150,22 +156,30 @@ async function applyAction(idx, cmd, gameClient) {
             }
           } catch (_) {}
           if (d > chaseStopDist) {
-            // курс на моба одним вызовом face() — без импульсного рыскания
-            try { g.controller.face(desired); } catch (_) {}
-            g.controller.move({ forward: true });
+            // курс на моба — в offline face() = no-op, используем move({turnLeft/turnRight})
+            try {
+              if (off > 0.12) g.controller.move({ turnLeft: true, forward: d > 3 });
+              else if (off < -0.12) g.controller.move({ turnRight: true, forward: d > 3 });
+              else g.controller.move({ forward: true });
+            } catch (_) {}
             return { d, phase: 'chase' };
           }
           if (chaseStopDist > 7 && d > 7) {
             // ranged-стойло: в радиусе атаки — СТОП, никакого подхода в мили
-            try { g.controller.face(desired); } catch (_) {}
-            try { g.controller.stop(); } catch (_) {}
+            try {
+              if (off > 0.12) g.controller.move({ turnLeft: true });
+              else if (off < -0.12) g.controller.move({ turnRight: true });
+              else g.controller.stop();
+            } catch (_) {}
             return { d, phase: 'ranged_hold' };
           }
           // в упор: только доворот, вперёд не идём (иначе толкаем моба).
-          // Порог 0.12 рад (FACE_EPS), а не 0.25: при 14° удар мог не попасть.
           if (Math.abs(off) > 0.12) {
-            try { g.controller.face(desired); } catch (_) {}
-            try { g.controller.stop(); } catch (_) {}
+            try {
+              if (off > 0) g.controller.move({ turnLeft: true });
+              else g.controller.move({ turnRight: true });
+              g.controller.stop();
+            } catch (_) {}
             return { d, phase: 'face' };
           }
           try { sim.targetEntity(id); } catch (_) {}
