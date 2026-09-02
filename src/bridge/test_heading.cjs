@@ -73,10 +73,16 @@ t('умеренный поворот идёт вместе с forward', () => {
   assert.strictEqual(d.forward, true);
 });
 
-t('normalizeAngle сворачивает угол в (-pi, pi]', () => {
-  assert.ok(Math.abs(normalizeAngle(3 * Math.PI) - Math.PI) < 1e-9);
-  assert.ok(Math.abs(normalizeAngle(-3 * Math.PI) - Math.PI) < 1e-9);
+t('normalizeAngle сворачивает угол в [-pi, pi)', () => {
+  // Реализация даёт [-pi, pi). Все три кратных PI угла сворачиваются в -PI.
+  // Аттрицательная граница включена, положительная — исключена.
+  assert.ok(Math.abs(normalizeAngle(3 * Math.PI) - (-Math.PI)) < 1e-9);
+  assert.ok(Math.abs(normalizeAngle(-3 * Math.PI) - (-Math.PI)) < 1e-9);
+  assert.ok(Math.abs(normalizeAngle(0) - 0) < 1e-9);
   assert.ok(Math.abs(normalizeAngle(0.5) - 0.5) < 1e-9);
+  // Граничные значения: ровно PI -> -PI; ровно -PI -> -PI.
+  assert.ok(Math.abs(normalizeAngle(Math.PI) - (-Math.PI)) < 1e-9);
+  assert.ok(Math.abs(normalizeAngle(-Math.PI) - (-Math.PI)) < 1e-9);
 });
 
 t('пороги упорядочены: STOP < START (иначе гистерезиса нет)', () => {

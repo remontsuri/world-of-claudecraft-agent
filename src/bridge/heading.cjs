@@ -18,7 +18,7 @@ const TURN_START = 0.35;   // рад: порог входа в поворот (~
 const TURN_STOP = 0.10;    // рад: порог выхода из поворота (~6°)
 const TURN_ONLY = 1.20;    // рад: круче этого — доворот на месте (~69°)
 
-/** Нормализация угла в диапазон (-pi, pi]. */
+/** Нормализация угла в диапазон [-pi, pi). */
 function normalizeAngle(a) {
   return ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 }
