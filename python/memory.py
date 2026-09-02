@@ -59,6 +59,12 @@ def _bucket(state: dict) -> str:
       danger       (bool)   — player in combat / low hp
       far          (bool)   — distance_to_giver > 80 (OBSERVED, not a rule)
       combat       (bool)   — in_combat (OBSERVED, not a rule)
+      mob_d        (none|near|mid|far) — distance to nearest hostile mob:
+                                          none=absent, near<=7yd (melee), mid<=25yd,
+                                          far>25yd. 2026-09-02 fix: was missing,
+                                          so Q(farm) at "wolf 5yd" aliased
+                                          Q(farm) at "wolf 40yd" — the agent
+                                          could not learn to approach.
     """
     hp = state.get("hp_frac", 1.0)
     hp_band = "crit" if hp < 0.25 else "low" if hp < 0.5 else "ok" if hp < 0.8 else "full"
@@ -66,6 +72,19 @@ def _bucket(state: dict) -> str:
     dist = state.get("distance_to_giver", 0.0)
     far = 1 if (dist is not None and dist > 80) else 0
     combat = 1 if state.get("in_combat") else 0
+    # mob distance band (only meaningful when has_mob; else 'none')
+    if not state.get("has_mob"):
+        mob_d = "none"
+    else:
+        mdist = state.get("nearest_mob_distance")
+        if mdist is None:
+            mob_d = "any"          # has_mob=True but distance unknown (legacy callers)
+        elif mdist <= 7.0:
+            mob_d = "near"
+        elif mdist <= 25.0:
+            mob_d = "mid"
+        else:
+            mob_d = "far"
     return "|".join([
         f"hp={hp_band}",
         f"qs={qs}",
@@ -79,6 +98,7 @@ def _bucket(state: dict) -> str:
         f"danger={1 if state.get('danger') else 0}",
         f"far={far}",
         f"combat={combat}",
+        f"mob_d={mob_d}",
     ])
 
 

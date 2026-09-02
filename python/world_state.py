@@ -66,6 +66,7 @@ reward. Fields are OBSERVATIONS (measured facts), never rules.
 """
 
 from typing import Dict
+import math
 
 # Единый junk-предикат (P0.1) — общий с observation/contracts.
 from item_prices import is_junk_item as _is_junk_item
@@ -116,6 +117,9 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
     STRONG_RATIO = 1.3
     strong_mob_near = False
     weak_mob_near = False
+    nearest_mob_distance = None
+    ppos = info.get("player_pos") or [0, 0]
+    px_ws, pz_ws = (ppos + [0, 0])[:2] if isinstance(ppos, (list, tuple)) else (0, 0)
     for e in nearby:
         if (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable"):
             mmax = e.get("maxHp") or 0
@@ -123,6 +127,16 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
                 strong_mob_near = True
             elif 0 < mmax <= pmax * STRONG_RATIO:
                 weak_mob_near = True
+            # Track nearest live hostile mob (distance from player) for the
+            # state-bucket mob_d band. Without this, _bucket() falls back to
+            # 'any' and the agent can't learn to approach (RED #1, 2026-09-02).
+            if not e.get("dead") and (e.get("hp") or 0) > 0 and e.get("hostile") is not False:
+                ex = e.get("x")
+                ez = e.get("z")
+                if ex is not None and ez is not None:
+                    d = math.hypot(ex - px_ws, ez - pz_ws)
+                    if nearest_mob_distance is None or d < nearest_mob_distance:
+                        nearest_mob_distance = d
     has_mob = strong_mob_near or weak_mob_near
     has_corpse = any(
         ((e.get("type") == "corpse" or e.get("kind") == "corpse")
@@ -479,6 +493,12 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
         "has_mob": has_mob,
         "strong_mob_near": strong_mob_near,
         "weak_mob_near": weak_mob_near,
+        # RED #1 fix (2026-09-02): nearest live hostile mob distance in yards.
+        # Consumed by memory._bucket() as `mob_d` band (none/near/mid/far).
+        # Previously the bucket only saw a boolean `has_mob`, so Q(farm) at
+        # "wolf 5yd" aliased Q(farm) at "wolf 40yd" — agent could not learn
+        # to approach. Now it can.
+        "nearest_mob_distance": nearest_mob_distance,
         "has_corpse": has_corpse,
         "has_junk": has_junk,
         "vendor_nearby": vendor_nearby,
