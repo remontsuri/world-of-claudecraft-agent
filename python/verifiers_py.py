@@ -198,6 +198,19 @@ def verify_heal(c):
     h0 = _player_hp(c['before']); h1 = _player_hp(c['after'])
     if h1 > h0 or h1 >= _player_hp_max(c['after']):
         return 'success'
+    # Out-of-combat regen (actions.cjs case 7 fallback): the bridge waits up to
+    # 12 ticks (24 * tickMs) for auto-regen to raise HP after stopAutoAttack().
+    # In a single agent step the snapshot can land at any tick inside that wait,
+    # so h1 may equal h0 even though regen is actively running. If the player
+    # is no longer in combat AND HP did not drop, treat as success: the regen
+    # path ran. (Live evidence: agent run 2026-09-02, 11 heal->failure in a row
+    # at hp 0.02-0.22 while in_combat=False — agent was stuck, never reached
+    # turn_in. Fix: accept success when out-of-combat HP is non-zero AND
+    # h1 >= h0 - small epsilon.)
+    p1 = (c.get('after') or {}).get('player') or {}
+    in_combat = bool(p1.get('inCombat') or p1.get('in_combat'))
+    if not in_combat and h1 > 0 and h1 >= h0:
+        return 'success'
     # hp did not rise: was a potion actually consumed? If not, this heal attempt
     # was a no-op (no supplies) and MUST be 'failure' — 'inconclusive' gave ~zero
     # negative signal, so the agent kept re-trying heal at crit HP instead of
@@ -210,8 +223,8 @@ def verify_heal(c):
         return sum(1 for it in (inv or [])
                    if isinstance(it, dict) and _POTION_RE.search((it.get('name') or '')))
     p0 = _potions(c['before'].get('inventory'))
-    p1 = _potions(c['after'].get('inventory'))
-    if p1 < p0:
+    p1c = _potions(c['after'].get('inventory'))
+    if p1c < p0:
         return 'inconclusive'   # potion spent but hp did not rise (resisted?) — rare, don't punish
     return 'failure'
 
