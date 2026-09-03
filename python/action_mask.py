@@ -26,11 +26,17 @@ BRIDGE_ENDPOINT_SKILLS = {
     "explore": "navigate",
 }
 
-# explore всегда доступен как fallback (у него нет предусловий)
-ALWAYS_AVAILABLE = ["explore"]
+# Навыки, которые ВСЕГДА доступны независимо от предусловий.
+# explore (wander) — для NO_QUEST/FIND_GIVER когда нет цели.
+# navigate (navigate_to_coord) — для DO_OBJECTIVE когда мобов в nearby нет,
+# но координаты известны: идти к зоне спавна мобов, а не бродить вслепую.
+# Фикс 2026-09-03 /GOAL п.10: explore как universal fallback создавал
+# бесконечный INCONCLUSIVE loop. Теперь caller получает осмысленный сигнал:
+# [explore] = броди, [navigate] = иди к координате, [] = ничего не делать.
+ALWAYS_AVAILABLE = ["explore", "navigate"]
 
 # Навыки, которые маскируются, но индекса в SKILLS не имеют
-EXTRA_SKILLS = ["respawn"]
+EXTRA_SKILLS = ["respawn", "navigate"]
 
 
 def maskable_skills() -> List[str]:
@@ -44,7 +50,13 @@ def get_action_mask(obs: Dict[str, Any]) -> List[int]:
 
 
 def available_actions(obs: Dict[str, Any]) -> List[str]:
-    """Имена доступных навыков (+ explore, если больше нечего делать)."""
+    """Имена доступных навыков + ALWAYS_AVAILABLE fallback.
+
+    Фикс 2026-09-03: возвращаем и explore, и navigate как fallback.
+    Caller (policy.decide) сам выбирает на основе phase:
+    - NO_QUEST/FIND_GIVER -> explore (искать гивера)
+    - DO_OBJECTIVE -> navigate (идти к координате моба)
+    """
     out = [s for s in maskable_skills() if check_preconditions(s, obs)["ok"]]
     return out or list(ALWAYS_AVAILABLE)
 
@@ -52,7 +64,10 @@ def available_actions(obs: Dict[str, Any]) -> List[str]:
 def mask_candidates(cands: List[str], obs: Dict[str, Any]) -> List[str]:
     """Отфильтровать кандидатов политики по предусловиям.
 
-    Никогда не возвращает пустой список: если всё замаскировано — explore.
+    Фикс 2026-09-03: больше не возвращает ['explore'] как universal fallback.
+    Если все кандидаты замаскированы, возвращает ALWAYS_AVAILABLE (explore,
+    navigate) — caller в policy.decide() сам решает что выбрать на основе
+    phase и FSM state. Никогда не возвращает пустой список.
     """
     ok = []
     for c in cands:
