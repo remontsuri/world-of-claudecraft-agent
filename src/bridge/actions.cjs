@@ -156,11 +156,18 @@ async function applyAction(idx, cmd, gameClient) {
             }
           } catch (_) {}
           if (d > chaseStopDist) {
-            // курс на моба — в offline face() = no-op, используем move({turnLeft/turnRight})
+            // Use the official movement pipeline: set desired facing AND the
+            // move input. turnLeft/turnRight only integrate facing by TURN_SPEED
+            // per tick (slow), and `controller.move({turnLeft:true})` doesn't
+            // close the distance on its own — the player spins in place. By
+            // passing `desired` as the second arg we set controllerFacing
+            // directly, so stepPlayerMotion rotates toward target and forward
+            // input actually walks toward it. This is the same contract as
+            // setControllerMoveInput(input, facing) in src/game/input.ts.
             try {
-              if (off > 0.12) g.controller.move({ turnLeft: true, forward: d > 3 });
-              else if (off < -0.12) g.controller.move({ turnRight: true, forward: d > 3 });
-              else g.controller.move({ forward: true });
+              if (off > 0.12) g.controller.move({ turnLeft: true, forward: d > 3 }, desired);
+              else if (off < -0.12) g.controller.move({ turnRight: true, forward: d > 3 }, desired);
+              else g.controller.move({ forward: true }, desired);
             } catch (_) {}
             return { d, phase: 'chase' };
           }
