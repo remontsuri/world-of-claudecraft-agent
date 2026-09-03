@@ -192,10 +192,18 @@ class Agent:
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"
             if action == "navigate":
-                # /GOAL п.10 fix 2026-09-03: navigate skill = same bridge action as
-                # explore (walk forward), but selected by policy when DO_OBJECTIVE
-                # has no mob nearby. Uses the same endpoint.
-                if hasattr(self.env, "explore_walk"):
+                # FIX 2026-09-03: navigate now walks toward quest mob spawn
+                # instead of random walk (random walk caused agent to oscillate
+                # 190-220yd from giver, never reaching quest mob spawns).
+                from mob_spawner import nearest_spawn
+                quest_id = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
+                player = (self.env._last_info or {}).get("player", {})
+                tx, tz = None, None
+                if quest_id:
+                    tx, tz = nearest_spawn(quest_id, player.get("x", 0), player.get("z", 0))
+                if tx is not None and hasattr(self.env, "_navigate_to_coord"):
+                    self.env._navigate_to_coord(tx, tz, max_steps=40)
+                elif hasattr(self.env, "explore_walk"):
                     self.env.explore_walk(steps=10)
                 else:
                     self.env.base.step(ACT_FORWARD)
