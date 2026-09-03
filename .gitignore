@@ -120,3 +120,8 @@ _*.tmp
 .rb_*.tmp
 bridge_pid.txt
 /python/.rb_*.tmp
+python/experience_autonomous.json
+python/replay_buffer.json
+python/self_reflection.json
+python/strategy_memory.json
+python/world_memory.json
