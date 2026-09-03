@@ -187,7 +187,18 @@ class Agent:
                 else:
                     self.env.base.step(ACT_FORWARD)
                     # base updated base._last_info; mirror it onto the wrapper so
-                    # the after-state reflects the real world, not a stale snapshot.
+                    # the autonomous loop sees fresh state.
+                    self.env._last_info = getattr(self.env.base, "_last_info", self.env._last_info)
+                after = self.env._last_info
+                return after, "INCONCLUSIVE", "OK"
+            if action == "navigate":
+                # /GOAL п.10 fix 2026-09-03: navigate skill = same bridge action as
+                # explore (walk forward), but selected by policy when DO_OBJECTIVE
+                # has no mob nearby. Uses the same endpoint.
+                if hasattr(self.env, "explore_walk"):
+                    self.env.explore_walk(steps=10)
+                else:
+                    self.env.base.step(ACT_FORWARD)
                     self.env._last_info = getattr(self.env.base, "_last_info", self.env._last_info)
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"

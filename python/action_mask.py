@@ -21,9 +21,14 @@ from skill_contracts import check_preconditions
 from hierarchical_env import SKILLS as SKILL_INDEX
 
 # Навыки, которые мост исполняет НЕ через step idx, а отдельным action.
+# /GOAL п.10 fix 2026-09-03: 'navigate' skill (added in 25236d6 + 6f8ef8e)
+# routes to the SAME 'navigate' bridge action as 'explore' -- the bridge
+# treats both as navigate_to_coord calls. The semantic difference is
+# only in the autonomy.py caller (target coordinates).
 BRIDGE_ENDPOINT_SKILLS = {
     "respawn": "respawn",
     "explore": "navigate",
+    "navigate": "navigate",
 }
 
 # Навыки, которые ВСЕГДА доступны независимо от предусловий.
