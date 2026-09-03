@@ -72,6 +72,7 @@ SKILL_GATHER = "gather"
 SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
 SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
 SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
+SKILL_FLEE = "flee"        # run away from current target (survival)
 SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
 SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
 SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
@@ -93,9 +94,9 @@ PHASE_ALLOWED = {
     "ACCEPT":          [SKILL_ACCEPT],
     "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
                         SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT,
-                        SKILL_SELL],
-    "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN],
-    "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL],
+                        SKILL_SELL, SKILL_FLEE],
+    "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN, SKILL_FLEE],
+    "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL, SKILL_FLEE],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
     "HEAL":            [SKILL_HEAL],
 }

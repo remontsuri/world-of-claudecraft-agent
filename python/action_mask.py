@@ -38,10 +38,10 @@ BRIDGE_ENDPOINT_SKILLS = {
 # Фикс 2026-09-03 /GOAL п.10: explore как universal fallback создавал
 # бесконечный INCONCLUSIVE loop. Теперь caller получает осмысленный сигнал:
 # [explore] = броди, [navigate] = иди к координате, [] = ничего не делать.
-ALWAYS_AVAILABLE = ["explore", "navigate"]
+ALWAYS_AVAILABLE = ["explore", "navigate", "flee"]
 
 # Навыки, которые маскируются, но индекса в SKILLS не имеют
-EXTRA_SKILLS = ["respawn", "navigate"]
+EXTRA_SKILLS = ["respawn", "navigate", "flee"]
 
 
 def maskable_skills() -> List[str]:

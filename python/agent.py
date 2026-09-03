@@ -251,6 +251,22 @@ class Agent:
                 else:
                     verdict = "FAILURE"
                 return after, verdict, "OK"
+            if action == "flee":
+                # Run away from current target (opposite direction)
+                info = self.env._last_info or {}
+                player = info.get("player", {})
+                target = info.get("target", {})
+                if target and player:
+                    dx = player.get("x", 0) - target.get("x", 0)
+                    dz = player.get("z", 0) - target.get("z", 0)
+                    tx = player.get("x", 0) + dx * 10
+                    tz = player.get("z", 0) + dz * 10
+                    if hasattr(self.env, "_navigate_to_coord"):
+                        self.env._navigate_to_coord(tx, tz, max_steps=15)
+                    elif hasattr(self.env, "explore_walk"):
+                        self.env.explore_walk(steps=10)
+                after = self.env._last_info
+                return after, "INCONCLUSIVE", "OK"
             else:
                 # standard skill via hierarchical env (farm/loot/heal/accept/sell/gather)
                 # Contract (skill_contracts.py): accept_quest = navigate_to_giver ->
