@@ -694,6 +694,22 @@ class GoalManager:
         playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, goal=goal,
                                   class_cfg=class_cfg, playstyle=playstyle)
+        # /GOAL п.10 fix 2026-09-03: when DO_OBJECTIVE has NO mob in nearby
+        # (all mobs 50+yd), cands is empty -> silent explore fallback.
+        # Add 'navigate' so policy picks it (the autonomy loop then runs
+        # navigate_to_coord toward a known mob-spawn area or quest target).
+        if goal == "DO_OBJECTIVE" and not cands and ws.get("quest", {}).get("id"):
+            cands.append("navigate")
+        # /GOAL п.10 fix 2026-09-03 (anchor path): when forced skill is
+        # 'return_to_giver' (agent > 80yd from giver) and cands doesn't
+        # include it, the hard override at line 718+ returns early ONLY
+        # when cands already contains forced. Without this add, anchor
+        # is set but policy still picks 'explore' first. Add the forced
+        # skill to cands so the hard-override path actually fires.
+        if context is not None:
+            _fs = getattr(context, "forced_skill", None)
+            if _fs and _fs not in cands:
+                cands.append(_fs)
         # Explicit decision context replaces the old hidden hints channel.
         # AutonomyLoop builds ONE DecisionContext per step; Policy reads it.
         if context is not None:
@@ -701,8 +717,13 @@ class GoalManager:
             filtered = [c for c in cands if c in _masked]
             if filtered:
                 cands = filtered
-            elif "explore" in _masked:
-                cands = ["explore"]
+            elif _masked:
+                # Никогда не fallback'ить только на explore. /GOAL п.10:
+                # если все skills замаскированы — caller решает через phase.
+                # DO_OBJECTIVE -> navigate; NO_QUEST/FIND_GIVER -> explore.
+                # Берём ПЕРВЫЙ элемент из _masked (он отсортирован в
+                # action_mask.AVAILABLE_FALLBACKS: explore, navigate).
+                cands = [_masked[0]]
             # Forced skill (recovery/anchor) may NOT be in policy._candidates
             # (e.g. return_to_giver when the agent wandered far). The autonomy
             # loop explicitly asked for it and verified its precondition, so we
