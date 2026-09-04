@@ -214,7 +214,7 @@ class AutonomyLoop:
         name = (subgoal or {}).get("subgoal") or "?"
         self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
 
-        # Build explicit decision context (replaces hidden policy.hints channel)
+        # Build explicit decision context (replaces hidden hints channel)
         _nav_intent = None
         if nav_command:
             _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
@@ -224,10 +224,34 @@ class AutonomyLoop:
             subgoal=(subgoal or {}).get("subgoal"),
             navigation_intent=_nav_intent,
             target=(self.nav.target if self.nav else None),
-            reason=("recovery" if forced and self.last.get("loop")
-                    else "subgoal" if forced
-                    else "policy"),
+            reason=(
+                "recovery" if forced and self.last.get("loop")
+                else "forced_skill" if forced
+                else "subgoal" if forced
+                else "policy"),
         )
+
+        # TELEMETRY: log autonomy loop decision
+        try:
+            import json, os, time
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "autonomy_log.jsonl")
+            entry = {
+                "t": time.time(),
+                "step": self.stats["steps"],
+                "chooser": "autonomy_loop",
+                "reason": decision_ctx.reason,
+                "forced_skill": forced,
+                "subgoal": (subgoal or {}).get("subgoal"),
+                "allowed_skills": tuple(masked),
+                "nav_command": nav_command,
+                "nav_status": nav_status,
+                "loop_detected": self.guard.is_looping(),
+                "recovery_pending": self.pending_recovery,
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
         return {
             "candidates": masked,
@@ -268,7 +292,8 @@ class AutonomyLoop:
     def after_action(self, action: str, info_after: Dict[str, Any],
                      ws_after: Dict[str, Any],
                      reward: float = 0.0,
-                     goal: Optional[str] = None) -> Dict[str, Any]:
+                     goal: Optional[str] = None,
+                     world_mem=None) -> Dict[str, Any]:
         """Проверить постусловия, решить recovery, записать в LoopGuard."""
         obs_after = encode_observation(ws_after, info_after)
         obs_before = self.obs_before or obs_after
