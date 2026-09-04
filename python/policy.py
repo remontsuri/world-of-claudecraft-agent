@@ -704,7 +704,7 @@ class GoalManager:
         # (all mobs 50+yd), cands is empty -> silent explore fallback.
         # Add 'navigate' so policy picks it (the autonomy loop then runs
         # navigate_to_coord toward a known mob-spawn area or quest target).
-        if goal == "DO_OBJECTIVE" and not cands and ws.get("quest", {}).get("id"):
+        if goal_phase == "DO_OBJECTIVE" and not cands and ws.get("quest", {}).get("id"):
             cands.append("navigate")
         # /GOAL п.10 fix 2026-09-03 (anchor path): when forced skill is
         # 'return_to_giver' (agent > 80yd from giver) and cands doesn't
@@ -811,6 +811,16 @@ class GoalManager:
         # ready quest waited (measured: 119 steps of RETURN_TO_GIVER with zero
         # return attempts). Survival gates still veto above.
         # 2026-09-03 FIX: use goal_phase (without quest_id suffix) for comparison
+        # 2026-09-03 FIX: детерминированный приоритет лута когда труп рядом.
+        # Softmax редко выбирает loot (1/777 шагов), поэтому форсируем.
+        _near = info.get("nearby") or []
+        _corpses = [e for e in _near
+                    if (e.get("type") == "corpse" or e.get("kind") == "corpse"
+                        or ((e.get("kind") == "mob" or e.get("type") == "mob")
+                            and (e.get("dead") or e.get("lootable"))))
+                    and not e.get("looted")]
+        if _corpses and SKILL_LOOT in cands:
+            return SKILL_LOOT, {}
         if goal_phase == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
                 and SKILL_RETURN in cands:
             return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
