@@ -138,8 +138,9 @@ class E2EQuestCycle:
             self.env,
             mem,
             world_mem=self.world_mem,
-            fsm=self.fsm,
         )
+        # Используем FSM агента (он загружается из goal_fsm_state.json)
+        self.fsm = self.agent.fsm
 
         print("[e2e] Environment ready", flush=True)
 
@@ -247,7 +248,7 @@ class E2EQuestCycle:
             if rec is None:
                 break
 
-            if rec.get("action") == "accept_quest" and rec.get("verdict") == "SUCCESS":
+            if rec.get("action") == "accept_quest" and rec.get("verdict", "").upper() == "SUCCESS":
                 info = self.env._last_info or {}
                 quests = info.get("quests", {}).get("active", [])
                 if quests:
@@ -422,7 +423,7 @@ class E2EQuestCycle:
             if rec is None:
                 break
 
-            if rec.get("action") == "accept_quest" and rec.get("verdict") == "SUCCESS":
+            if rec.get("action") == "accept_quest" and rec.get("verdict", "").upper() == "SUCCESS":
                 info = self.env._last_info or {}
                 quests = info.get("quests", {}).get("active", [])
                 if quests:

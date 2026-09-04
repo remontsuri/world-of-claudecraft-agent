@@ -690,6 +690,8 @@ class GoalManager:
         """
         if ws is None:
             ws = self._world_state(info)
+        # 2026-09-03 FIX: goal_phase нужна для детерминированных проверок ниже
+        goal_phase = goal.split(":")[0] if goal else goal
         # Определяем класс игрока (warrior/mage/hunter)
         player_class = (info.get("player_class")
                         or (ws or {}).get("player_class")
