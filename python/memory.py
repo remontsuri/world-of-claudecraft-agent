@@ -387,6 +387,23 @@ class WorldMemory:
             "last_seen": time.time(),
         }
 
+    def get(self, key, default=None):
+        """Compatibility shim: agent.py reads active_quest/pending_quest
+        as if WorldMemory were a dict. Returns default for unknown keys."""
+        if key == "active_quest":
+            # Return the most recently remembered quest_id (if any)
+            latest = None
+            latest_ts = 0
+            for qid, meta in self.quest_givers.items():
+                ts = meta.get("last_seen", 0) if isinstance(meta, dict) else 0
+                if ts > latest_ts:
+                    latest_ts = ts
+                    latest = qid
+            return latest
+        if key == "pending_quest":
+            return None
+        return default
+
     def vendor_pos(self, npc_id: str) -> Optional[dict]:
         v = self.vendors.get(str(npc_id))
         if v and v.get("pos"):
