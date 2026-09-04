@@ -102,6 +102,9 @@ class GoalFSM:
             self.total_deaths = data.get("total_deaths", 0)
             self.total_xp = data.get("total_xp", 0)
             self.total_copper = data.get("total_copper", 0)
+            # 2026-09-03 FIX: восстанавливаем active_quest и quest_giver
+            self.active_quest = data.get("active_quest")
+            self.quest_giver = data.get("quest_giver")
         except Exception:
             pass
 
@@ -115,6 +118,11 @@ class GoalFSM:
             "total_xp": self.total_xp,
             "total_copper": self.total_copper,
             "step_count": self.step_count,
+            # 2026-09-03 FIX: сохраняем active_quest и quest_giver для
+            # восстановления после рестарта. Без этого FSM загружается с
+            # state=RETURN_TO_GIVER, но quest_giver=None → сбрасывается в QUEST_NONE.
+            "active_quest": self.active_quest,
+            "quest_giver": self.quest_giver,
         }
         try:
             with open(self.memory_path, "w") as f:
@@ -181,6 +189,7 @@ class GoalFSM:
         DO_OBJECTIVE. Если квест завершён — в DONE.
         """
         quest_status = world_state.get("quest_status", "NONE")
+        old_state = self.state
         if quest_status == "ACTIVE" and self.state in (
             QuestState.QUEST_NONE, QuestState.FIND_GIVER, QuestState.ACCEPT,
             QuestState.VERIFY_ACCEPT, QuestState.ERROR
@@ -188,7 +197,7 @@ class GoalFSM:
             self.state = QuestState.DO_OBJECTIVE
         elif quest_status == "READY_TO_TURN_IN" and self.state in (
             QuestState.DO_OBJECTIVE, QuestState.VERIFY_PROGRESS,
-            QuestState.FIND_GIVER, QuestState.ERROR
+            QuestState.FIND_GIVER, QuestState.ERROR, QuestState.QUEST_NONE
         ):
             self.state = QuestState.RETURN_TO_GIVER
         elif quest_status == "DONE" and self.state != QuestState.DONE:
@@ -197,6 +206,8 @@ class GoalFSM:
             QuestState.DONE, QuestState.ERROR
         ):
             self.reset()
+        if old_state != self.state:
+            print(f"[fsm] {old_state.name} -> {self.state.name} (qs={quest_status})", flush=True)
 
     def reset(self):
         """Сброс для нового квеста."""
@@ -362,8 +373,30 @@ class GoalFSM:
     def _handle_return_to_giver(self, ws: dict, info: dict) -> Tuple[str, Dict]:
         """Возвращаемся к квестгиверу для сдачи."""
         if not self.quest_giver:
-            self.state = QuestState.QUEST_NONE
-            return "explore", {"reason": "no_giver"}
+            # 2026-09-03 FIX: fallback на world_mem.giver_pos() перед сбросом.
+            # Раньше quest_giver=None сразу сбрасывал FSM в QUEST_NONE, теряя
+            # прогресс квеста. Теперь пытаемся восстановить гивера из памяти.
+            qid = self.active_quest.get("id") if self.active_quest else None
+            if qid and self.world_mem is not None:
+                pos = self.world_mem.giver_pos(qid)
+                if pos and pos.get("x") is not None:
+                    self.quest_giver = pos
+                    print(f"[fsm] quest_giver restored from world_mem: {qid}@{pos['x']:.0f},{pos['z']:.0f}", flush=True)
+            if not self.quest_giver:
+                # 2026-09-03 FIX: scan nearby NPCs for giver as last resort.
+                # After FSM load, active_quest and quest_giver may be None,
+                # but the game still has the quest active. Scan nearby NPCs
+                # for one that offers/owns this quest.
+                for e in ((info or {}).get("nearby") or []):
+                    ids = e.get("questIds") or []
+                    # If we have an active quest, match by ID; otherwise take any quest NPC
+                    if (qid and qid in ids) or (not qid and ids):
+                        self.quest_giver = {"x": e.get("x"), "z": e.get("z"), "id": e.get("id")}
+                        print(f"[fsm] quest_giver restored from nearby: {self.quest_giver}", flush=True)
+                        break
+            if not self.quest_giver:
+                self.state = QuestState.QUEST_NONE
+                return "explore", {"reason": "no_giver"}
 
         dist = self._calc_dist_to_giver(info)
         if dist <= INTERACT_RANGE:

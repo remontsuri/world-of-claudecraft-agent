@@ -45,6 +45,7 @@ def load_spawns() -> dict[str, list[dict]]:
     data = _load_export()
     zone_text = _load_zone()
     zones = _parse_spawn_zones(zone_text)
+    assert zones, "No spawn zones parsed from zone1.ts — format may have changed"
 
     # Build mob_id -> spawn_zones mapping
     mob_zones: dict[str, list[dict]] = {}

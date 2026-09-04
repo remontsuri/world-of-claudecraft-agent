@@ -516,8 +516,11 @@ class GoalManager:
         # to skills valid for that phase. This stops the policy from picking a
         # global action (e.g. explore) when it should be, say, returning the
         # quest. Healing is always allowed when hurt (survival > phase).
-        if goal in PHASE_ALLOWED:
-            allowed = PHASE_ALLOWED[goal]
+        # 2026-09-03 FIX: goal включает quest_id ("DO_OBJECTIVE:q_wolves"),
+        # а PHASE_ALLOWED ключи без суффикса. Извлекаем фазу перед проверкой.
+        goal_phase = goal.split(":")[0] if goal else goal
+        if goal_phase in PHASE_ALLOWED:
+            allowed = PHASE_ALLOWED[goal_phase]
             gated = [c for c in cands if c in allowed]
             if gated:
                 cands = gated
@@ -805,10 +808,11 @@ class GoalManager:
         # the choice to softmax let Q-values re-derive a farm/heal loop while the
         # ready quest waited (measured: 119 steps of RETURN_TO_GIVER with zero
         # return attempts). Survival gates still veto above.
-        if goal == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
+        # 2026-09-03 FIX: use goal_phase (without quest_id suffix) for comparison
+        if goal_phase == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
                 and SKILL_RETURN in cands:
             return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
-        if goal == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35:
+        if goal_phase == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35:
 
             # КОРНЕВОЙ ФИКС 2026-08-24 (подтверждён верификатором по исходникам):
             # сдача проходит ТОЛЬКО в пределах INTERACT_RANGE+2 = 7 ярдов

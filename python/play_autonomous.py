@@ -418,6 +418,24 @@ def main():
                 _log_lifecycle("AGENT_STOP", reason="duplicate_yield")
                 return
         try:
+            # 2026-09-03 FIX: FSM 1-iteration lag — sync FSM with LATEST world
+            # at the TOP of each iteration so policy.decide() sees the current
+            # goal THIS step, not the previous step's result.
+            # CRITICAL: must pass world_state (via snap), not raw env._last_info
+            if goal_fsm is not None:
+                try:
+                    # 2026-09-03 FIX: FSM 1-iteration lag — sync FSM with LATEST
+                    # world at the TOP of each iteration so policy.decide() sees
+                    # the current goal THIS step, not the previous step's result.
+                    # CRITICAL: must pass world_state (via snap), not raw info.
+                    # On first iteration use prev (snapshot before loop); subsequent
+                    # iterations use ws (world_state from previous step's after-state).
+                    if i == 0:
+                        goal_fsm.update_from_world(prev)
+                    else:
+                        goal_fsm.update_from_world(ws)
+                except Exception:
+                    pass
             if MEASURE_EVERY > 0 and i > 0 and i % MEASURE_EVERY == 0:
                 # FROZEN EVAL: measure current policy WITHOUT learning (exploration
                 # bonus off, no weight update). The resulting verdict/reward still
@@ -551,7 +569,8 @@ def main():
                             _ares = autonomy.after_action(
                                 (rec or {}).get("action") or "noop",
                                 _after, _bws3(_after, world_mem=world_mem),
-                                reward=float((rec or {}).get("reward") or 0.0))
+                                reward=float((rec or {}).get("reward") or 0.0),
+                                world_mem=world_mem)
                             # V0 baseline: причина КАЖДОГО не-успеха. Раньше
                             # возврат after_action отбрасывался, поэтому после
                             # прогона была видна только цифра "heal failure=N"
@@ -703,13 +722,12 @@ def main():
 
         ws = rec["ws_after"]
         info = env._last_info
-        # FSM sync each step: the explicit current_goal must reflect the LATEST
-        # observed world, not just the boot-time snapshot. (agent._cycle already
-        # calls fsm.update_from_world on ws_before; this keeps goal_state.json
-        # current for infra-restart resume.)
+        # FSM sync: update goal_state.json for infra-restart resume only.
+        # The actual goal for agent.step() is synced at the TOP of the loop
+        # (line ~405) to avoid 1-iteration lag.
         if goal_fsm is not None:
             try:
-                goal_fsm.update_from_world(ws)
+                goal_fsm.save()
             except Exception:
                 pass
         a = rec["action"]
