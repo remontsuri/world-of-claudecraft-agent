@@ -113,8 +113,10 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
         # src/sim/items.ts:791), поэтому вне боя просто ждём — noop лучше,
         # чем спам heal, который ничего не делает и засоряет replay.
         if (world.get("nearby_mobs") or 0) > 0:
-            return [{"subgoal": "RETREAT", "skill": "explore",
-                     "reason": "hp_critical_no_heal"}]
+            # RETREAT removed: let policy decide (farm/heal/explore).
+            # _retreat_if_needed in autonomous_master.py handles physical
+            # retreat when in combat. Policy learns survival via reward.
+            pass
         return [{"subgoal": "REGEN", "skill": "noop",
                  "reason": "hp_critical_no_heal"}]
 
