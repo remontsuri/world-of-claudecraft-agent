@@ -21,7 +21,6 @@ import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-# Добавляем python/ в путь
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from browser_env import BrowserEnv, BrowserBridgeError
@@ -32,6 +31,9 @@ from policy import GoalManager
 from observation import encode_observation
 from reward import outcome_reward
 from failure_analyzer import FailureAnalyzer
+from autonomy import AutonomyLoop
+from world_state import build_world_state
+from action_mask import mask_candidates
 
 
 class QuestCycleVerdict:
@@ -80,9 +82,8 @@ class QuestCycleVerdict:
 
 
 class E2EQuestCycle:
-    """Production-level harness для верификации полного квестового цикла."""
+    """Production-level harness использует AutonomyLoop и navigation sub-loop из play_autonomous.py."""
 
-    # Этапы цикла
     STAGES = [
         "accept_quest",
         "find_objective",
@@ -96,25 +97,22 @@ class E2EQuestCycle:
         "discover_next_quest",
     ]
 
-    def __init__(self, max_steps_per_stage: int = 200, max_total_steps: int = 2000):
+    def __init__(self, max_steps_per_stage: int = 300, max_total_steps: int = 3000):
         self.max_steps_per_stage = max_steps_per_stage
         self.max_total_steps = max_total_steps
         self.verdicts: List[QuestCycleVerdict] = []
         self.total_steps = 0
         self.start_time = time.time()
-
-        # Компоненты
         self.env: Optional[BrowserEnv] = None
         self.agent: Optional[Agent] = None
         self.world_mem: Optional[WorldMemory] = None
         self.fsm: Optional[GoalFSM] = None
+        self.autonomy: Optional[AutonomyLoop] = None
         self.fail_analyzer = FailureAnalyzer(max_records=1000)
-
-        # Телеметрия
         self.telemetry: List[Dict[str, Any]] = []
 
     def setup(self):
-        """Инициализация окружения и агента."""
+        """Инициализация окружения и агента с AutonomyLoop."""
         print("[e2e] Initializing environment...", flush=True)
 
         # Проверяем bridge health
@@ -127,21 +125,20 @@ class E2EQuestCycle:
         except Exception as e:
             raise RuntimeError(f"Bridge not available: {e}")
 
-        # Создаём окружение
         self.env = BrowserEnv(player_class="warrior", max_steps=self.max_total_steps, seed=42)
         self.world_mem = WorldMemory()
         self.fsm = GoalFSM()
+        self.autonomy = AutonomyLoop(min_dwell=20)
 
-        # Создаём агента
         mem = ExperienceStore()
         self.agent = Agent(
             self.env,
             mem,
             world_mem=self.world_mem,
-            fsm=self.fsm,  # Передаём FSM в агента
+            fsm=self.fsm,
         )
 
-        print("[e2e] Environment ready", flush=True)
+        print("[e2e] Environment ready (AutonomyLoop enabled)", flush=True)
 
     def run_stage(self, stage: str) -> QuestCycleVerdict:
         """Запуск одного этапа квестового цикла."""
@@ -185,40 +182,75 @@ class E2EQuestCycle:
 
         return verdict
 
-    def _run_agent_step(self, verdict: QuestCycleVerdict) -> Optional[Dict[str, Any]]:
-        """Выполнить один шаг агента с телеметрией."""
+    def _run_autonomy_step(self, verdict: QuestCycleVerdict) -> Optional[Dict[str, Any]]:
+        """Выполнить один шаг с AutonomyLoop и navigation sub-loop."""
         if self.total_steps >= self.max_total_steps:
             return None
 
         self.total_steps += 1
         step_num = self.total_steps
 
-        # Получаем состояние до шага
-        info_before = self.env._last_info or {}
-        ws_before = self._build_world_state(info_before)
-        obs_before = encode_observation(ws_before, info_before)
-
-        # Получаем цель FSM
+        info = self.env._last_info or {}
+        ws = build_world_state(info, world_mem=self.world_mem)
         fsm_goal = self.fsm.goal if self.fsm else None
 
-        # Получаем кандидатов
-        cands = self.agent.policy._candidates(info_before, ws_before, goal=fsm_goal)
+        # AutonomyLoop: before_action
+        pre = None
+        try:
+            cands = list(self.agent.policy._candidates(info, ws, goal=fsm_goal) or [])
+            pre = self.autonomy.before_action(info, ws, cands)
+        except Exception as e:
+            print(f"[e2e] before_action error: {e}", flush=True)
 
-        # Выполняем шаг
+        # Navigation sub-loop (из play_autonomous.py)
+        nav_iterations = 0
+        max_nav_iterations = 3
+        if pre and pre.get("nav_command"):
+            nav_cmd = pre["nav_command"]
+            while nav_cmd and nav_iterations < max_nav_iterations:
+                try:
+                    self.env.raw_call(nav_cmd)
+                    nav_iterations += 1
+                    # Проверяем прибытие
+                    new_info = self.env._last_info or {}
+                    new_ws = build_world_state(new_info, world_mem=self.world_mem)
+                    new_cands = list(self.agent.policy._candidates(new_info, new_ws, goal=fsm_goal) or [])
+                    new_pre = self.autonomy.before_action(new_info, new_ws, new_cands)
+                    nav_cmd = new_pre.get("nav_command") if new_pre else None
+                except Exception as e:
+                    print(f"[e2e] nav error: {e}", flush=True)
+                    break
+
+        # Основной шаг агента
         rec = self.agent.step()
+
+        # AutonomyLoop: after_action
+        if pre:
+            try:
+                info_after = self.env._last_info or {}
+                ws_after = build_world_state(info_after, world_mem=self.world_mem)
+                self.autonomy.after_action(
+                    rec.get("action", "?"),
+                    info_after,
+                    ws_after,
+                    reward=rec.get("reward", 0.0),
+                    goal=fsm_goal,
+                )
+            except Exception as e:
+                print(f"[e2e] after_action error: {e}", flush=True)
 
         # Логируем решение
         action = rec.get("action", "?")
+        cands = pre.get("candidates", []) if pre else []
         verdict.add_decision(
             step=step_num,
             action=action,
             reason=rec.get("outcome_kind", "?"),
-            q_state=str(obs_before.get("navigation", {}).get("cell", "?")),
+            q_state=str(ws.get("navigation", {}).get("cell", "?")),
             candidates=cands,
             goal=fsm_goal,
         )
 
-        # Телеметрия
         self.telemetry.append({
             "step": step_num,
             "action": action,
@@ -226,24 +258,19 @@ class E2EQuestCycle:
             "reward": rec.get("reward"),
             "goal": fsm_goal,
             "candidates": cands,
-            "hp": info_before.get("player", {}).get("hp"),
-            "kills": info_before.get("kills"),
-            "deaths": info_before.get("deaths"),
+            "hp": info.get("player", {}).get("hp"),
+            "kills": info.get("kills"),
+            "deaths": info.get("deaths"),
+            "nav_substeps": nav_iterations,
             "t": time.time(),
         })
 
         return rec
 
-    def _build_world_state(self, info: Dict[str, Any]) -> Dict[str, Any]:
-        """Построить WorldState из info."""
-        from world_state import build_world_state
-        return build_world_state(info, world_mem=self.world_mem)
-
     def _stage_accept_quest(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: принять квест."""
-        # Ищем NPC с квестом и принимаем
         for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -262,11 +289,7 @@ class E2EQuestCycle:
 
     def _stage_find_objective(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: найти objective квеста."""
-        for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
-            if rec is None:
-                break
-
+        for _ in range(50):
             info = self.env._last_info or {}
             quests = info.get("quests", {}).get("active", [])
             if quests:
@@ -279,15 +302,17 @@ class E2EQuestCycle:
                         "required": objectives[0].get("required"),
                     })
                     return verdict
+            rec = self._run_autonomy_step(verdict)
+            if rec is None:
+                break
 
         verdict.finish(False, error="No objective found")
         return verdict
 
     def _stage_navigate_to_objective(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: навигация к objective."""
-        # Ждём пока агент выберет navigate или farm
         for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -300,11 +325,10 @@ class E2EQuestCycle:
 
     def _stage_combat_kills(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: убить 8 мобов."""
-        target_kills = 8
         initial_kills = (self.env._last_info or {}).get("kills", 0)
 
         for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -312,16 +336,15 @@ class E2EQuestCycle:
             kills = info.get("kills", 0)
             quests = info.get("quests", {}).get("active", [])
 
-            # Проверяем прогресс objectives
             for q in quests:
                 for obj in q.get("objectives", []):
                     if obj.get("type") == "kill":
-                        target_kills = obj.get("required", 8)
                         current = obj.get("current", 0)
-                        if current >= obj.get("required", 8):
+                        required = obj.get("required", 8)
+                        if current >= required:
                             verdict.finish(True, details={
                                 "kills": kills,
-                                "objective_progress": f"{current}/{obj.get('required')}",
+                                "objective_progress": f"{current}/{required}",
                             })
                             return verdict
 
@@ -334,8 +357,8 @@ class E2EQuestCycle:
 
     def _stage_detect_ready(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: детекция READY_TO_TURN_IN."""
-        for _ in range(50):  # Небольшой лимит — READY должно прийти быстро
-            rec = self._run_agent_step(verdict)
+        for _ in range(50):
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -349,14 +372,13 @@ class E2EQuestCycle:
         return verdict
 
     def _stage_find_turnin_npc(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
-        """Этап: найти turn-in NPC."""
-        # Проверяем что FSM переключился в RETURN_TO_GIVER
+        """Этап: найти turn-in NPC (FSM переключился в RETURN_TO_GIVER)."""
         for _ in range(50):
             if self.fsm and self.fsm.state == QuestState.RETURN_TO_GIVER:
                 verdict.finish(True, details={"fsm_state": self.fsm.state.name})
                 return verdict
 
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -366,11 +388,11 @@ class E2EQuestCycle:
     def _stage_return_to_giver(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: вернуться к гиверу."""
         for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
-            if rec.get("action") == "return_to_giver" and rec.get("verdict") == "SUCCESS":
+            if rec.get("action") == "return_to_giver" and rec.get("verdict", "").upper() == "SUCCESS":
                 info = self.env._last_info or {}
                 dist = info.get("distance_to_giver", 999)
                 verdict.finish(True, details={"distance_to_giver": dist})
@@ -382,11 +404,11 @@ class E2EQuestCycle:
     def _stage_turn_in(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: сдать квест."""
         for _ in range(50):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
-            if rec.get("action") == "turn_in_quest" and rec.get("verdict") == "SUCCESS":
+            if rec.get("action") == "turn_in_quest" and rec.get("verdict", "").upper() == "SUCCESS":
                 verdict.finish(True, details={"verdict": "SUCCESS"})
                 return verdict
 
@@ -395,9 +417,8 @@ class E2EQuestCycle:
 
     def _stage_receive_reward(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: получить награду."""
-        # Проверяем что квест перешел в DONE
         for _ in range(50):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -416,9 +437,8 @@ class E2EQuestCycle:
 
     def _stage_discover_next_quest(self, verdict: QuestCycleVerdict) -> QuestCycleVerdict:
         """Этап: обнаружить следующий квест."""
-        # Проверяем что агент выбрал accept_quest для нового квеста
         for _ in range(self.max_steps_per_stage):
-            rec = self._run_agent_step(verdict)
+            rec = self._run_autonomy_step(verdict)
             if rec is None:
                 break
 
@@ -437,7 +457,7 @@ class E2EQuestCycle:
     def run(self) -> bool:
         """Запуск полного квестового цикла."""
         print("=" * 60, flush=True)
-        print("E2E Quest Cycle Harness", flush=True)
+        print("E2E Quest Cycle Harness (with AutonomyLoop)", flush=True)
         print("=" * 60, flush=True)
 
         try:
@@ -454,7 +474,6 @@ class E2EQuestCycle:
                 print(f"\n[e2e] Cycle FAILED at stage: {stage}", flush=True)
                 break
 
-        # Итоговый отчёт
         self._print_report(all_passed)
         return all_passed
 
@@ -478,7 +497,6 @@ class E2EQuestCycle:
         print(f"Result: {'PASS' if all_passed else 'FAIL'}", flush=True)
         print("=" * 60, flush=True)
 
-        # Сохраняем телеметрию
         report = {
             "result": "PASS" if all_passed else "FAIL",
             "total_steps": self.total_steps,
@@ -493,7 +511,7 @@ class E2EQuestCycle:
 
 
 def main():
-    harness = E2EQuestCycle(max_steps_per_stage=200, max_total_steps=2000)
+    harness = E2EQuestCycle(max_steps_per_stage=300, max_total_steps=3000)
     success = harness.run()
     sys.exit(0 if success else 1)
 
