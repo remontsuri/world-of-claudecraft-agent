@@ -1,0 +1,21 @@
+{
+  "result": "FAIL",
+  "total_steps": 777,
+  "quest_accepts": 0,
+  "quest_turnins": 0,
+  "max_kills": 39,
+  "ready_detected": false,
+  "giver_dist_min": 2.4,
+  "stages": {
+    "accept_quest": false,
+    "find_objective": false,
+    "navigate_to_objective": true,
+    "combat_kills": true,
+    "detect_ready": false,
+    "find_turnin_npc": false,
+    "return_to_giver": true,
+    "turn_in": false,
+    "receive_reward": false,
+    "discover_next_quest": false
+  }
+}
