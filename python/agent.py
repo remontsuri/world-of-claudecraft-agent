@@ -521,37 +521,12 @@ class Agent:
                                           exploration_weight=exploration_weight,
                                           goal=fsm_goal, **_decide_kwargs)
 
-        # SURVIVAL OVERRIDE — the softmax policy doesn't value survival.
-        # If HP is critically low, force heal (exit combat + regen). The bridge
-        # executes whatever the agent decides, so without this the agent picks
-        # farm/explore at hp=0.2 and dies. Reward shaping alone cannot fix this:
-        # Q-values need hundreds of trials to converge, but the agent dies on
-        # the first trial.
-        hp_frac = ws_before.get('hp_frac', 1.0)
-        if hp_frac < CRITICAL_HP_THRESHOLD:
-            if _has_healing(info_before, ws_before):
-                action, ctx = 'heal', {}
-            elif action in ('farm', 'explore', 'return_to_giver', 'turn_in'):
-                # No potions and about to do something dangerous at crit HP.
-                # Force explore (walk away from mobs) as last resort.
-                action = 'explore'
-                ctx = {}
-        elif hp_frac < DANGER_HP_THRESHOLD and action == 'farm':
-            # Soft gate: only farm if the target mob is weak enough to finish
-            # quickly. Strong mobs at low HP = death sentence.
-            _near = info_before.get('nearby') or []
-            _target_max_hp = 0
-            for _e in _near:
-                if _e.get('id') == info_before.get('targetId'):
-                    _target_max_hp = float(_e.get('maxHp') or 0)
-                    break
-            _player_max = float((info_before.get('player') or {}).get('maxHp') or 1)
-            if _target_max_hp > _player_max * STRONG_MOB_MULTIPLIER:
-                # Only force heal if we actually have healing — otherwise
-                # heal is a no-op (bridge case 7 without potions does nothing)
-                # and we'd be stuck. Fall back to farm — at least we fight.
-                if _has_healing(info_before, ws_before):
-                    action, ctx = 'heal', {}
+        # TELEMETRY: policy owns the decision now.
+        # Survival override removed (duplicate of _retreat_if_needed in
+        # autonomous_master.py). Policy learns survival via reward shaping:
+        # low_hp penalty + death penalty in reward.py.
+        _policy_action = action
+        _forced_reason = None
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
@@ -584,6 +559,9 @@ class Agent:
 
         return {
             "action": action,
+            "policy_action": _policy_action,
+            "final_action": action,
+            "forced_reason": _forced_reason,
             "verdict": verdict,
             "outcome_kind": outcome_kind,
             "reward": reward,
