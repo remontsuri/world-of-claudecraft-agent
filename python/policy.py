@@ -727,9 +727,10 @@ class GoalManager:
                 # Никогда не fallback'ить только на explore. /GOAL п.10:
                 # если все skills замаскированы — caller решает через phase.
                 # DO_OBJECTIVE -> navigate; NO_QUEST/FIND_GIVER -> explore.
-                # Берём ПЕРВЫЙ элемент из _masked (он отсортирован в
-                # action_mask.AVAILABLE_FALLBACKS: explore, navigate).
-                cands = [_masked[0]]
+                if goal_phase == "DO_OBJECTIVE" and "navigate" in _masked:
+                    cands = ["navigate"]
+                else:
+                    cands = [_masked[0]]
             # Forced skill (recovery/anchor) may NOT be in policy._candidates
             # (e.g. return_to_giver when the agent wandered far). The autonomy
             # loop explicitly asked for it and verified its precondition, so we
