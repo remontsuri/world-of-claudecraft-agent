@@ -138,9 +138,8 @@ class E2EQuestCycle:
             self.env,
             mem,
             world_mem=self.world_mem,
+            fsm=self.fsm,  # Передаём FSM в агента
         )
-        # Используем FSM агента (он загружается из goal_fsm_state.json)
-        self.fsm = self.agent.fsm
 
         print("[e2e] Environment ready", flush=True)
 
