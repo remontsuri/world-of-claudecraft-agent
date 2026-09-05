@@ -181,6 +181,19 @@ def _plan_for_objective(objective: Dict[str, Any],
         # collect без node_type = добыча с моба (например, greyjaw_fang).
         # Форсируем farm, а не GO_TO_NODE, иначе агент ищет несуществующую ноду.
         if not node_type and (world.get("nearby_mobs") or 0) > 0:
+            # Check if nearest mob is in attack range
+            nearest_mob_dist = None
+            for m in (obs.get("mobs") or []):
+                d = m.get("distance") or m.get("dist")
+                if d is not None and (nearest_mob_dist is None or d < nearest_mob_dist):
+                    nearest_mob_dist = d
+            cls = (obs.get("player") or {}).get("player_class") or ""
+            reach = {"warrior": 7.0, "rogue": 7.0, "mage": 27.0,
+                     "hunter": 27.0, "priest": 27.0, "warlock": 27.0}.get(cls, 27.0)
+            if nearest_mob_dist is not None and nearest_mob_dist > reach:
+                plan.append({"subgoal": "APPROACH", "skill": "navigate",
+                             "reason": "mob_out_of_range",
+                             "target": {"item": objective.get("item_id")}})
             plan.append({"subgoal": "KILL", "skill": "farm",
                          "reason": "objective_collect_mob_drop",
                          "count": remaining,
@@ -205,8 +218,21 @@ def _plan_for_objective(objective: Dict[str, Any],
                      "item": objective.get("item_id")})
 
     elif otype == "kill":
-        # If mobs exist (has_mob=True), force farm directly instead of FIND_MOB.
-        # FIND_MOB → explore removes farm from candidates and agent wanders.
+        # Check if nearest mob is in attack range. If not, force navigate
+        # (approach) first — otherwise farm does nothing (bridge only attacks
+        # in-range) and agent stands still.
+        nearest_mob_dist = None
+        for m in (obs.get("mobs") or []):
+            d = m.get("distance") or m.get("dist")
+            if d is not None and (nearest_mob_dist is None or d < nearest_mob_dist):
+                nearest_mob_dist = d
+        cls = (obs.get("player") or {}).get("player_class") or ""
+        reach = {"warrior": 7.0, "rogue": 7.0, "mage": 27.0,
+                 "hunter": 27.0, "priest": 27.0, "warlock": 27.0}.get(cls, 27.0)
+        if nearest_mob_dist is not None and nearest_mob_dist > reach:
+            plan.append({"subgoal": "APPROACH", "skill": "navigate",
+                         "reason": "mob_out_of_range",
+                         "target": {"mob_id": objective.get("target_mob_id")}})
         plan.append({"subgoal": "KILL", "skill": "farm",
                      "reason": "objective_kill",
                      "count": remaining,

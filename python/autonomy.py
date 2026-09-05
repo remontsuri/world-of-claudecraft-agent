@@ -60,6 +60,7 @@ RECOVERY_TO_SKILL: Dict[str, str] = {
     "navigate_to_station": "explore",
     "farm_for_loot": "farm",
     "retreat": "explore",
+    "navigate": "navigate",
 }
 
 

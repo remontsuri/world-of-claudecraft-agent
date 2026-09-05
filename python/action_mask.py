@@ -69,18 +69,16 @@ def available_actions(obs: Dict[str, Any]) -> List[str]:
 def mask_candidates(cands: List[str], obs: Dict[str, Any]) -> List[str]:
     """Отфильтровать кандидатов политики по предусловиям.
 
-    Фикс 2026-09-03: больше не возвращает ['explore'] как universal fallback.
-    Если все кандидаты замаскированы, возвращает ALWAYS_AVAILABLE (explore,
-    navigate) — caller в policy.decide() сам решает что выбрать на основе
-    phase и FSM state. Никогда не возвращает пустой список.
+    ALWAYS_AVAILABLE (explore, navigate, flee) ВСЕГДА включены — не только
+    как fallback. Иначе при единственном candidate=farm и мобе в 55 yd
+    (warrior reach=6 yd) агент стоит на месте: farm не может атаковать,
+    а explore/navigate не предложены как альтернатива для подхода.
     """
-    ok = []
+    ok = list(ALWAYS_AVAILABLE)  # always include explore/navigate/flee
     for c in cands:
-        if c in ALWAYS_AVAILABLE:
+        if c not in ALWAYS_AVAILABLE and check_preconditions(c, obs)["ok"]:
             ok.append(c)
-        elif check_preconditions(c, obs)["ok"]:
-            ok.append(c)
-    return ok or list(ALWAYS_AVAILABLE)
+    return ok
 
 
 def why_blocked(skill: str, obs: Dict[str, Any]) -> List[str]:
