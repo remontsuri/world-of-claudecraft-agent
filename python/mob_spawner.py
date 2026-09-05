@@ -40,6 +40,42 @@ def _parse_spawn_zones(text: str) -> list[dict]:
     return zones
 
 
+def _parse_collect_drops(text: str) -> dict[str, str]:
+    """Parse { itemId: '...', questId: '...' } from zone1.ts drops.
+    Returns {quest_id: mob_id} for collect quests.
+    """
+    # Pattern: { itemId: '...', chance: NUM, questId: '...' }
+    result = {}
+    pattern = re.compile(
+        r"\{\s*itemId:\s*['\"](\w+)['\"]\s*,"
+        r"\s*chance:\s*\d+\.?\d*\s*,"
+        r"\s*questId:\s*['\"](\w+)['\"]\s*\}",
+    )
+    for m in pattern.finditer(text):
+        item_id = m.group(1)
+        quest_id = m.group(2)
+        # Find which mob drops this item by looking for the drop in mob definitions
+        # In zone1.ts, drops are inside mob definitions: { id: 'old_greyjaw', ... drops: [{ itemId: '...', questId: '...' }] }
+        result[quest_id] = item_id
+    return result
+
+
+def _find_mob_for_item(zone_text: str, item_id: str) -> Optional[str]:
+    """Find mob_id that drops item_id by parsing zone1.ts mob definitions."""
+    # Pattern: mob definition with loot containing itemId
+    # { id: 'old_greyjaw', ... loot: [{ itemId: 'greyjaw_fang', chance: 1, questId: 'q_greyjaw' }] }
+    mob_pattern = re.compile(
+        r"\{\s*id:\s*['\"](\w+)['\"].*?loot:\s*\[(.*?)\]",
+        re.DOTALL,
+    )
+    for m in mob_pattern.finditer(zone_text):
+        mob_id = m.group(1)
+        loot_text = m.group(2)
+        if item_id in loot_text:
+            return mob_id
+    return None
+
+
 def load_spawns() -> dict[str, list[dict]]:
     """Return {quest_id: [{x, z, radius, count, mob_id}]}."""
     data = _load_export()
@@ -70,6 +106,15 @@ def load_spawns() -> dict[str, list[dict]]:
                 if target_mob in mob_zones:
                     for z in mob_zones[target_mob]:
                         quest_spawns.append({**z, "quest_id": quest_id})
+            elif obj.get("type") == "collect":
+                # Collect quest: find mob that drops the item
+                item_id = obj.get("itemId", "")
+                if item_id:
+                    # Find mob that has this item in drops
+                    mob_id = _find_mob_for_item(zone_text, item_id)
+                    if mob_id and mob_id in mob_zones:
+                        for z in mob_zones[mob_id]:
+                            quest_spawns.append({**z, "quest_id": quest_id})
 
         if quest_spawns:
             result[quest_id] = quest_spawns

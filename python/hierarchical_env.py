@@ -232,6 +232,18 @@ class HierarchicalWoWEnv(gym.Env):
                     if tm is not None:
                         quest_mob = tm
                         break
+                    # For collect quests, find mob that drops the quest item
+                    if tm is None:
+                        for obj in (q.get("objectives") or []):
+                            if obj.get("type") == "collect" and obj.get("itemId"):
+                                from mob_spawner import _find_mob_for_item
+                                zone_text = open(r"D:\woc-game\src\sim\content\zone1.ts", encoding="utf-8").read()
+                                mob_id = _find_mob_for_item(zone_text, obj["itemId"])
+                                if mob_id:
+                                    quest_mob = mob_id
+                                    break
+                        if quest_mob:
+                            break
                 obs, r, term, trunc, info = self.base.step(
                     ACT_FARM, {"targetMobId": quest_mob} if quest_mob is not None else None
                 )
