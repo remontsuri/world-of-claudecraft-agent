@@ -156,10 +156,12 @@ class AutonomyLoop:
                     forced = sk
 
         # 0. ANCHOR: если агент ушёл далеко от гивера при активном квесте,
-        # принудительно возвращаемся.
+        # принудительно возвращаемся. НЕ применять, если текущая цель — убийство
+        # (agent должен быть в поле, а не у гивера).
         _giver_dist = ws.get("distance_to_giver", 999.0)
         _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
-        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80:
+        _is_kill_objective = (obs.get("quest") or {}).get("next_objective", {}).get("type") in ("kill", "collect")
+        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80 and not _is_kill_objective:
             forced = "return_to_giver"
             print(f"[anchor] dist={_giver_dist:.1f} -> forced return_to_giver", flush=True)
 
