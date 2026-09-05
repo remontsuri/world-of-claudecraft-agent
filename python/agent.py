@@ -192,15 +192,29 @@ class Agent:
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"
             if action == "navigate":
-                # FIX 2026-09-03: navigate now walks toward quest mob spawn
-                # instead of random walk (random walk caused agent to oscillate
-                # 190-220yd from giver, never reaching quest mob spawns).
+                # Navigate toward nearest mob (not just quest spawn).
+                # If mobs are nearby, walk toward nearest one — otherwise quest spawn.
                 from mob_spawner import nearest_spawn
-                quest_id = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
                 player = (self.env._last_info or {}).get("player", {})
+                px = player.get("x", 0)
+                pz = player.get("z", 0)
+                # Find nearest mob in snapshot
+                nearest = None
+                nd = float("inf")
+                for e in (self.env._last_info or {}).get("nearby", []):
+                    if e.get("kind") == "mob" or e.get("type") == "mob":
+                        d = e.get("dist") or 999
+                        if d < nd:
+                            nd = d
+                            nearest = e
                 tx, tz = None, None
-                if quest_id:
-                    tx, tz = nearest_spawn(quest_id, player.get("x", 0), player.get("z", 0))
+                if nearest:
+                    tx = nearest.get("x")
+                    tz = nearest.get("z")
+                else:
+                    quest_id = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
+                    if quest_id:
+                        tx, tz = nearest_spawn(quest_id, px, pz)
                 if tx is not None and hasattr(self.env, "_navigate_to_coord"):
                     self.env._navigate_to_coord(tx, tz, max_steps=40)
                 elif hasattr(self.env, "explore_walk"):
