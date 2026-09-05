@@ -145,7 +145,6 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 6. взять новый квест
     if world.get("quest_available"):
-        # P0-B: если гивер далеко, сначала подойти к нему
         if (quest.get("giver_distance") or 999) > 7.0:
             return [
                 {"subgoal": "GO_TO_GIVER", "skill": "explore",
@@ -178,9 +177,18 @@ def _plan_for_objective(objective: Dict[str, Any],
     plan: List[Dict[str, Any]] = []
 
     if otype in ("gather", "collect", "item"):
+        node_type = objective.get("node_type") or ""
+        # collect без node_type = добыча с моба (например, greyjaw_fang).
+        # Форсируем farm, а не GO_TO_NODE, иначе агент ищет несуществующую ноду.
+        if not node_type and (world.get("nearby_mobs") or 0) > 0:
+            plan.append({"subgoal": "KILL", "skill": "farm",
+                         "reason": "objective_collect_mob_drop",
+                         "count": remaining,
+                         "item": objective.get("item_id")})
+            plan.append({"subgoal": "LOOT", "skill": "loot", "reason": "after_kill"})
+            return plan
         tool = required_tool(objective)
         if tool and not _has_tool(obs, tool):
-            # инструмент ДО выхода из города — иначе gather будет молча падать
             if (world.get("vendor_distance") or 999.0) > 12.0:
                 plan.append({"subgoal": "GO_TO_VENDOR", "skill": "explore",
                              "reason": "need_tool", "target": "vendor"})
@@ -189,18 +197,16 @@ def _plan_for_objective(objective: Dict[str, Any],
         if (world.get("gather_nodes") or 0) == 0:
             plan.append({"subgoal": "GO_TO_NODE", "skill": "explore",
                          "reason": "no_node_in_range",
-                         "target": objective.get("node_type") or "node"})
+                         "target": node_type or "node"})
         plan.append({"subgoal": "GATHER", "skill": "gather",
                      "reason": "objective_gather",
                      "count": remaining,
-                     "node_type": objective.get("node_type"),
+                     "node_type": node_type,
                      "item": objective.get("item_id")})
 
     elif otype == "kill":
-        if (world.get("nearby_mobs") or 0) == 0:
-            plan.append({"subgoal": "FIND_MOB", "skill": "explore",
-                         "reason": "no_mob_in_range",
-                         "target": objective.get("target_mob_id")})
+        # If mobs exist (has_mob=True), force farm directly instead of FIND_MOB.
+        # FIND_MOB → explore removes farm from candidates and agent wanders.
         plan.append({"subgoal": "KILL", "skill": "farm",
                      "reason": "objective_kill",
                      "count": remaining,
