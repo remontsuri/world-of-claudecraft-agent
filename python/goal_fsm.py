@@ -76,6 +76,8 @@ class GoalFSM:
         self.total_deaths = 0
         self.total_xp = 0
         self.total_copper = 0
+        self.last_suggestion = None
+        self.last_suggestion_reason = None
         self.memory_path = memory_path or os.path.join(
             os.path.dirname(__file__), "goal_fsm_state.json"
         )
@@ -161,6 +163,7 @@ class GoalFSM:
     def enter_dead(self):
         """Агент умер — переводим FSM в RESPAWN, сохраняя квест."""
         if self.state != QuestState.RESPAWN:
+            self.total_deaths += 1
             self._record_failure(FailureReason.COMBAT_FAILURE)
             # Сохраняем состояние для восстановления
             self._pre_death_quest = self.active_quest
@@ -184,15 +187,21 @@ class GoalFSM:
 
     def update_from_world(self, world_state: dict):
         """Синхронизирует состояние FSM с наблюдаемым миром.
-        
-        Вызывается в начале каждого шага. Если квест активен — переводит в 
+
+        Вызывается в начале каждого шага. Если квест активен — переводит в
         DO_OBJECTIVE. Если квест завершён — в DONE.
+
+        Fix5 regression (2026-08-23): TURN_IN against an incomplete ACTIVE
+        quest is stale — demote to DO_OBJECTIVE. Without this, q_greyjaw
+        (0/1) sat in the active list while the FSM held TURN_IN for the
+        same id for 700+ steps.
         """
         quest_status = world_state.get("quest_status", "NONE")
         old_state = self.state
         if quest_status == "ACTIVE" and self.state in (
             QuestState.QUEST_NONE, QuestState.FIND_GIVER, QuestState.ACCEPT,
-            QuestState.VERIFY_ACCEPT, QuestState.ERROR
+            QuestState.VERIFY_ACCEPT, QuestState.ERROR,
+            QuestState.TURN_IN, QuestState.VERIFY_TURN_IN
         ):
             self.state = QuestState.DO_OBJECTIVE
         elif quest_status == "READY_TO_TURN_IN" and self.state in (
@@ -222,6 +231,20 @@ class GoalFSM:
             "no_progress_steps": 0,
             "stuck_detected": False
         }
+
+    def set(self, new_state: QuestState, quest_id: str = None):
+        """Явная установка состояния (для тестов и внешних переходов)."""
+        self.state = new_state
+        if quest_id:
+            if self.active_quest is None:
+                self.active_quest = {"id": quest_id}
+            else:
+                self.active_quest["id"] = quest_id
+
+    def suggest(self, goal: str, reason: str = ""):
+        """Записать совет от LLM (не меняет состояние)."""
+        self.last_suggestion = goal
+        self.last_suggestion_reason = reason
 
     # ---- Основной цикл ----
 
@@ -453,7 +476,7 @@ class GoalFSM:
         """Обновляет историю позиций и дистанций."""
         pos = ws.get("player_pos") or info.get("player_pos")
         if pos and len(pos) >= 2:
-            self.navigation_memory["last_positions"].append((pos[0], pos[2]))
+            self.navigation_memory["last_positions"].append((pos[0], pos[1]))
             if len(self.navigation_memory["last_positions"]) > 50:
                 self.navigation_memory["last_positions"] = self.navigation_memory["last_positions"][-50:]
 
