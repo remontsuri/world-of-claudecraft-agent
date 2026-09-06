@@ -113,8 +113,10 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
         # src/sim/items.ts:791), поэтому вне боя просто ждём — noop лучше,
         # чем спам heal, который ничего не делает и засоряет replay.
         if (world.get("nearby_mobs") or 0) > 0:
-            return [{"subgoal": "RETREAT", "skill": "explore",
-                     "reason": "hp_critical_no_heal"}]
+            # RETREAT removed: let policy decide (farm/heal/explore).
+            # _retreat_if_needed in autonomous_master.py handles physical
+            # retreat when in combat. Policy learns survival via reward.
+            pass
         return [{"subgoal": "REGEN", "skill": "noop",
                  "reason": "hp_critical_no_heal"}]
 
@@ -143,7 +145,6 @@ def plan_subgoals(obs: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 6. взять новый квест
     if world.get("quest_available"):
-        # P0-B: если гивер далеко, сначала подойти к нему
         if (quest.get("giver_distance") or 999) > 7.0:
             return [
                 {"subgoal": "GO_TO_GIVER", "skill": "explore",
@@ -176,9 +177,31 @@ def _plan_for_objective(objective: Dict[str, Any],
     plan: List[Dict[str, Any]] = []
 
     if otype in ("gather", "collect", "item"):
+        node_type = objective.get("node_type") or ""
+        # collect без node_type = добыча с моба (например, greyjaw_fang).
+        # Форсируем farm, а не GO_TO_NODE, иначе агент ищет несуществующую ноду.
+        if not node_type and (world.get("nearby_mobs") or 0) > 0:
+            # Check if nearest mob is in attack range
+            nearest_mob_dist = None
+            for m in (obs.get("mobs") or []):
+                d = m.get("distance") or m.get("dist")
+                if d is not None and (nearest_mob_dist is None or d < nearest_mob_dist):
+                    nearest_mob_dist = d
+            cls = (obs.get("player") or {}).get("player_class") or ""
+            reach = {"warrior": 7.0, "rogue": 7.0, "mage": 27.0,
+                     "hunter": 27.0, "priest": 27.0, "warlock": 27.0}.get(cls, 27.0)
+            if nearest_mob_dist is not None and nearest_mob_dist > reach:
+                plan.append({"subgoal": "APPROACH", "skill": "navigate",
+                             "reason": "mob_out_of_range",
+                             "target": {"item": objective.get("item_id")}})
+            plan.append({"subgoal": "KILL", "skill": "farm",
+                         "reason": "objective_collect_mob_drop",
+                         "count": remaining,
+                         "item": objective.get("item_id")})
+            plan.append({"subgoal": "LOOT", "skill": "loot", "reason": "after_kill"})
+            return plan
         tool = required_tool(objective)
         if tool and not _has_tool(obs, tool):
-            # инструмент ДО выхода из города — иначе gather будет молча падать
             if (world.get("vendor_distance") or 999.0) > 12.0:
                 plan.append({"subgoal": "GO_TO_VENDOR", "skill": "explore",
                              "reason": "need_tool", "target": "vendor"})
@@ -187,18 +210,39 @@ def _plan_for_objective(objective: Dict[str, Any],
         if (world.get("gather_nodes") or 0) == 0:
             plan.append({"subgoal": "GO_TO_NODE", "skill": "explore",
                          "reason": "no_node_in_range",
-                         "target": objective.get("node_type") or "node"})
+                         "target": node_type or "node"})
         plan.append({"subgoal": "GATHER", "skill": "gather",
                      "reason": "objective_gather",
                      "count": remaining,
-                     "node_type": objective.get("node_type"),
+                     "node_type": node_type,
                      "item": objective.get("item_id")})
 
     elif otype == "kill":
-        if (world.get("nearby_mobs") or 0) == 0:
+        # No mob visible at all -> search (explore) first. Without this,
+        # farm targets nothing and the agent stands still.
+        mob_visible = (world.get("nearby_mobs") or 0) > 0
+        nearest_mob_dist = None
+        for m in (obs.get("mobs") or []):
+            d = m.get("distance") or m.get("dist")
+            if d is not None and (nearest_mob_dist is None or d < nearest_mob_dist):
+                nearest_mob_dist = d
+        if nearest_mob_dist is not None:
+            mob_visible = True
+        if not mob_visible:
             plan.append({"subgoal": "FIND_MOB", "skill": "explore",
                          "reason": "no_mob_in_range",
-                         "target": objective.get("target_mob_id")})
+                         "target_mob_id": objective.get("target_mob_id")})
+        else:
+            # Mob visible: check if in attack range. If not, force navigate
+            # (approach) first — otherwise farm does nothing (bridge only attacks
+            # in-range) and agent stands still.
+            cls = (obs.get("player") or {}).get("player_class") or ""
+            reach = {"warrior": 7.0, "rogue": 7.0, "mage": 27.0,
+                     "hunter": 27.0, "priest": 27.0, "warlock": 27.0}.get(cls, 27.0)
+            if nearest_mob_dist is not None and nearest_mob_dist > reach:
+                plan.append({"subgoal": "APPROACH", "skill": "navigate",
+                             "reason": "mob_out_of_range",
+                             "target": {"mob_id": objective.get("target_mob_id")}})
         plan.append({"subgoal": "KILL", "skill": "farm",
                      "reason": "objective_kill",
                      "count": remaining,
@@ -251,7 +295,19 @@ class Planner:
         hp = player.get("hp_fraction")
         urgent = bool(player.get("dead")) or (hp is not None and hp < 0.35)
 
-        if force or urgent or self.current is None or self.dwell >= self.min_dwell:
+        # World-change detection: if the current subgoal is FIND_MOB and
+        # mobs appeared, or KILL and mobs disappeared, replan immediately
+        # (ignore dwell) so the agent reacts to the world, not the timer.
+        world_changed = False
+        if self.current and not urgent:
+            cur = self.current.get("subgoal")
+            nearby = (obs.get("world") or {}).get("nearby_mobs") or 0
+            if cur == "FIND_MOB" and nearby > 0:
+                world_changed = True
+            elif cur == "KILL" and nearby == 0:
+                world_changed = True
+
+        if force or urgent or world_changed or self.current is None or self.dwell >= self.min_dwell:
             self.plan = plan_subgoals(obs)
             self.current = self.plan[0] if self.plan else None
             self.dwell = 0
