@@ -13,7 +13,7 @@ const DEFAULT_TICK_MS = 220;
 // localhost:5173 (vite). Настраивается через WOC_TAB_MATCH (список через
 // запятую), чтобы НЕ держать второй форк моста ради одной строки фильтра.
 const DEFAULT_TAB_MATCH = (process.env.WOC_TAB_MATCH
-  || 'worldofclaudecraft,localhost:5173').split(',')
+  || 'worldofclaudecraft,localhost:5173,127.0.0.1:5173').split(',')
   .map((s) => s.trim()).filter(Boolean);
 
 function tabMatches(url, patterns) {
@@ -45,22 +45,30 @@ class GameClient {
   // (browser.pages() is a cheap CDP target-list call, ms-scale).
   async acquirePage() {
     if (!this.browser) this.browser = await this.connect();
-    let pages;
+    let targets;
     try {
-      pages = await this.browser.pages();
+      targets = await this.browser.targets();
     } catch (_) {
-      // stale CDP connection (browser restarted) -> reconnect once
       this.browser = null;
       this.browser = await this.connect();
-      pages = await this.browser.pages();
+      targets = await this.browser.targets();
     }
-    for (const p of pages) {
-      const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+    for (const t of targets) {
+      if (t.type() !== 'page') continue;
+      let u = (typeof t.url === 'function') ? await t.url() : (t.url || '');
       if (!tabMatches(u, this.tabMatch)) continue;
+      const p = t.page ? await t.page() : t;
       try {
-        const live = await p.evaluate(() =>
-          !!(window.__game && window.__game.sim && window.__game.sim.player &&
-             typeof window.__game.sim.player.level === 'number'));
+        const live = await p.evaluate(() => {
+          const g = window.__game;
+          if (!g || !g.sim) return false;
+          const sim = g.sim;
+          const pid = sim.primaryId;
+          if (typeof pid !== 'number' && typeof pid !== 'string') return false;
+          const ent = sim.entities?.get ? sim.entities.get(pid) : (sim.entities && sim.entities[pid]);
+          if (!ent) return false;
+          return typeof ent.hp === 'number' || typeof ent.level === 'number' || typeof ent.pos === 'object';
+        });
         if (live) { this.page = p; return p; }
       } catch (_) { /* context dead, try next */ }
     }
@@ -100,14 +108,23 @@ class GameClient {
     }
     out.bridge = true;
     try {
-      const pages = await this.browser.pages();
-      for (const p of pages) {
-        const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+      const targets = await this.browser.targets();
+      for (const t of targets) {
+        if (t.type() !== 'page') continue;
+        let u = (typeof t.url === 'function') ? await t.url() : (t.url || '');
         if (!tabMatches(u, this.tabMatch)) continue;
+        const p = t.page ? await t.page() : t;
         out.page = true;
         try {
-          out.game = !!(await p.evaluate(() =>
-            !!(window.__game && window.__game.sim && window.__game.sim.player)));
+          out.game = await p.evaluate(() => {
+            const g = window.__game;
+            if (!g || !g.sim) return false;
+            const sim = g.sim;
+            const pid = sim.primaryId;
+            if (typeof pid !== 'number' && typeof pid !== 'string') return false;
+            const ent = sim.entities?.get ? sim.entities.get(pid) : (sim.entities && sim.entities[pid]);
+            return !!ent;
+          });
         } catch (_) { out.game = false; }
         if (out.game) { this.page = p; break; }
       }
@@ -119,10 +136,12 @@ class GameClient {
   async releaseInputs() {
     try {
       if (!this.browser) this.browser = await this.connect();
-      const pages = await this.browser.pages();
-      for (const p of pages) {
-        const u = (typeof p.url === 'function') ? p.url() : (p.url || '');
+      const targets = await this.browser.targets();
+      for (const t of targets) {
+        if (t.type() !== 'page') continue;
+        let u = (typeof t.url === 'function') ? await t.url() : (t.url || '');
         if (!tabMatches(u, this.tabMatch)) continue;
+        const p = t.page ? await t.page() : t;
         try { await p.evaluate(() => { try { window.__game.controller.stop(); } catch (_) {} }); } catch (_) {}
       }
     } catch (_) {}

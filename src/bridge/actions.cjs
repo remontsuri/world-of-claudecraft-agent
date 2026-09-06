@@ -82,12 +82,10 @@ async function applyAction(idx, cmd, gameClient) {
   // (например gatherNoTarget: у gather не было ни узла, ни трупа).
   let gatherNoTarget = false;
   switch (idx) {
-    case 0: { // farm: chase + attack HOSTILE living mob until it dies
-      // 2026-08-25 (план таргетинга): приоритет квестовой цели. cmd.targetMobId
-      // приходит из Python (первая неполная kill-цель активного квеста).
-      // Если такой моб есть в радиусе — атакуем ЕГО, а не ближайшего чужого.
-      // Нет квестового моба рядом -> fallback на ближайший hostile (как раньше),
-      // чтобы агент не столбился.
+    case 0: { // farm: single target+attack (NO chase loop — agent.py handles nav)
+      // 2026-09-03: chase loop moved to agent.py. Bridge now does ONE
+      // target+attack per call: find nearest hostile mob (quest priority),
+      // target it, start auto-attack. Agent walks between calls via navigate.
       const questMobId = (cmd && cmd.targetMobId) || null;
       const targetId = await gameClient.evaluate((qm) => {
         const g = window.__game, sim = g.sim, p = sim.player;
@@ -95,107 +93,47 @@ async function applyAction(idx, cmd, gameClient) {
         let questBest = null, qbd = Infinity;
         for (const e of sim.entities.values()) {
           if (e.kind !== 'mob' || e.dead || (e.hp ?? 0) <= 0) continue;
-          if (e.hostile === false) continue; // peaceful NPC (quest giver / villager)
+          if (e.hostile === false) continue;
           const tid = e.templateId || e.mobId || null;
           const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
           if (d > 120) continue;
           if (d < bd) { bd = d; best = e; }
-          // квестовый приоритет: совпадение по templateId/mobId
           if (qm && tid === qm && d < qbd) { qbd = d; questBest = e; }
         }
-        // Предпочитаем quest mob только в радиусе QUEST_PREFER_RANGE.
-        // Иначе игрок идёт через толпу hostile мобов и дохнет (deaths=40).
-        // Ближайший hostile чинит путь, quest mob берём когда он рядом.
         const QUEST_PREFER_RANGE = 40;
         return (questBest && qbd < QUEST_PREFER_RANGE)
           ? questBest.id
           : (best ? best.id : null);
       }, questMobId);
-      if (targetId == null) break; // no hostile mob in range: inconclusive, not an error
-      for (let t = 0; t < 80; t++) {
-        const st = await gameClient.evaluate((id) => {
-          // анти-рыскание: гистерезис + память поворота (см. TURN_HELPER выше)
-          const __TURN_START = 0.35, __TURN_STOP = 0.10, __TURN_ONLY = 1.20;
-          const __navDecide = (off, allowForward) => {
-            const mag = Math.abs(off);
-            const wasTurning = !!window.__navTurning;
-            const threshold = wasTurning ? __TURN_STOP : __TURN_START;
-            if (mag <= threshold) {
-              window.__navTurning = false;
-              return allowForward === false ? null : { forward: true };
-            }
-            window.__navTurning = true;
-            const left = off > 0;
-            const fwd = (allowForward !== false) && mag <= __TURN_ONLY;
-            return left ? { turnLeft: true, forward: fwd }
-                        : { turnRight: true, forward: fwd };
-          };
-          const g = window.__game, sim = g.sim, p = sim.player;
-          const e = sim.entities.get(id);
-          if (!e || e.dead || (e.hp ?? 0) <= 0) return { gone: true };
-          const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+      if (targetId == null) break; // no hostile mob in range
+      // Face + target + auto-attack ONCE (no loop)
+      await gameClient.evaluate((id) => {
+        const g = window.__game, sim = g.sim, p = sim.player;
+        const e = sim.entities.get(id);
+        if (!e || e.dead || (e.hp ?? 0) <= 0) return;
+        const dx = e.pos.x - p.pos.x, dz = e.pos.z - p.pos.z;
+        const d = Math.hypot(dx, dz);
+        // Face the target through the game's movement API. In the offline sim,
+        // controller.face() is a no-op; controller.move(input, desiredFacing)
+        // is the verified live path.
+        try {
           const desired = Math.atan2(dx, dz);
-          let off = desired - p.facing;
-          off = ((off + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          // 2026-08-25: per-class chase-дистанция (план таргетинга, п.2).
-          // Ranged-классы НЕ должны забегать в мили: mage wand maxRange=30,
-          // hunter auto shot maxRange=35 (classes.ts). Чейзим до RANGED_STOP,
-          // дальше стоим — автоатака/каст сами достают (auto_attack.ts:210
-          // бьёт ranged при d<=maxRange). Melee-классы ведут себя как раньше.
-          // Профиль резолвится из класса через rangedAutoProfile.
-          let chaseStopDist = 7; // melee default (MELEE_RANGE+запас)
-          try {
-            const cls = (g.online && g.online.ownPlayerClass) || null;
-            // RANGED_CLASSES: mage/hunter/priest/warlock/druid(caster)/shaman —
-            // у всех есть wand/auto-shot профиль в classes.ts с maxRange>=30.
-            // Warrior/rogue — melee, остаются на 7 yd.
-            const RANGED = new Set(['mage','hunter','priest','warlock','shaman']);
-            if (cls && RANGED.has(cls)) {
-              // стоп чуть внутри maxRange 30-35: запас на дрейф и поворот
-              chaseStopDist = 27;
-            }
-          } catch (_) {}
-          if (d > chaseStopDist) {
-            // Use the official movement pipeline: set desired facing AND the
-            // move input. turnLeft/turnRight only integrate facing by TURN_SPEED
-            // per tick (slow), and `controller.move({turnLeft:true})` doesn't
-            // close the distance on its own — the player spins in place. By
-            // passing `desired` as the second arg we set controllerFacing
-            // directly, so stepPlayerMotion rotates toward target and forward
-            // input actually walks toward it. This is the same contract as
-            // setControllerMoveInput(input, facing) in src/game/input.ts.
-            try {
-              if (off > 0.12) g.controller.move({ turnLeft: true, forward: d > 3 }, desired);
-              else if (off < -0.12) g.controller.move({ turnRight: true, forward: d > 3 }, desired);
-              else g.controller.move({ forward: true }, desired);
-            } catch (_) {}
-            return { d, phase: 'chase' };
+          const turn = desired - p.facing;
+          const off = ((turn + Math.PI) % (2 * Math.PI)) - Math.PI;
+          if (Math.abs(off) > 0.10) {
+            const kind = off > 0 ? 'turnLeft' : 'turnRight';
+            g.controller.move({ [kind]: true }, desired);
           }
-          if (chaseStopDist > 7 && d > 7) {
-            // ranged-стойло: в радиусе атаки — СТОП, никакого подхода в мили
-            try {
-              if (off > 0.12) g.controller.move({ turnLeft: true });
-              else if (off < -0.12) g.controller.move({ turnRight: true });
-              else g.controller.stop();
-            } catch (_) {}
-            return { d, phase: 'ranged_hold' };
-          }
-          // в упор: только доворот, вперёд не идём (иначе толкаем моба).
-          if (Math.abs(off) > 0.12) {
-            try {
-              if (off > 0) g.controller.move({ turnLeft: true });
-              else g.controller.move({ turnRight: true });
-              g.controller.stop();
-            } catch (_) {}
-            return { d, phase: 'face' };
-          }
+        } catch (_) {}
+        // Target + auto-attack if in melee range (7yd) or ranged (27yd)
+        const RANGED = new Set(['mage','hunter','priest','warlock','shaman']);
+        const cls = (g.online && g.online.ownPlayerClass) || null;
+        const maxRange = (cls && RANGED.has(cls)) ? 27 : 7;
+        if (d <= maxRange) {
           try { sim.targetEntity(id); } catch (_) {}
           try { sim.startAutoAttack(); } catch (_) {}
-          return { d, phase: 'attack', dead: !!p.dead };
-        }, targetId);
-        if (st && st.gone) break;
-        await sleep(gameClient.tickMs);
-      }
+        }
+      }, targetId);
       break;
     }
     case 1: { // loot: lootCorpse(mobId) на КОНКРЕТНЫЙ труп рядом
