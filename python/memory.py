@@ -108,7 +108,7 @@ class ExperienceStore:
     # Full action set used for the TD bootstrap (max_a' Q(s',a')). Must cover every
     # action the policy can ever emit, including the always-available `explore`.
     ACTIONS = ["farm", "loot", "accept_quest", "turn_in_quest", "return_to_giver",
-               "heal", "sell_junk", "gather", "quest", "explore"]
+               "heal", "sell_junk", "gather", "quest", "explore", "navigate", "flee"]
 
     def __init__(self, lr: float = 0.2, decay: float = None, gamma: float = 0.9, path: Optional[str] = None):
         # (bucket, action) -> float value estimate
@@ -386,6 +386,23 @@ class WorldMemory:
             "zone": zone,
             "last_seen": time.time(),
         }
+
+    def get(self, key, default=None):
+        """Compatibility shim: agent.py reads active_quest/pending_quest
+        as if WorldMemory were a dict. Returns default for unknown keys."""
+        if key == "active_quest":
+            # Return the most recently remembered quest_id (if any)
+            latest = None
+            latest_ts = 0
+            for qid, meta in self.quest_givers.items():
+                ts = meta.get("last_seen", 0) if isinstance(meta, dict) else 0
+                if ts > latest_ts:
+                    latest_ts = ts
+                    latest = qid
+            return latest
+        if key == "pending_quest":
+            return None
+        return default
 
     def vendor_pos(self, npc_id: str) -> Optional[dict]:
         v = self.vendors.get(str(npc_id))
