@@ -21,6 +21,7 @@ import os
 INTERACT_RANGE = 7.0       # дистанция взаимодействия с NPC (из контрактов)
 OBJECTIVE_PROXIMITY = 8.0  # дистанция для прогресса квеста
 STUCK_THRESHOLD = 10       # шагов без прогресса = застревание
+MIN_DWELL_STEPS = 5        # минимальное число шагов между сменами цели
 
 
 class QuestState(Enum):
@@ -76,8 +77,12 @@ class GoalFSM:
         self.total_deaths = 0
         self.total_xp = 0
         self.total_copper = 0
-        self.last_suggestion = None
-        self.last_suggestion_reason = None
+        self.last_suggestion: Optional[str] = None
+        self.last_suggestion_reason: Optional[str] = None
+        self.goal_source: Optional[str] = None
+        self.switch_count: int = 0
+        self._last_set_step: int = 0
+        self._goal_str: Optional[str] = None
         self.memory_path = memory_path or os.path.join(
             os.path.dirname(__file__), "goal_fsm_state.json"
         )
@@ -163,7 +168,6 @@ class GoalFSM:
     def enter_dead(self):
         """Агент умер — переводим FSM в RESPAWN, сохраняя квест."""
         if self.state != QuestState.RESPAWN:
-            self.total_deaths += 1
             self._record_failure(FailureReason.COMBAT_FAILURE)
             # Сохраняем состояние для восстановления
             self._pre_death_quest = self.active_quest
@@ -190,19 +194,17 @@ class GoalFSM:
 
         Вызывается в начале каждого шага. Если квест активен — переводит в
         DO_OBJECTIVE. Если квест завершён — в DONE.
-
-        Fix5 regression (2026-08-23): TURN_IN against an incomplete ACTIVE
-        quest is stale — demote to DO_OBJECTIVE. Without this, q_greyjaw
-        (0/1) sat in the active list while the FSM held TURN_IN for the
-        same id for 700+ steps.
         """
         quest_status = world_state.get("quest_status", "NONE")
         old_state = self.state
         if quest_status == "ACTIVE" and self.state in (
             QuestState.QUEST_NONE, QuestState.FIND_GIVER, QuestState.ACCEPT,
             QuestState.VERIFY_ACCEPT, QuestState.ERROR,
-            QuestState.TURN_IN, QuestState.VERIFY_TURN_IN
+            QuestState.TURN_IN, QuestState.RETURN_TO_GIVER,
         ):
+            # Fix5 regression: TURN_IN against an incomplete quest is stale —
+            # demote back to DO_OBJECTIVE. Same for RETURN_TO_GIVER if the game
+            # still reports the quest as ACTIVE (objectives not done).
             self.state = QuestState.DO_OBJECTIVE
         elif quest_status == "READY_TO_TURN_IN" and self.state in (
             QuestState.DO_OBJECTIVE, QuestState.VERIFY_PROGRESS,
@@ -232,19 +234,40 @@ class GoalFSM:
             "stuck_detected": False
         }
 
-    def set(self, new_state: QuestState, quest_id: str = None):
-        """Явная установка состояния (для тестов и внешних переходов)."""
-        self.state = new_state
-        if quest_id:
-            if self.active_quest is None:
-                self.active_quest = {"id": quest_id}
-            else:
-                self.active_quest["id"] = quest_id
+    def suggest(self, goal: str, reason: str = "") -> bool:
+        """Запомнить совет от LLM/политики. НЕ меняет цель FSM.
 
-    def suggest(self, goal: str, reason: str = ""):
-        """Записать совет от LLM (не меняет состояние)."""
+        Возврат False означает «цель не менялась» (совместимость с apply_decision).
+        """
         self.last_suggestion = goal
         self.last_suggestion_reason = reason
+        return False
+
+    def set(self, goal: str, quest_id: str, source: str = "fsm",
+            step: int = 0, force: bool = False) -> bool:
+        """Установить цель FSM. Возврат True означает «цель изменилась».
+
+        Контракт:
+        - Записи той же цели НЕ увеличивают switch_count.
+        - Легитимная смена не чаще, чем раз в MIN_DWELL_STEPS шагов
+          (кроме force=True — смерть/критический HP).
+        """
+        if goal == self._goal_str:
+            return False
+        if not force and step - self._last_set_step < MIN_DWELL_STEPS:
+            return False
+        # Map goal string to QuestState and set it
+        try:
+            new_state = QuestState[goal]
+            self.state = new_state
+        except KeyError:
+            pass
+        self.active_quest = {"id": quest_id}
+        self._goal_str = goal
+        self.goal_source = source
+        self._last_set_step = step
+        self.switch_count += 1
+        return True
 
     # ---- Основной цикл ----
 

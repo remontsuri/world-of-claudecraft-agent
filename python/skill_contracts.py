@@ -162,17 +162,7 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "bags_not_full":
         return (inv.get("free_slots") or 0) > 0
     if name == "has_junk":
-        # Game doesn't mark items as junk, so junk_count is always 0.
-        # Instead, detect "has sellable items" = inventory is full (free_slots=0)
-        # and there are items to sell.
-        if (inv.get("junk_count") or 0) > 0:
-            return True
-        # Inventory full + has items = has junk to sell
-        free = inv.get("free_slots") or 0
-        items = inv.get("items") or {}
-        if free == 0 and len(items) > 0:
-            return True
-        return False
+        return (inv.get("junk_count") or 0) > 0
     if name == "node_exists":
         return (world.get("gather_nodes") or 0) > 0
     if name == "node_reachable":

@@ -22,33 +22,36 @@ def test_apply_decision_no_longer_writes_goal():
     внутри agent.step(), при этом шаг замедлялся в 6 раз (0.30->1.80с).
     Теперь мнение LLM — только СОВЕТ: цель не меняется, совет сохраняется."""
     from goal_fsm import GoalFSM, QuestState
-    f = GoalFSM(memory_path=tempfile.mkdtemp() + "/g.json")
-    f.set(QuestState.TURN_IN, "q_old")
+    f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
+    f.state = QuestState.TURN_IN
+    f.active_quest = {"id": "q_old"}
     from brain_glue import apply_decision
     applied = apply_decision(f, {"goal": "DO_OBJECTIVE", "reason": "active 6/10"})
     assert applied is False, "LLM больше не должна писать цель"
-    assert f.goal == QuestState.TURN_IN.name + ":q_old", "цель обязана остаться нетронутой"
+    assert f.state == QuestState.TURN_IN, "цель обязана остаться нетронутой"
     assert f.last_suggestion == "DO_OBJECTIVE", "совет должен быть записан"
     assert "active 6/10" in (f.last_suggestion_reason or "")
 
 
 def test_apply_rejects_none_and_bad_goal():
     from goal_fsm import GoalFSM, QuestState
-    f = GoalFSM(memory_path=tempfile.mkdtemp() + "/g.json")
-    f.set(QuestState.TURN_IN, "q_old")
+    f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
+    f.state = QuestState.TURN_IN
+    f.active_quest = {"id": "q_old"}
     from brain_glue import apply_decision
     assert apply_decision(f, None) is False
     assert apply_decision(f, {"goal": "CONQUER_WORLD"}) is False
-    assert f.goal == QuestState.TURN_IN.name + ":q_old"  # FSM не тронут
+    assert f.state == QuestState.TURN_IN          # FSM не тронут
 
 
 def test_survive_maps_to_heal_in_suggestion_only():
     """SURVIVE по-прежнему нормализуется в HEAL, но попадает в СОВЕТ, а не в
     цель: выживанием управляют survival-гейты политики, не латентная LLM."""
     from goal_fsm import GoalFSM, QuestState
-    f = GoalFSM(memory_path=tempfile.mkdtemp() + "/g.json")
-    f.set(QuestState.DO_OBJECTIVE, "q_x")
+    f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
+    f.state = QuestState.DO_OBJECTIVE
+    f.active_quest = {"id": "q_x"}
     from brain_glue import apply_decision
     apply_decision(f, {"goal": "SURVIVE", "reason": "low hp"})
-    assert f.goal == QuestState.DO_OBJECTIVE.name + ":q_x", "цель не должна меняться советом"
+    assert f.state == QuestState.DO_OBJECTIVE, "цель не должна меняться советом"
     assert f.last_suggestion == "HEAL", "SURVIVE обязан нормализоваться в HEAL"

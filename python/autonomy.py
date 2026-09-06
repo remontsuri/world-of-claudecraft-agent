@@ -161,11 +161,16 @@ class AutonomyLoop:
         # (agent должен быть в поле, а не у гивера).
         _giver_dist = ws.get("distance_to_giver", 999.0)
         _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
-        _next_obj = (obs.get("quest") or {}).get("next_objective")
-        _is_kill_objective = (_next_obj or {}).get("type") in ("kill", "collect")
+        _is_kill_objective = (obs.get("quest") or {}).get("next_objective") and ((obs.get("quest") or {}).get("next_objective") or {}).get("type") in ("kill", "collect")
         if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80 and not _is_kill_objective:
             forced = "return_to_giver"
             print(f"[anchor] dist={_giver_dist:.1f} -> forced return_to_giver", flush=True)
+
+        # 0. QUEST SEEK: если нет активного квеста и рядом есть гивер —
+        # форсируем return_to_giver (подойти к гиверу), иначе агент будет
+        # фермитить бесконечно (farm имеет известный высокий Q).
+        # УБРАНО: return_to_giver не работает без активного квеста (нет giver position).
+        # Вместо этого убран farm из candidates в policy.py — агент будет explore.
 
         if forced is None and self.guard.is_looping():
             trip = self.guard.trip()

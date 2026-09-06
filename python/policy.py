@@ -294,7 +294,14 @@ class GoalManager:
         # в цикле explore → death. Рискнуть и фармить сильного моба лучше,
         # чем гарантированно умереть в пустую.
         if ws.get("has_mob"):
-            cands.append(SKILL_FARM)
+            # Если нет активного квеста и рядом есть гивер — убираем farm,
+            # иначе агент будет бесконечно фермитить (farm имеет высокий Q).
+            _no_quest = not ws.get("quest", {}).get("active")
+            _has_giver = (ws.get("quest_givers") or 0) > 0
+            if _no_quest and _has_giver:
+                pass  # skip farm, prioritize quest taking
+            else:
+                cands.append(SKILL_FARM)
         # Классовые способности (warrior/mage/hunter)
         # Вместо хардкод-магии — используем class_config
         if class_cfg["resource"] == "ranged" and playstyle == "ranged_kite":

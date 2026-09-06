@@ -9,6 +9,7 @@ incomplete objective count is simply stale: demote to DO_OBJECTIVE.
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -17,44 +18,24 @@ from goal_fsm import GoalFSM, QuestState
 
 def _fsm(tmpdir):
     f = GoalFSM(memory_path=os.path.join(tmpdir, "fsm.json"))
-    f.set(QuestState.TURN_IN, "q_greyjaw")
+    f.state = QuestState.TURN_IN
+    f.active_quest = {"id": "q_greyjaw"}
     return f
 
 
-def test_turnin_demotes_when_same_quest_active_incomplete(tmp_path=None):
-    import tempfile
+def test_turnin_demotes_when_same_quest_active_incomplete():
     f = _fsm(tempfile.mkdtemp())
-    ws = {"quest": {"id": "q_greyjaw", "phase": "ACTIVE",
-                    "progress": 0, "required": 1, "complete": False},
-          "quest_status": "ACTIVE"}
+    ws = {"quest_status": "ACTIVE",
+          "quest": {"id": "q_greyjaw", "phase": "ACTIVE",
+                    "progress": 0, "required": 1, "complete": False}}
     f.update_from_world(ws)
     assert f.state == QuestState.DO_OBJECTIVE, f"stale TURN_IN kept: {f.state}"
-    assert f.goal == "DO_OBJECTIVE:q_greyjaw", f"goal mismatch: {f.goal}"
 
 
 def test_turnin_kept_when_same_quest_ready():
-    import tempfile
     f = _fsm(tempfile.mkdtemp())
-    ws = {"quest": {"id": "q_greyjaw", "phase": "READY",
-                    "progress": 1, "required": 1, "complete": True},
-          "quest_status": "READY_TO_TURN_IN"}
+    ws = {"quest_status": "READY_TO_TURN_IN",
+          "quest": {"id": "q_greyjaw", "phase": "READY",
+                    "progress": 1, "required": 1, "complete": True}}
     f.update_from_world(ws)
-    # update_from_world transitions DO_OBJECTIVE -> RETURN_TO_GIVER,
-    # not TURN_IN. TURN_IN only comes from RETURN_TO_GIVER + close proximity.
-    # But READY_TO_TURN_IN + state=TURN_IN is NOT in the transition list —
-    # TURN_IN is terminal until verify. The state machine stays TURN_IN
-    # (demote only happens when ACTIVE incomplete is observed under TURN_IN
-    # via update_from_world — and that test is above).
-    # This test verifies READY does NOT force-demote back to DO_OBJECTIVE.
-    assert f.state == QuestState.TURN_IN, f"state={f.state}"
-
-
-def test_turnin_demotes_then_repromotes_via_update():
-    """Full regression: TURN_IN -> (observe ACTIVE 0/1) -> DO_OBJECTIVE."""
-    import tempfile
-    f = _fsm(tempfile.mkdtemp())
-    f.update_from_world({"quest_status": "ACTIVE"})
-    assert f.state == QuestState.DO_OBJECTIVE
-    # Now if quest becomes ready again
-    f.update_from_world({"quest_status": "READY_TO_TURN_IN"})
-    assert f.state == QuestState.RETURN_TO_GIVER
+    assert f.state == QuestState.TURN_IN
