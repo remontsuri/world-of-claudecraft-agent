@@ -212,6 +212,22 @@ def main():
         pass
     print(f"[BOOT] pid={os.getpid()} autonomous run starting (single long-lived process)", flush=True)
 
+    # --- BOUNDED EXECUTION (STREAM F) ---
+    # wall-clock, max decisions, max repeated action, max recovery streak,
+    # max dead streak. Graceful shutdown on any bound breach.
+    bounds = None
+    if os.environ.get("WOC_BOUNDED", "1") != "0":
+        from bounded_execution import BoundedExecution
+        bounds = BoundedExecution()
+        bounds.install_signal_handler()
+        print(f"[bounded] enabled: wall_clock={bounds.wall_clock_limit:.0f}s "
+              f"max_decisions={bounds.max_decisions} "
+              f"max_repeated_action={bounds.max_repeated_action} "
+              f"max_recovery_streak={bounds.max_recovery_streak} "
+              f"max_dead_streak={bounds.max_dead_streak}", flush=True)
+    else:
+        print("[bounded] disabled (WOC_BOUNDED=0)", flush=True)
+
     # P0.4 / P0.7 — учёт того, что реально произошло за прогон.
     # _learning_steps: шаги, прошедшие полную цепочку agent.step()
     #                  (policy -> skill -> verifier -> reward -> memory).
@@ -352,6 +368,9 @@ def main():
         "reward_window": 0.0,          # last-window sum (alias of win_reward)
         "prev_goal": None,
         "_last_turnin_partial": False,
+        # --- bounded execution tracking ---
+        "_bounds_deaths_prev": 0,
+        "_bounds_kills_prev": 0,
     }
     # track per-bucket last action + whether it was negative, to measure recovery
     last_bucket_action = {}
@@ -401,6 +420,14 @@ def main():
     goal_fsm.update_from_world(prev)
 
     for i in range(N_STEPS):
+        # --- BOUNDED EXECUTION: check all bounds at top of loop ---
+        if bounds is not None:
+            should_stop, stop_reason = bounds.check(decisions=_learning_steps)
+            if should_stop:
+                print(f"[bounded] STOPPING: {stop_reason}", flush=True)
+                _log_lifecycle("AGENT_STOP", reason=f"bounded:{stop_reason}")
+                break
+
         # Singleton self-check: if another instance now holds the lock (our lock
         # file was removed/recreated by a newer instance, or we are an orphaned
         # duplicate spawned before the lock existed), stand down silently. This
@@ -731,6 +758,20 @@ def main():
             except Exception:
                 pass
         a = rec["action"]
+        # --- BOUNDED EXECUTION: record step outcome ---
+        if bounds is not None:
+            _is_death = (ws.get("deaths", 0) > m.get("_bounds_deaths_prev", 0)) or _dead
+            _is_progress = (verdict == "SUCCESS") or (ws.get("kills", 0) > m.get("_bounds_kills_prev", 0))
+            _is_recovery = (verdict in ("FAILURE", "NO_OP")) and (a in (
+                "explore", "navigate", "return_to_giver", "find_giver",
+                "find_alternate_vendor", "explore_town", "alternate_route",
+                "unstuck_jump", "replan", "abandon_objective", "next_quest",
+                "continue_objective", "next_objective",
+            ))
+            bounds.record_step(action=a, is_recovery=_is_recovery,
+                               is_death=_is_death, is_progress=_is_progress)
+            m["_bounds_deaths_prev"] = ws.get("deaths", 0)
+            m["_bounds_kills_prev"] = ws.get("kills", 0)
         m["steps"] += 1
         m["action_counts"][a] += 1
         m["xp"] = ws.get("xp", m["xp"])
@@ -1039,6 +1080,14 @@ def main():
           "(autonomy=%s)"
           % (_learning_steps, _nav_substeps, _autonomy_errors,
              "on" if autonomy is not None else "OFF"), flush=True)
+    if bounds is not None:
+        _bs = bounds.summary()
+        print("[accounting] bounded: elapsed=%.0fs repeated_action=%dx %s "
+              "recovery_streak=%d dead_streak=%d"
+              % (_bs["elapsed_s"], _bs["repeated_action_count"],
+                 _bs["last_action"], _bs["recovery_streak"],
+                 _bs["dead_streak"]), flush=True)
+
     # V0 baseline: сохраняем трассу + сводку контура одним файлом.
     try:
         _payload = {
@@ -1094,6 +1143,12 @@ def _summary(m, i, start, logf, final=False, fail_analyzer=None):
            f" | top_fixes={(dict(fail_analyzer.fixes.most_common(3)) if fail_analyzer else {})}\n"
            f"  reward_mean={m['reward_mean']:+.3f} actions={dict(m['action_counts'])}\n")
     print(msg)
+    if bounds is not None:
+        _bs = bounds.summary()
+        print(f"[bounded] elapsed={_bs['elapsed_s']:.0f}s "
+              f"repeated={_bs['repeated_action_count']}x {_bs['last_action']} "
+              f"recovery_streak={_bs['recovery_streak']} "
+              f"dead_streak={_bs['dead_streak']}")
     if logf is not None:
         logf.write(msg + "\n")
     if final:
