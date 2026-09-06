@@ -761,6 +761,7 @@ def main():
         # --- BOUNDED EXECUTION: record step outcome ---
         if bounds is not None:
             _is_death = (ws.get("deaths", 0) > m.get("_bounds_deaths_prev", 0)) or _dead
+            verdict = rec.get("verdict", "")
             _is_progress = (verdict == "SUCCESS") or (ws.get("kills", 0) > m.get("_bounds_kills_prev", 0))
             _is_recovery = (verdict in ("FAILURE", "NO_OP")) and (a in (
                 "explore", "navigate", "return_to_giver", "find_giver",
