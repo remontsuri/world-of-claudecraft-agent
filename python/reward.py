@@ -21,26 +21,22 @@ from typing import Dict, Optional
 
 # ---- configuration (coefficients, not logic) -------------------------------
 WEIGHTS = {
-    "xp": 0.001,            # per xp gained
-    "copper": 0.01,         # per copper gained
-    "quest_progress": 1.0,  # per objective-count unit gained
-    "quests_done": 5.0,     # per quest turned in
-    "kills": 0.2,           # per kill
-    "loot_items": 0.05,     # per inventory slot gained
-    "death": -5.0,          # per death
-    "success_bonus": 0.5,   # verifier SUCCESS
-    "failure_penalty": -0.3,  # verifier FAILURE
-    # drift: measured cost of ending far from the quest giver with no progress.
-    # coefficient small; only bites when distance grew AND progress didn't.
+    "xp": 0.001,
+    "copper": 0.01,
+    "quest_progress": 1.0,
+    "quests_done": 5.0,
+    # A kill must be materially more valuable than a neutral explore/heal step.
+    # The old 0.2 signal was too weak while early combat also incurred HP-loss
+    # penalties. SUCCESS still adds its separate measured-world bonus.
+    "kills": 0.5,
+    "loot_items": 0.05,
+    "death": -5.0,
+    "success_bonus": 0.5,
+    "failure_penalty": -0.3,
     "drift_per_unit": -0.01,
     "drift_cap": -2.0,
-    "dist_progress": 0.02,   # reward per unit distance DECREASED toward giver
-    # low_hp: survival lesson. Penalize HP LOSS (before - after, when positive),
-    # NOT absolute low HP — so natural out-of-combat regen is never punished and
-    # the agent learns "taking damage is bad" instead of "being hurt is bad".
-    # Without this, reward only fires on death (-5.0) and the Q-table learns
-    # "combat = death -> avoid all combat", never "retreat at low HP".
-    "low_hp": -1.5,          # per 1.0 of HP fraction LOST in a step
+    "dist_progress": 0.02,
+    "low_hp": -1.5,
 }
 
 
@@ -57,17 +53,11 @@ def outcome_reward(
     before: Dict,
     after: Dict,
     verdict: str,
-    outcome_kind: str = "OK",       # "OK" | "ENV_ERROR" | "INCONCLUSIVE"
+    outcome_kind: str = "OK",
     cfg: Optional[Dict] = None,
 ) -> float:
-    """Compute reward strictly from observed world deltas.
-
-    before/after: WorldState dicts (player/xp/copper/quests/kills/inventory/distance).
-    verdict: "SUCCESS" | "PARTIAL" | "FAILURE" | "INCONCLUSIVE" (from verifier).
-    outcome_kind: "OK" (normal) | "ENV_ERROR" (server crash) | "INCONCLUSIVE".
-    """
+    """Compute reward strictly from observed world deltas."""
     c = cfg or WEIGHTS
-    # ENV_ERROR is infrastructure, NOT a game outcome. Never train on it.
     if outcome_kind == "ENV_ERROR":
         return 0.0
 
@@ -77,59 +67,28 @@ def outcome_reward(
     reward += max(0.0, _safe_get(after, "quest_progress") - _safe_get(before, "quest_progress")) * c["quest_progress"]
     reward += max(0.0, _safe_get(after, "quests_done") - _safe_get(before, "quests_done")) * c["quests_done"]
     reward += max(0.0, _safe_get(after, "kills") - _safe_get(before, "kills")) * c["kills"]
-    # inventory growth (loot) — count slots, not value
     reward += max(0.0, _safe_get(after, "inv_slots") - _safe_get(before, "inv_slots")) * c["loot_items"]
 
     died = _safe_get(after, "deaths") > _safe_get(before, "deaths")
     if died:
         reward += c["death"]
 
-    # distance-to-giver progress: reward DECREASING distance (moving toward the
-    # giver), even if still far. This is measured from the delta, not a rule.
-    # Without it, return_to_giver gets no positive signal (short-nav can't close
-    # 500u in one call) and the agent never learns to head back.
-    #
-    # MEASURED EXCEPTION (2026-08-17, _diag_death.py): dying RESPAWNS the player
-    # next to the quest giver. A death therefore produces a huge apparent
-    # "distance closed" (observed 97.4 -> 4.0 in one call) that no action earned.
-    # Crediting it would teach "dying is a good way to get back" — a false lesson
-    # from a teleport, not from navigation. So distance progress is only credited
-    # when the player did NOT die during the step. Verified clean case:
-    # navigation alone closed 59.8 -> 36.0 with deaths unchanged.
     if not died:
         d_before = _safe_get(before, "distance_to_giver")
         d_after = _safe_get(after, "distance_to_giver")
         if d_after < d_before:
             reward += (d_before - d_after) * c["dist_progress"]
         elif d_after > d_before:
-            # DRIFT: the agent ended up FARTHER from the quest giver than before.
-            # This is a real, measurable cost (it must now re-cover that distance)
-            # and MUST be penalized, otherwise return_to_giver never learns to head
-            # back and the agent just farms forever. drift_per_unit was declared in
-            # WEIGHTS but previously never applied — that is the bug. Cap it so a
-            # single respawn teleport (huge delta) can't nuke the Q-value.
-            drift = (d_after - d_before)
+            drift = d_after - d_before
             reward += max(c["drift_cap"], drift * c["drift_per_unit"])
 
-    # ШАГ 2 спеки (2026-08-24): success_bonus ТОЛЬКО при реальном изменении
-    # мира. Раньше он платился за ЛЮБОЙ вердикт SUCCESS, и это давало
-    # наградной тредмилл: измерено 200 из 226 очков за 1000 шагов (88%)
-    # приходили именно оттуда, тогда как сдача квеста стоила 5.0 — то есть
-    # 2.2% от рутины. Агент рационально выбирал крутиться на месте:
-    # return_to_giver, стоящий у гивера, и sell_junk без джанка возвращают
-    # SUCCESS, ничего не меняя в мире.
-    # Мировая дельта = всё, что уже начислено выше (xp/copper/прогресс/
-    # киллы/лут/дистанция/смерть). Если она нулевая, бонус не платим.
     world_delta_seen = abs(reward) > 1e-9
     if verdict == "SUCCESS":
         if world_delta_seen:
             reward += c["success_bonus"]
     elif verdict == "FAILURE":
-        # провал наказывается ВСЕГДА, независимо от дельты: попытка была
         reward += c["failure_penalty"]
 
-    # low_hp survival lesson: penalize HP LOSS this step (before - after > 0).
-    # Regen (after > before) is 0 — natural healing in/out of combat is fine.
     hp_loss = _safe_get(before, "hp_frac") - _safe_get(after, "hp_frac")
     if hp_loss > 0:
         reward += hp_loss * c["low_hp"]
