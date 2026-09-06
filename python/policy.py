@@ -388,14 +388,15 @@ class GoalManager:
         # / return both cross mob territory). Run 20132: hp=0.2 + turn_in spam
         # = death loop; heal+food regen needs SAFE ticks to actually fill HP.
         # Only when healthy again do the quest actions come back.
-        quest_ready = (quest_complete or bool(ready)) and ws.get("hp_frac", 1.0) >= 0.35
+        quest_ready = bool(quest_complete or ready)
         # Fix (2026-08-23): when the FSM phase is a turn-in/return phase, the
         # navigation + turn-in skills must ALWAYS be candidates — otherwise the
         # phase gate finds nothing to gate, falls back to the full list, and the
         # agent farms under a return phase (measured: goal=RETURN_TO_GIVER for 29
         # steps while actions were farm/loot/cast). The skills handle distance
         # honestly themselves (PARTIAL when far).
-        if goal in ("RETURN_TO_GIVER", "TURN_IN") and ws.get("hp_frac", 1.0) >= 0.35:
+        goal_phase = goal.split(":")[0] if goal else goal
+        if goal_phase in ("RETURN_TO_GIVER", "TURN_IN"):
             if SKILL_RETURN not in cands:
                 cands.append(SKILL_RETURN)
             if SKILL_TURN_IN not in cands:
@@ -647,6 +648,32 @@ class GoalManager:
                     return "quest:" + str(item["id"])
         return None
 
+    def _log_decision(self, ws, info, goal_phase, reason, action, q_values, chooser, extra=None):
+        """Telemetry: log WHO decided and WHY. Writes to decision_log.jsonl."""
+        try:
+            import json, os, time
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decision_log.jsonl")
+            bucket = _bucket(ws)
+            entry = {
+                "t": time.time(),
+                "step": getattr(self, "step_idx", -1),
+                "bucket": bucket,
+                "goal_phase": goal_phase,
+                "chooser": chooser,
+                "reason": reason,
+                "action": action,
+                "q_values": {k: round(v, 4) for k, v in (q_values or {}).items()},
+                "cands": list(q_values.keys()) if q_values else [],
+                "hp_frac": ws.get("hp_frac"),
+                "quest_status": ws.get("quest_status"),
+                "giver_dist": ws.get("distance_to_giver"),
+                "extra": extra or {},
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass  # telemetry must never crash the agent
+
     def _strategy_weighted(self, vals: dict, info: dict, ws: dict) -> dict:
         """Умножить веса на множитель доказанной стратегии.
 
@@ -704,8 +731,11 @@ class GoalManager:
         # (all mobs 50+yd), cands is empty -> silent explore fallback.
         # Add 'navigate' so policy picks it (the autonomy loop then runs
         # navigate_to_coord toward a known mob-spawn area or quest target).
-        if goal_phase == "DO_OBJECTIVE" and not cands and ws.get("quest", {}).get("id"):
-            cands.append("navigate")
+        if goal_phase == "DO_OBJECTIVE" and ws.get("quest", {}).get("id"):
+            # Navigation is a genuine candidate in objective states, so Q-learning
+            # can compare approach against combat instead of silently falling back.
+            if "navigate" not in cands:
+                cands.append("navigate")
         # /GOAL п.10 fix 2026-09-03 (anchor path): when forced skill is
         # 'return_to_giver' (agent > 80yd from giver) and cands doesn't
         # include it, the hard override at line 718+ returns early ONLY
@@ -744,6 +774,7 @@ class GoalManager:
             # is the ONLY safe action (e.g. return_to_giver at dist=270). Soft-
             # max must NOT override it back to farm — that would undo the anchor.
             if _fs and _fs in cands:
+                self._log_decision(ws, info, goal_phase, "forced_skill", _fs, None, "forced_recovery", {"forced_skill": _fs})
                 return _fs, {}
         elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
             # Legacy fallback: still support hints for backward compatibility
@@ -764,6 +795,7 @@ class GoalManager:
             if qid:
                 ctx["questId"] = qid
                 ctx["quest"] = {"id": qid}
+            self._log_decision(ws, info, goal_phase, "plan_stack_turn_in", "turn_in_quest", {}, "plan_stack", {"giver_dist": ws.get("quest", {}).get("giver_distance")})
             return SKILL_TURN_IN, ctx
         # ПРИОРИТЕТ: инструмент для gather-квеста (STATEFUL, P0 fix 2026-08-25).
         # Если нужен handaxe/gathering_sickle/copper_mining_pick и его нет —
@@ -784,6 +816,7 @@ class GoalManager:
                     vendor = world_mem.vendor_pos("trader_wilkes") if getattr(self, "world_mem", None) else None
                     if vendor:
                         ctx["vendorPos"] = vendor
+                    self._log_decision(ws, info, goal_phase, "tool_priority", "buy", {}, "tool_priority", {"item": need})
                     return SKILL_BUY, ctx
         # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
         # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
@@ -805,6 +838,7 @@ class GoalManager:
             for iid, cnt in counts_sell.items():
                 if iid in keep_sell: continue
                 if cnt - 3 >= 3:
+                    self._log_decision(ws, info, goal_phase, "bag_survival_sell", "sell_junk", {}, "bag_survival", {"bag_slots": bag_slots_sell, "capacity": bag_capacity})
                     return SKILL_SELL, {"keepIds": list(keep_sell)}
         # Ruling (2026-08-23): inside RETURN_TO_GIVER / TURN_IN phases the correct
         # skill is deterministic — navigate toward the giver, then turn in. Leaving
@@ -821,11 +855,13 @@ class GoalManager:
                             and (e.get("dead") or e.get("lootable"))))
                     and not e.get("looted")]
         if _corpses and SKILL_LOOT in cands:
+            self._log_decision(ws, info, goal_phase, "loot_priority", "loot", {}, "loot_priority", {"corpses": len(_corpses)})
             return SKILL_LOOT, {}
         if goal_phase == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
                 and SKILL_RETURN in cands:
+            self._log_decision(ws, info, goal_phase, "phase_return", "return_to_giver", {}, "phase_gate", {})
             return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
-        if goal_phase == "TURN_IN" and ws.get("hp_frac", 1.0) >= 0.35:
+        if goal_phase == "TURN_IN":
 
             # КОРНЕВОЙ ФИКС 2026-08-24 (подтверждён верификатором по исходникам):
             # сдача проходит ТОЛЬКО в пределах INTERACT_RANGE+2 = 7 ярдов
@@ -841,10 +877,13 @@ class GoalManager:
             if _d is None:
                 _d = ws.get("distance_to_giver")
             if _d is not None and _d > QUEST_INTERACT_RANGE and SKILL_RETURN in cands:
+                self._log_decision(ws, info, goal_phase, "turn_in_far_return", "return_to_giver", {}, "turn_in_phase", {"giver_dist": _d, "threshold": QUEST_INTERACT_RANGE})
                 return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
             if SKILL_TURN_IN in cands:
+                self._log_decision(ws, info, goal_phase, "turn_in_close", "turn_in_quest", {}, "turn_in_phase", {"giver_dist": _d})
                 return SKILL_TURN_IN, self._turn_ctx(info, SKILL_TURN_IN)
         if not cands:
+            self._log_decision(ws, info, goal_phase, "fallback_no_cands", "farm", {}, "policy", {})
             return SKILL_FARM, {}
         vals = self.mem.candidate_values(ws, cands)
         # Доказанная стратегия (StrategyMemory) как мягкий prior над Q.
@@ -865,6 +904,8 @@ class GoalManager:
                                # exploration bonus actually differentiates candidates
         action = _softmax_sample(vals, self.temperature, counts=self.mem.counts,
                                  bucket=bucket, exploration_weight=exploration_weight)
+        # TELEMETRY: log policy decision (the actual Q-values + who decided)
+        self._log_decision(ws, info, goal_phase, "softmax_sample", action, vals, "policy", {"bucket": bucket})
         # ctx: pass the active quest if relevant
         ctx = {}
         if action == SKILL_CRAFT:

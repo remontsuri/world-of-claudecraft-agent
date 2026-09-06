@@ -177,14 +177,12 @@ def _pred(name: str, obs: Dict[str, Any]) -> bool:
     if name == "mob_exists":
         return (world.get("nearby_mobs") or 0) > 0
     if name == "mob_reachable":
-        # Дальность боя зависит от КЛАССА (src/sim/content/classes.ts):
-        # warrior бьёт вплотную (~5 yd), mage кастует до 30, hunter до 35.
-        # Единый порог 45 давал ложное «моб достижим» воину при мобе в 32 yd,
-        # farm возвращал NO_OP и агент топтался (живой замер 2026-08-26).
-        cls = str(player.get("player_class") or "").lower()
-        reach = {"warrior": 6.0, "rogue": 6.0, "mage": 30.0,
-                 "hunter": 35.0, "priest": 30.0, "warlock": 30.0}.get(cls, 30.0)
-        return (target.get("distance") or 999) <= reach
+        # farm skill включает approach (ходьба к мобу), поэтому моб
+        # «достижим» если он существует в nearby. Расстояние проверяется
+        # при исполнении (failure_reason mob_too_far → approach_mob).
+        # warrior reach 6 yd не блокирует farm при мобе на 46 yd —
+        # агент сам подойдёт.
+        return (world.get("nearby_mobs") or 0) > 0
     if name == "hp_sufficient":
         return (player.get("hp_fraction") or 0.0) >= 0.35
     if name == "corpse_exists":
