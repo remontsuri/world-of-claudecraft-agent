@@ -60,6 +60,7 @@ RECOVERY_TO_SKILL: Dict[str, str] = {
     "navigate_to_station": "explore",
     "farm_for_loot": "farm",
     "retreat": "explore",
+    "navigate": "navigate",
 }
 
 
@@ -156,10 +157,13 @@ class AutonomyLoop:
                     forced = sk
 
         # 0. ANCHOR: если агент ушёл далеко от гивера при активном квесте,
-        # принудительно возвращаемся.
+        # принудительно возвращаемся. НЕ применять, если текущая цель — убийство
+        # (agent должен быть в поле, а не у гивера).
         _giver_dist = ws.get("distance_to_giver", 999.0)
         _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
-        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80:
+        _next_obj = (obs.get("quest") or {}).get("next_objective")
+        _is_kill_objective = (_next_obj or {}).get("type") in ("kill", "collect")
+        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80 and not _is_kill_objective:
             forced = "return_to_giver"
             print(f"[anchor] dist={_giver_dist:.1f} -> forced return_to_giver", flush=True)
 
@@ -174,19 +178,16 @@ class AutonomyLoop:
             kind = target_kind_for_subgoal(subgoal)
             if sg_skill:
                 pre = check_preconditions(sg_skill, obs)
-                if pre["ok"]:
-                    forced = sg_skill
-                else:
-                    # Навык блокирован ТОЛЬКО дистанцией -> это работа
-                    # навигации, а не повод бросить цель и уйти фармить
-                    # (живой баг: subgoal ACCEPT, гивер 9 yd, агент ушёл).
+                # Planner supplies a subgoal/context; it does not own the final
+                # action. Forcing sg_skill here bypassed Q-learning on normal
+                # steps. Only distance-only preconditions may emit navigation;
+                # the learning action remains the policy's decision.
+                if not pre["ok"]:
                     dist_only = [f for f in pre["failed"]
                                  if f in DISTANCE_PRECONDITIONS]
                     if dist_only and len(dist_only) == len(pre["failed"]) and kind:
                         nav_command, nav_status = self._nav_to(
                             obs, kind, (subgoal or {}).get("target"))
-                        if nav_command:
-                            forced = "explore"
             # Подцель, у которой ЕСТЬ цель перемещения, обязана идти через
             # навигацию. Раньше условие смотрело на имя (GO_TO*/RETURN*), и
             # FIND_MOB с skill=explore проваливался мимо: у explore нет
@@ -214,7 +215,7 @@ class AutonomyLoop:
         name = (subgoal or {}).get("subgoal") or "?"
         self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
 
-        # Build explicit decision context (replaces hidden policy.hints channel)
+        # Build explicit decision context (replaces hidden hints channel)
         _nav_intent = None
         if nav_command:
             _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
@@ -224,10 +225,34 @@ class AutonomyLoop:
             subgoal=(subgoal or {}).get("subgoal"),
             navigation_intent=_nav_intent,
             target=(self.nav.target if self.nav else None),
-            reason=("recovery" if forced and self.last.get("loop")
-                    else "subgoal" if forced
-                    else "policy"),
+            reason=(
+                "recovery" if forced and self.last.get("loop")
+                else "forced_skill" if forced
+                else "subgoal" if forced
+                else "policy"),
         )
+
+        # TELEMETRY: log autonomy loop decision
+        try:
+            import json, os, time
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "autonomy_log.jsonl")
+            entry = {
+                "t": time.time(),
+                "step": self.stats["steps"],
+                "chooser": "autonomy_loop",
+                "reason": decision_ctx.reason,
+                "forced_skill": forced,
+                "subgoal": (subgoal or {}).get("subgoal"),
+                "allowed_skills": tuple(masked),
+                "nav_command": nav_command,
+                "nav_status": nav_status,
+                "loop_detected": self.guard.is_looping(),
+                "recovery_pending": self.pending_recovery,
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
         return {
             "candidates": masked,
@@ -268,7 +293,8 @@ class AutonomyLoop:
     def after_action(self, action: str, info_after: Dict[str, Any],
                      ws_after: Dict[str, Any],
                      reward: float = 0.0,
-                     goal: Optional[str] = None) -> Dict[str, Any]:
+                     goal: Optional[str] = None,
+                     world_mem=None) -> Dict[str, Any]:
         """Проверить постусловия, решить recovery, записать в LoopGuard."""
         obs_after = encode_observation(ws_after, info_after)
         obs_before = self.obs_before or obs_after
@@ -287,7 +313,16 @@ class AutonomyLoop:
 
         failure_reason = None
         recovery = None
-        if result != "SUCCESS":
+
+        # Navigation/exploration endpoints intentionally return INCONCLUSIVE
+        # while travelling. They are control/measurement transitions, not failed
+        # skills. Scheduling recovery for every such transition created a forced
+        # recovery/heal loop and starved actual learning steps.
+        navigation_inconclusive = (
+            action in ("explore", "navigate")
+            and result in ("INCONCLUSIVE", "NO_OP")
+        )
+        if result != "SUCCESS" and not navigation_inconclusive:
             failed_pre = why_blocked(action, obs_before)
             failure_reason = (failed_pre[0] if failed_pre
                               else (post.get("missing") or ["no_effect"])[0])
