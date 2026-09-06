@@ -40,15 +40,9 @@ import quest_skill
 from quest_capability import QuestCapability
 from game_source import GameSource
 
-# Survival override constants (P1: extracted from magic literals in cycle()).
-# DANGER_HP_THRESHOLD < 1.0 — at which we stop farming strong mobs and prefer heal.
-# STRONG_MOB_MULTIPLIER — when target.maxHp exceeds player.maxHp by this factor,
-#   the policy currently farms anyway but agent.py overrides it (safety net).
-# These are conservative defaults; tune after measuring actual DPS curves per class.
-CRITICAL_HP_THRESHOLD = 0.25
-DANGER_HP_THRESHOLD = 0.40
-STRONG_MOB_MULTIPLIER = 2.5
-
+# Survival is learned from observed consequences. There is no hidden HP-based
+# action override in Agent._cycle(); recovery is owned by AutonomyLoop after an
+# actual failed transition/death.
 # P0.3: трассировка горячего цикла за env-гейтом. Раньше _cycle() делал
 # 4 безусловных open()+write()+close() в _cycle.log на КАЖДОМ шаге — на
 # headless-скорости (296 шагов/сек) это ~1200 открытий файла в секунду.
@@ -192,15 +186,29 @@ class Agent:
                 after = self.env._last_info
                 return after, "INCONCLUSIVE", "OK"
             if action == "navigate":
-                # FIX 2026-09-03: navigate now walks toward quest mob spawn
-                # instead of random walk (random walk caused agent to oscillate
-                # 190-220yd from giver, never reaching quest mob spawns).
+                # Navigate toward nearest mob (not just quest spawn).
+                # If mobs are nearby, walk toward nearest one — otherwise quest spawn.
                 from mob_spawner import nearest_spawn
-                quest_id = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
                 player = (self.env._last_info or {}).get("player", {})
+                px = player.get("x", 0)
+                pz = player.get("z", 0)
+                # Find nearest mob in snapshot
+                nearest = None
+                nd = float("inf")
+                for e in (self.env._last_info or {}).get("nearby", []):
+                    if e.get("kind") == "mob" or e.get("type") == "mob":
+                        d = e.get("dist") or 999
+                        if d < nd:
+                            nd = d
+                            nearest = e
                 tx, tz = None, None
-                if quest_id:
-                    tx, tz = nearest_spawn(quest_id, player.get("x", 0), player.get("z", 0))
+                if nearest:
+                    tx = nearest.get("x")
+                    tz = nearest.get("z")
+                else:
+                    quest_id = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
+                    if quest_id:
+                        tx, tz = nearest_spawn(quest_id, px, pz)
                 if tx is not None and hasattr(self.env, "_navigate_to_coord"):
                     self.env._navigate_to_coord(tx, tz, max_steps=40)
                 elif hasattr(self.env, "explore_walk"):
@@ -521,37 +529,12 @@ class Agent:
                                           exploration_weight=exploration_weight,
                                           goal=fsm_goal, **_decide_kwargs)
 
-        # SURVIVAL OVERRIDE — the softmax policy doesn't value survival.
-        # If HP is critically low, force heal (exit combat + regen). The bridge
-        # executes whatever the agent decides, so without this the agent picks
-        # farm/explore at hp=0.2 and dies. Reward shaping alone cannot fix this:
-        # Q-values need hundreds of trials to converge, but the agent dies on
-        # the first trial.
-        hp_frac = ws_before.get('hp_frac', 1.0)
-        if hp_frac < CRITICAL_HP_THRESHOLD:
-            if _has_healing(info_before, ws_before):
-                action, ctx = 'heal', {}
-            elif action in ('farm', 'explore', 'return_to_giver', 'turn_in'):
-                # No potions and about to do something dangerous at crit HP.
-                # Force explore (walk away from mobs) as last resort.
-                action = 'explore'
-                ctx = {}
-        elif hp_frac < DANGER_HP_THRESHOLD and action == 'farm':
-            # Soft gate: only farm if the target mob is weak enough to finish
-            # quickly. Strong mobs at low HP = death sentence.
-            _near = info_before.get('nearby') or []
-            _target_max_hp = 0
-            for _e in _near:
-                if _e.get('id') == info_before.get('targetId'):
-                    _target_max_hp = float(_e.get('maxHp') or 0)
-                    break
-            _player_max = float((info_before.get('player') or {}).get('maxHp') or 1)
-            if _target_max_hp > _player_max * STRONG_MOB_MULTIPLIER:
-                # Only force heal if we actually have healing — otherwise
-                # heal is a no-op (bridge case 7 without potions does nothing)
-                # and we'd be stuck. Fall back to farm — at least we fight.
-                if _has_healing(info_before, ws_before):
-                    action, ctx = 'heal', {}
+        # TELEMETRY: policy owns the decision now.
+        # Survival override removed (duplicate of _retreat_if_needed in
+        # autonomous_master.py). Policy learns survival via reward shaping:
+        # low_hp penalty + death penalty in reward.py.
+        _policy_action = action
+        _forced_reason = None
 
         # 2-5. Skill -> Capability -> Game -> WorldState(after) -> Verifier
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
@@ -584,6 +567,9 @@ class Agent:
 
         return {
             "action": action,
+            "policy_action": _policy_action,
+            "final_action": action,
+            "forced_reason": _forced_reason,
             "verdict": verdict,
             "outcome_kind": outcome_kind,
             "reward": reward,
