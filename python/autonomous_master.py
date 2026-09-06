@@ -120,12 +120,12 @@ def _lock() -> None:
                 raise SystemExit(
                     f"[master] cannot inspect existing PID {old_pid}; refusing duplicate"
                 )
-            except OSError:
+            except (OSError, SystemError):
                 pass
 
         try:
             LOCK_PATH.unlink()
-        except OSError:
+        except (OSError, SystemError):
             pass
 
     LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")

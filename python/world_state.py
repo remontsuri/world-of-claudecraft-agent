@@ -523,7 +523,7 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
             int(info.get("quests_done") or 0),
             len((info.get("quests") or {}).get("done") or []),
         ),
-        "deaths": info.get("deaths", 0),
+        "deaths": max(0, int(info.get("deaths") or 0)),
         "inv_slots": len(inv),
         "bag_capacity": bag_capacity,
         "bag_full": bag_full,
