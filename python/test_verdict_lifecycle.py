@@ -23,10 +23,8 @@ def test_verdict_initialized_before_bounds_check():
             in_bounds_block = True
             continue
         if in_bounds_block:
-            # Find FIRST assignment in bounds block
             if assignment_line is None and re.match(r'verdict\s*=', stripped):
                 assignment_line = i + 1
-            # Find usage in _is_progress
             if '_is_progress' in stripped and 'verdict' in stripped:
                 use_line = i + 1
 
@@ -39,6 +37,28 @@ def test_verdict_initialized_before_bounds_check():
     print(f"PASS: verdict assigned at line {assignment_line}, used at line {use_line}")
 
 
+def test_summary_receives_bounds_parameter():
+    """Verify _summary() accepts bounds parameter and callers pass it."""
+    play_path = os.path.join(os.path.dirname(__file__), "play_autonomous.py")
+    with open(play_path, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    # Check _summary signature
+    m = re.search(r'def _summary\(.*?\):', src, re.DOTALL)
+    assert m, "_summary function not found"
+    sig = m.group(0)
+    assert 'bounds=' in sig, f"_summary must accept bounds parameter. Signature: {sig}"
+    print(f"PASS: _summary accepts bounds parameter")
+
+    # Check callers pass bounds
+    calls = re.findall(r'_summary\([^)]+\)', src)
+    for call in calls:
+        if 'final=True' in call or 'SAVE_EVERY' in call:
+            assert 'bounds=' in call, f"Caller must pass bounds: {call}"
+    print(f"PASS: all _summary callers pass bounds")
+
+
 if __name__ == "__main__":
     test_verdict_initialized_before_bounds_check()
-    print("\nRegression test PASSED")
+    test_summary_receives_bounds_parameter()
+    print("\nAll regression tests PASSED")

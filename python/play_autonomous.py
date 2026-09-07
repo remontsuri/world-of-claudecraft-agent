@@ -1061,7 +1061,7 @@ def main():
         brain_fail_streak = brain_fail_streak + 1 if rec["verdict"] == "FAILURE" else 0
         if i % SAVE_EVERY == 0:
             mem.save()
-            _summary(m, i, start, logf, fail_analyzer=fail_analyzer)
+            _summary(m, i, start, logf, fail_analyzer=fail_analyzer, bounds=bounds)
         if (i + 1) % WINDOW == 0:
             _window_summary(m, i, logf)
             m["win_reward"] = 0.0
@@ -1073,7 +1073,7 @@ def main():
     mem.save()
     logf.close()
     env.close()
-    _summary(m, m["steps"], start, None, final=True, fail_analyzer=fail_analyzer)
+    _summary(m, m["steps"], start, None, final=True, fail_analyzer=fail_analyzer, bounds=bounds)
     # P0.7: честный учёт — сколько шагов дали ОБУЧАЮЩИЙ переход, а сколько
     # были навигационными подшагами в обход agent.step(). Без этой строки
     # "прогнали 5000 шагов" читается как "собрали 5000 переходов", что неверно.
@@ -1120,7 +1120,7 @@ def main():
         pass
 
 
-def _summary(m, i, start, logf, final=False, fail_analyzer=None):
+def _summary(m, i, start, logf, final=False, fail_analyzer=None, bounds=None):
     el = time.time() - start
     # главный показатель долгосрочной автономности
     qtr = (m["quests_turned_in"] / m["quests_completed"]) if m["quests_completed"] else 0.0
