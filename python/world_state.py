@@ -534,6 +534,10 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
         "mana_frac": mana_frac,
         "abilities": abilities,
         "has_ready_damage_spell": has_ready_damage_spell,
+        # quest system readiness (QuestDb=None trap detection)
+        # When sim.questDb is None after respawn, acceptQuest() silently does nothing.
+        # FSM must NOT choose farm when quest system is broken — explore instead.
+        "quest_system_ready": info.get("quest_system_ready", True),
         # economy view: inventory by id, recipes craftable right now
         "inv_by_id": inv_by_id,
         # P0.10: тот же словарь под именем, которое читают потребители

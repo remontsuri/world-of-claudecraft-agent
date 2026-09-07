@@ -396,12 +396,16 @@ class GoalFSM:
             self.state = QuestState.ERROR
             return "explore", {"reason": "quest_not_active"}
 
-        # Есть мобы — фармим
+        # Есть мобы И квестовая система готова И есть цели — фармим
         has_mob = ws.get("has_mob", False)
-        if has_mob:
+        objectives = ws.get("quest_struct", {}).get("objectives") or []
+        quest_ready = ws.get("quest_system_ready", True)
+        if has_mob and quest_ready and len(objectives) > 0:
             return "farm", {"reason": "objective_mob"}
 
-        # Нет целей — исследуем
+        # Нет целей или квестовая система сломана — исследуем
+        if not quest_ready:
+            return "explore", {"reason": "quest_system_broken"}
         return "explore", {"reason": "no_objective_target"}
 
     def _handle_verify_progress(self, ws: dict, info: dict) -> Tuple[str, Dict]:
