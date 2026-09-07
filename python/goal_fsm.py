@@ -316,20 +316,34 @@ class GoalFSM:
         return handler_fn(world_state, info)
 
     def _handle_quest_none(self, ws: dict, info: dict) -> Tuple[str, Dict]:
-        """Нет активного квеста — ищем квестгивера."""
+        """Нет активного квеста — ищем квестгивера с НЕ выполненными квестами."""
         nearby = info.get("nearby", []) or []
-        quest_npcs = [
-            e for e in nearby
-            if (e.get("kind") == "npc" or e.get("type") == "npc")
-            and (e.get("questIds") or e.get("questId"))
-        ]
+        # Получаем ID выполненных квестов
+        done_ids = set()
+        for q in (ws.get("quests", {}).get("done") or []):
+            qid = q.get("id")
+            if qid:
+                done_ids.add(str(qid))
+        # Ищем NPC, у которых есть НЕ выполненные квесты
+        quest_npcs = []
+        for e in nearby:
+            if not (e.get("kind") == "npc" or e.get("type") == "npc"):
+                continue
+            qids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
+            if not qids:
+                continue
+            # Фильтруем только доступные квесты
+            available = [qid for qid in qids if qid and str(qid) not in done_ids]
+            if available:
+                e["_available_quests"] = available
+                quest_npcs.append(e)
         if quest_npcs:
             quest_npcs.sort(key=lambda n: n.get("dist", float("inf")))
             self.quest_giver = quest_npcs[0]
             self.state = QuestState.FIND_GIVER
             return self._handle_find_giver(ws, info)
-        # Нет квестгивера рядом — исследуем
-        return "explore", {"reason": "no_quest_giver"}
+        # Нет квестгивера с доступными квестами — исследуем
+        return "explore", {"reason": "no_available_quest_giver"}
 
     def _handle_find_giver(self, ws: dict, info: dict) -> Tuple[str, Dict]:
         """Идём к квестгиверу, взаимодействуем для получения квеста."""

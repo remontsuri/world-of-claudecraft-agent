@@ -431,9 +431,22 @@ class Agent:
                     ctx["quest"] = q
                     break
             if action == "accept_quest":
+                # Получаем ID выполненных квестов
+                _done_ids = set()
+                for q in (info_before.get("quests", {}).get("done") or []):
+                    qid = q.get("id")
+                    if qid:
+                        _done_ids.add(str(qid))
+                # Ищем NPC с НЕ выполненными квестами
                 for e in (info_before.get("nearby") or []):
-                    if (e.get("kind") == "npc" or e.get("type") == "npc") and (e.get("questIds") or e.get("questId")):
+                    if not ((e.get("kind") == "npc" or e.get("type") == "npc")):
+                        continue
+                    qids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
+                    # Фильтруем только доступные квесты
+                    available = [qid for qid in qids if qid and str(qid) not in _done_ids]
+                    if available:
                         ctx["npc"] = e
+                        ctx["questId"] = available[0]
                         break
         after, verdict, outcome_kind = self._run_skill(action, ctx, info_before)
         ws_after = _world_state_dict(after, self.world_mem)
@@ -483,6 +496,16 @@ class Agent:
                     "action": "recover", "verdict": "FAILURE", "outcome_kind": "ENV_ERROR",
                     "reward": 0.0,
                     "ws_before": _world_state_dict(info, self.world_mem), "ws_after": _world_state_dict(info, self.world_mem),
+                }
+            # After respawn, verify quest system is ready
+            _info_after = self.env._last_info
+            if not _info_after.get("quest_system_ready", True):
+                sys.stderr.write(
+                    "[agent] questDb broken after respawn; pausing as ENV_ERROR\n")
+                return {
+                    "action": "recover", "verdict": "FAILURE", "outcome_kind": "ENV_ERROR",
+                    "reward": 0.0,
+                    "ws_before": _world_state_dict(_info_after, self.world_mem), "ws_after": _world_state_dict(_info_after, self.world_mem),
                 }
         info_before = self.env._last_info
         self._remember_visible_world(info_before)
