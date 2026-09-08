@@ -575,23 +575,7 @@ class GoalManager:
                 for risky in (SKILL_FARM,):
                     if risky in cands:
                         cands.remove(risky)
-        # Retreat option: at low HP / in combat with an active quest, walking
-        # back toward the giver is the only SURVIVABLE move (farm would re-engage
-        # the mob that is killing us; heal may be a no-op without potions).
-        # Without this the gated candidate set at crit HP is {farm, loot, heal}
-        # and the agent is locked in a death loop (observed: 7 deaths in one run,
-        # hp=0.2, still farming). Survival beats phase discipline — added AFTER
-        # the phase gate so it survives DO_OBJECTIVE filtering.
-        # GATE: only above the crit floor (hp>=0.35). Below it walking anywhere
-        # is a death sentence (run 20132: hp=0.2 + turn_in spam); heal+food needs
-        # safe ticks to fill HP back up.
-        if (
-            quest_accepted and ws.get("danger")
-            and ws.get("hp_frac", 1.0) >= 0.35
-            and SKILL_RETURN not in cands
-        ):
-            cands.append(SKILL_RETURN)
-        # de-dup, preserve order
+        # Retreat option removed — safety gate handles this in arbitration layer.
         seen = set(); out = []
         for c in cands:
             if c not in seen:
