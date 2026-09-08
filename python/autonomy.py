@@ -68,8 +68,11 @@ class AutonomyLoop:
     """Один экземпляр на прогон агента."""
 
     def __init__(self, min_dwell: int = 20, loop_window: int = 40,
-                 max_recovery_attempts: int = 3):
-        self.planner = Planner(min_dwell=min_dwell)
+                 max_recovery_attempts: int = 3,
+                 strat_mem=None, experience=None):
+        # STREAM J3: memory-aware Planner
+        self.planner = Planner(min_dwell=min_dwell,
+                               strat_mem=strat_mem, experience=experience)
         self.guard = LoopGuard(window=loop_window)
         self.recovery = RecoveryTracker(max_attempts=max_recovery_attempts)
         # P0.7: отказ от цели должен РЕАЛЬНО менять поведение, а не быть
@@ -363,6 +366,10 @@ class AutonomyLoop:
 
         self.stats["steps"] += 1
         self.stats[result.lower()] = self.stats.get(result.lower(), 0) + 1
+
+        # STREAM J3: record step outcome for memory-aware planning
+        planner_subgoal = self.planner.current or {}
+        self.planner.record_step_outcome(planner_subgoal, result, failure_reason)
 
         # subgoal считаем выполненным только по фактическому успеху
         if result == "SUCCESS":

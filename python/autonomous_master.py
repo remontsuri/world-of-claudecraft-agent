@@ -389,7 +389,7 @@ def main() -> None:
     mem = ExperienceStore(path=str(EXP_PATH))
     world_mem = WorldMemory()
     fsm = GoalFSM(memory_path=str(FSM_PATH))
-    autonomy = AutonomyLoop()
+    autonomy = AutonomyLoop(strat_mem=strat_mem, experience=mem)
 
     env = BrowserEnv(
         player_class="warrior",

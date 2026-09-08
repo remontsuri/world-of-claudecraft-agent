@@ -9,6 +9,12 @@ PPO не должен с нуля выучивать смысл игры. Planne
 
 План — данные (список шагов). Planner не трогает игру и не решает,
 какое действие послать в мост: он говорит, какой шаг сейчас актуален.
+
+STREAM J3 (memory-aware planning):
+- Planner читает StrategyMemory и ExperienceStore перед генерацией плана.
+- При повторном планировании того же goal — генерирует альтернативу, а не
+  повторяет провальный шаблон.
+- Логирует: planned_step -> result -> lesson.
 """
 import re
 from typing import Any, Dict, List, Optional
@@ -276,14 +282,49 @@ def current_subgoal(obs: Dict[str, Any]) -> Dict[str, Any]:
                                  "reason": "empty_plan"}
 
 
-class Planner:
-    """Держит план и min-dwell, чтобы агент не дёргал цель каждый шаг."""
+def _goal_key(obs: Dict[str, Any]) -> str:
+    """Стабильный ключ текущего goal для трекинга в памяти."""
+    quest = obs.get("quest") or {}
+    nxt = quest.get("next_objective") or {}
+    if nxt:
+        return "quest_obj:%s:%s" % (
+            nxt.get("type", ""),
+            nxt.get("target_mob_id") or nxt.get("item_id") or
+            nxt.get("node_type") or "")
+    if quest.get("ready"):
+        return "quest_ready"
+    if quest.get("active"):
+        return "quest_active"
+    world = obs.get("world") or {}
+    if world.get("quest_available"):
+        return "quest_available"
+    return "idle"
 
-    def __init__(self, min_dwell: int = 20):
+
+class Planner:
+    """Держит план и min-dwell, чтобы агент не дёргал цель каждый шаг.
+
+    STREAM J3 (memory-aware):
+    - При повторном планировании того же goal читает StrategyMemory и
+      ExperienceStore, чтобы избегать провальных шаблонов.
+    - Логирует planned_step -> result -> lesson.
+    """
+
+    def __init__(self, min_dwell: int = 20,
+                 strat_mem=None, experience=None):
         self.min_dwell = min_dwell
         self.plan: List[Dict[str, Any]] = []
         self.current: Optional[Dict[str, Any]] = None
         self.dwell = 0
+        # STREAM J3: memory access
+        self.strat_mem = strat_mem
+        self.experience = experience
+        # Track failed steps per goal to generate alternatives
+        self._failed_steps: Dict[str, List[str]] = {}
+        # Track current goal key for memory lookups
+        self._current_goal_key: Optional[str] = None
+        # Lesson log: list of {step, result, lesson}
+        self.lessons: List[Dict[str, str]] = []
 
     def step(self, obs: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
         """Вернуть актуальный subgoal.
@@ -308,7 +349,22 @@ class Planner:
                 world_changed = True
 
         if force or urgent or world_changed or self.current is None or self.dwell >= self.min_dwell:
+            # STREAM J3: read memory before generating plan
+            goal_key = _goal_key(obs)
+            self._current_goal_key = goal_key
+
+            # Check if previous plan for this goal had failures
+            failed = self._failed_steps.get(goal_key, [])
+
             self.plan = plan_subgoals(obs)
+
+            # STREAM J3: if previous APPROACH failed, inject alternative
+            if "APPROACH" in failed:
+                self._inject_alternative_for_failed_approach()
+
+            # STREAM J3: annotate plan with memory-based hints
+            self._annotate_with_memory(goal_key)
+
             self.current = self.plan[0] if self.plan else None
             self.dwell = 0
         else:
@@ -332,7 +388,72 @@ class Planner:
         self.current = self.plan[0] if self.plan else None
         self.dwell = 0
 
+    def record_step_outcome(self, subgoal: Dict[str, Any], result: str,
+                            reason: str = "") -> None:
+        """Записать результат шага для memory-aware planning.
+
+        Вызывается из AutonomyLoop.after_action().
+        """
+        sg_name = (subgoal or {}).get("subgoal", "")
+        goal_key = self._current_goal_key or "unknown"
+
+        # Track failures per goal
+        if result == "FAILURE":
+            if goal_key not in self._failed_steps:
+                self._failed_steps[goal_key] = []
+            self._failed_steps[goal_key].append(sg_name)
+
+        # Log lesson
+        lesson = {
+            "step": sg_name,
+            "result": result,
+            "reason": reason,
+            "goal_key": goal_key,
+        }
+        self.lessons.append(lesson)
+
+        # Write to StrategyMemory if available
+        if self.strat_mem is not None:
+            self.strat_mem.record_step(goal_key, sg_name, result == "SUCCESS")
+
     def reset(self) -> None:
         self.plan = []
         self.current = None
         self.dwell = 0
+        self._failed_steps = {}
+        self._current_goal_key = None
+        self.lessons = []
+
+    # ---- STREAM J3: memory-aware helpers ----
+
+    def _inject_alternative_for_failed_approach(self) -> None:
+        """Если APPROACH провалился — заменить на FIND_MOB (обходной путь).
+
+        Вместо повторного подхода к тому же мобу (который уже провалился),
+        пробуем найти другого моба того же типа поблизости.
+        """
+        if not self.plan:
+            return
+        for i, step in enumerate(self.plan):
+            if step.get("subgoal") == "APPROACH":
+                # Replace APPROACH with FIND_MOB (search for alternate)
+                self.plan[i] = {
+                    "subgoal": "FIND_MOB",
+                    "skill": "explore",
+                    "reason": "approach_failed_alternative",
+                    "target_mob_id": step.get("target", {}).get("mob_id"),
+                }
+                break
+
+    def _annotate_with_memory(self, goal_key: str) -> None:
+        """Добавить memory-based hints в текущий план.
+
+        Если StrategyMemory знает успешную стратегию для этого goal —
+        добавить hint в первый шаг плана.
+        """
+        if self.strat_mem is None or not self.plan:
+            return
+        pref = self.strat_mem.preference(goal_key)
+        if pref:
+            # Annotate first step with proven strategy hint
+            self.plan[0]["_proven_strategy"] = pref

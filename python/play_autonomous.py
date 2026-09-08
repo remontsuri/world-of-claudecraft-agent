@@ -189,7 +189,9 @@ def main():
             from skill_index_contract import assert_skill_indices_match
             assert_predicates_implemented()
             assert_skill_indices_match()
-            autonomy = AutonomyLoop(min_dwell=20)
+            # STREAM J3: pass memory to AutonomyLoop for memory-aware Planner
+            autonomy = AutonomyLoop(min_dwell=20,
+                                    strat_mem=strat_mem, experience=mem)
             print("[autonomy] loop enabled (contracts verified)", flush=True)
         except Exception:
             traceback.print_exc()

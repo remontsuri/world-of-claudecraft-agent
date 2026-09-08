@@ -250,7 +250,7 @@ def run_agent(steps, player_class="warrior", seed=4242):
     from skill_index_contract import assert_skill_indices_match
     assert_predicates_implemented()
     assert_skill_indices_match()
-    autonomy = AutonomyLoop(min_dwell=20)
+    autonomy = AutonomyLoop(min_dwell=20, strat_mem=strat_mem, experience=mem)
 
     # Patch agent._cycle to use autonomy
     original_cycle = agent._cycle
