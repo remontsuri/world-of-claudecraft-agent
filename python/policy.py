@@ -237,7 +237,8 @@ class GoalManager:
 
     # ---- candidate skills from current world ----
     def _candidates(self, info: dict, ws: dict, phase: str = None,
-                    class_cfg: dict = None, playstyle: str = None) -> List[str]:
+                    class_cfg: dict = None, playstyle: str = None,
+                    advisor: dict = None) -> List[str]:
         # Класс игрока НЕ передавался параметром, хотя ниже используется для
         # выбора классовых способностей -> NameError на первом же шаге воина
         # (`gap_closer = get_ability_for_class(player_class, ...)`).
@@ -764,104 +765,28 @@ class GoalManager:
                 cands = filtered
             elif "explore" in _masked:
                 cands = ["explore"]
-        # PLAN-STACK (фарм-бот фикс 2026-08-25): READY-квест у гивера —
-        # детерминированный переход. return_to_giver при dist<=INTERACT_RANGE
-        # бессмысленен: шаг "дойти" уже выполнен, исполняем следующий — turn_in.
-        # Это превращает квест в транзакцию: [собрать] -> [дойти] -> [сдать].
-        if (ws.get("quest_status") == "READY_TO_TURN_IN"
-                and ws.get("quest", {}).get("giver_distance", 999) <= 6):
-            ctx = {}
-            qid = ws.get("quest", {}).get("id")
-            if qid:
-                ctx["questId"] = qid
-                ctx["quest"] = {"id": qid}
-            self._log_decision(ws, info, goal_phase, "plan_stack_turn_in", "turn_in_quest", {}, "plan_stack", {"giver_dist": ws.get("quest", {}).get("giver_distance")})
-            return SKILL_TURN_IN, ctx
-        # ПРИОРИТЕТ: инструмент для gather-квеста (STATEFUL, P0 fix 2026-08-25).
-        # Если нужен handaxe/gathering_sickle/copper_mining_pick и его нет —
-        # форсируем buy, но с retry budget: после 3 неудачных попыток подряд
-        # cooldown 30 шагов, иначе бесконечный BUY-спам (замер: 300/300).
-        need = ws.get("needs_tool")
-        if need:
-            has_tool = any(s.get("itemId") == need for s in (info.get("inventory") or []))
-            if not has_tool:
-                state = getattr(self, "_buy_state", None)
-                if state is None:
-                    state = self._buy_state = {"fails": 0, "cooldown_until_step": -1}
-                step_idx = getattr(self, "step_idx", 0) or 0
-                if step_idx < state["cooldown_until_step"]:
-                    pass  # cooldown: не форсируем buy, работаем по обычной политике
-                else:
-                    ctx = {"buyItemId": need}
-                    vendor = world_mem.vendor_pos("trader_wilkes") if getattr(self, "world_mem", None) else None
-                    if vendor:
-                        ctx["vendorPos"] = vendor
-                    self._log_decision(ws, info, goal_phase, "tool_priority", "buy", {}, "tool_priority", {"item": need})
-                    return SKILL_BUY, ctx
-        # ПРИОРИТЕТ ВЫЖИВАНИЯ: полные сумки блокируют ВСЁ.
-        # Сервер отклоняет сдачу квеста (bagsFullError в quest_commands.ts:367-394),
-        # крафт и лут. Форсируем sell независимо от cands и фазы — skill
-        # сам дойдёт до вендора через navigate.
-        inv_sell = info.get("inventory") or []
-        bag_slots_sell = len([s for s in inv_sell if s])
-        bag_capacity = ws.get("bag_capacity", 16)
-        if bag_slots_sell >= bag_capacity - 3:
-            keep_sell = set(ws.get("quest_items_needed", set()))
-            keep_sell |= set(ws.get("craft_items_needed", set()))
-            keep_sell |= {"baked_bread", "spring_water", "conjured_bread", "conjured_water", "copper_mining_pick"}
-            counts_sell = {}
-            for s in inv_sell:
-                if not s: continue
-                iid = s.get("itemId") or (s.get("def") or {}).get("id")
-                if not iid: continue
-                counts_sell[iid] = counts_sell.get(iid, 0) + (s.get("count") or 1)
-            for iid, cnt in counts_sell.items():
-                if iid in keep_sell: continue
-                if cnt - 3 >= 3:
-                    self._log_decision(ws, info, goal_phase, "bag_survival_sell", "sell_junk", {}, "bag_survival", {"bag_slots": bag_slots_sell, "capacity": bag_capacity})
-                    return SKILL_SELL, {"keepIds": list(keep_sell)}
-        # Ruling (2026-08-23): inside RETURN_TO_GIVER / TURN_IN phases the correct
-        # skill is deterministic — navigate toward the giver, then turn in. Leaving
-        # the choice to softmax let Q-values re-derive a farm/heal loop while the
-        # ready quest waited (measured: 119 steps of RETURN_TO_GIVER with zero
-        # return attempts). Survival gates still veto above.
-        # 2026-09-03 FIX: use goal_phase (without quest_id suffix) for comparison
-        # 2026-09-03 FIX: детерминированный приоритет лута когда труп рядом.
-        # Softmax редко выбирает loot (1/777 шагов), поэтому форсируем.
-        _near = info.get("nearby") or []
-        _corpses = [e for e in _near
-                    if (e.get("type") == "corpse" or e.get("kind") == "corpse"
-                        or ((e.get("kind") == "mob" or e.get("type") == "mob")
-                            and (e.get("dead") or e.get("lootable"))))
-                    and not e.get("looted")]
-        if _corpses and SKILL_LOOT in cands:
-            self._log_decision(ws, info, goal_phase, "loot_priority", "loot", {}, "loot_priority", {"corpses": len(_corpses)})
-            return SKILL_LOOT, {}
-        if goal_phase == "RETURN_TO_GIVER" and ws.get("hp_frac", 1.0) >= 0.35 \
-                and SKILL_RETURN in cands:
-            self._log_decision(ws, info, goal_phase, "phase_return", "return_to_giver", {}, "phase_gate", {})
-            return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
-        if goal_phase == "TURN_IN":
 
-            # КОРНЕВОЙ ФИКС 2026-08-24 (подтверждён верификатором по исходникам):
-            # сдача проходит ТОЛЬКО в пределах INTERACT_RANGE+2 = 7 ярдов
-            # (quests/quest_commands.ts:148). Замер: гиверы были в 59-65 yd,
-            # агент 67 шагов стоял в фазе TURN_IN, 7 раз вызвал turn_in_quest
-            # (все INCONCLUSIVE) и НИ РАЗУ не пошёл к гиверу. Никакая правка
-            # констант это не лечит — нужно ИДТИ.
-            try:
-                from quest_truth import QUEST_INTERACT_RANGE
-            except Exception:
-                QUEST_INTERACT_RANGE = 7.0
-            _d = (ws.get("quest") or {}).get("giver_distance")
-            if _d is None:
-                _d = ws.get("distance_to_giver")
-            if _d is not None and _d > QUEST_INTERACT_RANGE and SKILL_RETURN in cands:
-                self._log_decision(ws, info, goal_phase, "turn_in_far_return", "return_to_giver", {}, "turn_in_phase", {"giver_dist": _d, "threshold": QUEST_INTERACT_RANGE})
-                return SKILL_RETURN, self._turn_ctx(info, SKILL_RETURN)
-            if SKILL_TURN_IN in cands:
-                self._log_decision(ws, info, goal_phase, "turn_in_close", "turn_in_quest", {}, "turn_in_phase", {"giver_dist": _d})
-                return SKILL_TURN_IN, self._turn_ctx(info, SKILL_TURN_IN)
+        # STREAM J Phase 4: Arbitration layer handles all overrides
+        # (plan_stack, tool_priority, bag_survival, loot_priority, phase gates)
+        from arbitration import arbitrate
+        _tool_need = ws.get("needs_tool")
+        _buy_state = getattr(self, "_buy_state", None)
+        _step_idx = getattr(self, "step_idx", 0) or 0
+        _world_mem = getattr(self, "world_mem", None)
+        arb_result = arbitrate(
+            info, ws, goal_phase, cands,
+            tool_need=_tool_need,
+            buy_state=_buy_state,
+            step_idx=_step_idx,
+            world_mem=_world_mem,
+        )
+        if arb_result is not None:
+            _action, _ctx = arb_result
+            self._log_decision(ws, info, goal_phase, "arbitration_override",
+                               _action, {}, "arbitration",
+                               {"phase": goal_phase})
+            return _action, _ctx
+
         if not cands:
             self._log_decision(ws, info, goal_phase, "fallback_no_cands", "farm", {}, "policy", {})
             return SKILL_FARM, {}
