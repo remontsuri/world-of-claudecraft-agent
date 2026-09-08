@@ -182,37 +182,68 @@ def test_policy_no_survival_gate():
     )
 
 
-def test_policy_still_has_bag_survival_sell():
-    """policy.py must STILL have the bag survival sell (Phase 4 will handle it).
+def test_policy_overrides_moved_to_arbitration():
+    """policy.py must NOT contain hardcoded overrides — they moved to arbitration.py.
 
-    Bag survival sell is economy, NOT safety — it stays in policy for now.
+    Phase 4 moves all overrides (plan_stack_turn_in, tool_priority,
+    bag_survival_sell, loot_priority, phase_return, turn_in_phase)
+    to arbitration.py.
     """
     policy_path = os.path.join(os.path.dirname(__file__), "policy.py")
     with open(policy_path, encoding="utf-8") as f:
         source = f.read()
 
-    assert "bag_survival_sell" in source or "bag_survival" in source, (
-        "policy.py lost the bag survival sell — it should remain for Phase 4"
+    # These override patterns should no longer be in policy.py
+    # Check for the actual override logic, not comments
+    assert "plan_stack_turn_in\", \"turn_in_quest\"" not in source, (
+        "policy.py still contains plan_stack_turn_in override"
     )
-    assert "bag_slots_sell >= bag_capacity - 3" in source, (
-        "policy.py lost the bag capacity check — it should remain for Phase 4"
+    assert "\"tool_priority\", \"buy\"" not in source, (
+        "policy.py still contains tool_priority override"
+    )
+    assert "\"bag_survival_sell\", \"sell_junk\"" not in source, (
+        "policy.py still contains bag_survival_sell override"
+    )
+    assert "bag_slots_sell >= bag_capacity - 3" not in source, (
+        "policy.py still contains bag capacity check"
+    )
+    assert "\"loot_priority\", \"loot\"" not in source, (
+        "policy.py still contains loot_priority override"
+    )
+    assert "\"phase_return\", \"return_to_giver\"" not in source, (
+        "policy.py still contains phase_return override"
+    )
+    assert "turn_in_far_return" not in source, (
+        "policy.py still contains turn_in_far_return override"
+    )
+    assert "turn_in_close" not in source, (
+        "policy.py still contains turn_in_close override"
     )
 
 
-if __name__ == "__main__":
-    # Run all tests and report
-    import traceback
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    passed = 0
-    failed = 0
-    for t in tests:
-        try:
-            t()
-            print(f"  PASS  {t.__name__}")
-            passed += 1
-        except Exception:
-            print(f"  FAIL  {t.__name__}")
-            traceback.print_exc()
-            failed += 1
-    print(f"\n{passed} passed, {failed} failed")
-    sys.exit(1 if failed else 0)
+def test_arbitration_has_overrides():
+    """arbitration.py must contain the overrides that were removed from policy.py."""
+    arb_path = os.path.join(os.path.dirname(__file__), "arbitration.py")
+    with open(arb_path, encoding="utf-8") as f:
+        source = f.read()
+
+    # arbitration.py should contain the override functions
+    assert "_bag_survival_sell" in source or "bag_survival" in source, (
+        "arbitration.py missing bag_survival_sell"
+    )
+    assert "_loot_priority" in source or "loot_priority" in source, (
+        "arbitration.py missing loot_priority"
+    )
+    assert "_phase_return" in source or "phase_return" in source, (
+        "arbitration.py missing phase_return"
+    )
+    assert "_turn_in_phase" in source or "turn_in_phase" in source, (
+        "arbitration.py missing turn_in_phase"
+    )
+    # Plan-stack and tool priority are inline in arbitrate()
+    assert "READY_TO_TURN_IN" in source, (
+        "arbitration.py missing plan_stack logic"
+    )
+    assert "buyItemId" in source, (
+        "arbitration.py missing tool_priority logic"
+    )

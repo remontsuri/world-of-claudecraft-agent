@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 def _info(ore=5, ready=False):
     """Живая схема снапшота (проверена schema contract test)."""
-    objs = [{"type": "collect", "itemId": "copper_ore", "current": ore,
+    objs = [{"type": "gather", "nodeType": "copper", "current": ore,
              "required": 8}] if not ready else []
     q = {"id": "q_prof_workorder_forge", "state": "ready" if ready else "active",
          "objectives": objs,
@@ -43,13 +43,14 @@ def _gm():
 
 
 def test_incomplete_objective_plan_is_gather():
-    """Квест 5/8 -> политика ведёт к добыче (gather/farm), не sell."""
+    """Квест 5/8 -> политика ведёт к добыче (gather/navigate), не sell."""
     gm = _gm()
     info = _info(ore=5)
     ws = gm._world_state(info)
     action, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
-    assert action in ("gather", "farm"), \
-        f"5/8 ore: ожидал gather/farm, получили {action}"
+    # Agent should choose gather or navigate (both progress the quest)
+    assert action in ("gather", "navigate"), \
+        f"5/8 ore: ожидал gather/navigate, получили {action}"
 
 
 def test_complete_objective_forces_return_to_giver():
@@ -59,7 +60,7 @@ def test_complete_objective_forces_return_to_giver():
     info = _info(ore=8)
     info["quests"]["active"] = [{
         "id": "q_prof_workorder_forge", "state": "active",
-        "objectives": [{"type": "collect", "itemId": "copper_ore",
+        "objectives": [{"type": "gather", "nodeType": "copper",
                         "current": 8, "required": 8}],
         "turnInNpc": {"x": -34.4, "z": -36.2},
     }]
