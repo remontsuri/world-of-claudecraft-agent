@@ -372,6 +372,24 @@ class Planner:
         return self.current or {"subgoal": "EXPLORE", "skill": "explore",
                                 "reason": "empty_plan"}
 
+    def advisor_context(self, obs: dict) -> dict:
+        """Return context dict for policy consumption.
+
+        {
+            "subgoal": "KILL" | "GATHER" | "FIND_MOB" | "RETURN_TO_GIVER" | ...,
+            "target_mob_id": str | None,
+            "node_type": str | None,
+            "reason": str,
+        }
+        """
+        subgoal = self.step(obs)
+        return {
+            "subgoal": subgoal.get("subgoal"),
+            "target_mob_id": subgoal.get("target_mob_id"),
+            "node_type": subgoal.get("node_type"),
+            "reason": subgoal.get("reason"),
+        }
+
     def force_replan(self) -> None:
         """Сбросить удержание цели: следующий step обязан перепланировать.
 

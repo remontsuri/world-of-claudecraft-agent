@@ -157,16 +157,7 @@ class AutonomyLoop:
                 if sk == "explore" or check_preconditions(sk, obs)["ok"]:
                     signals = signals or {}
                     signals["recovery_needed"] = {"skill": sk, "action": pend.get("action")}
-
-        # 0. ANCHOR: if agent is far from giver during active quest, signal anchor
-        _giver_dist = ws.get("distance_to_giver", 999.0)
-        _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
-        _is_kill_objective = (obs.get("quest") or {}).get("next_objective") and ((obs.get("quest") or {}).get("next_objective") or {}).get("type") in ("kill", "collect")
-        if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80 and not _is_kill_objective:
-            signals = signals or {}
-            signals["anchor_needed"] = {"distance": _giver_dist}
-            print(f"[anchor] dist={_giver_dist:.1f} -> signal anchor_needed", flush=True)
-
+                    
         # Loop detection signal
         if signals is None and self.guard.is_looping():
             trip = self.guard.trip()
@@ -175,26 +166,10 @@ class AutonomyLoop:
             self.last["loop"] = trip
         elif signals is None:
             self.last["loop"] = None
-            sg_skill = (subgoal or {}).get("skill")
-            kind = target_kind_for_subgoal(subgoal)
-            if sg_skill:
-                pre = check_preconditions(sg_skill, obs)
-                if not pre["ok"]:
-                    dist_only = [f for f in pre["failed"]
-                                 if f in DISTANCE_PRECONDITIONS]
-                    if dist_only and len(dist_only) == len(pre["failed"]) and kind:
-                        nav_command, nav_status = self._nav_to(
-                            obs, kind, (subgoal or {}).get("target"))
-            if kind and nav_command is None and (subgoal or {}).get("skill") == "explore":
-                _nearby_mobs = (obs.get("world") or {}).get("nearby_mobs", 0) or 0
-                if _nearby_mobs <= 0:
-                    nav_command, nav_status = self._nav_to(
-                        obs, kind, (subgoal or {}).get("target"))
-                    if nav_command:
-                        signals = signals or {}
-                        signals["subgoal_nav"] = {"kind": kind, "subgoal": (subgoal or {}).get("subgoal")}
 
-        # Build explicit decision context (replaces hidden hints channel)
+        # STREAM J Phase 3: advisor context (soft, non-forcing)
+        advisor = self.planner.advisor_context(obs)
+
         _nav_intent = None
         if nav_command:
             _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
@@ -246,6 +221,7 @@ class AutonomyLoop:
             "obs": obs,
             "blocked": self.guard.blocked_actions(),
             "decision_context": decision_ctx,
+            "advisor": advisor,
         }
 
     def _nav_to(self, obs, kind, hint=None):

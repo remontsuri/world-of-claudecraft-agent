@@ -694,7 +694,8 @@ class GoalManager:
     # ---- main decision ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
                 phase: Optional[str] = None,
-                context: "DecisionContext" = None) -> Tuple[str, dict]:
+                context: "DecisionContext" = None,
+                advisor: Optional[dict] = None) -> Tuple[str, dict]:
         """Choose one skill. `ws` may be passed in by the caller so the decision
         and the later learn() call are guaranteed to use the SAME WorldState
         instance (and therefore the same bucket key). `exploration_weight` scales
@@ -891,6 +892,30 @@ class GoalManager:
                 self._log_decision(ws, info, goal_phase, "episodic_target_suppress",
                                    SKILL_FARM, vals, "episodic_memory",
                                    {"target": _cur_target, "negative_targets": list(_neg)})
+        # STREAM J Phase 3: advisor context shapes candidate weights (soft, not force)
+        if advisor:
+            _adv_subgoal = advisor.get("subgoal")
+            _adv_target = advisor.get("target_mob_id")
+            if _adv_subgoal == "KILL" and SKILL_FARM in vals:
+                # Planner wants to kill a mob — slightly boost farm weight
+                v = vals[SKILL_FARM]
+                vals[SKILL_FARM] = v * 1.2 if v > 0 else v + 0.2
+                self._log_decision(ws, info, goal_phase, "advisor_kill_boost",
+                                   SKILL_FARM, vals, "advisor",
+                                   {"target_mob_id": _adv_target})
+            elif _adv_subgoal == "GATHER" and SKILL_GATHER in vals:
+                v = vals[SKILL_GATHER]
+                vals[SKILL_GATHER] = v * 1.2 if v > 0 else v + 0.2
+            elif _adv_subgoal == "FIND_MOB" and SKILL_EXPLORE in vals:
+                # Planner says FIND_MOB: soft-boost explore to find mobs
+                v = vals[SKILL_EXPLORE]
+                vals[SKILL_EXPLORE] = v * 1.15 if v > 0 else v + 0.15
+            elif _adv_subgoal == "TURN_IN" and SKILL_TURN_IN in vals:
+                v = vals[SKILL_TURN_IN]
+                vals[SKILL_TURN_IN] = v * 1.3 if v > 0 else v + 0.3
+            elif _adv_subgoal == "RETURN_TO_GIVER" and SKILL_RETURN in vals:
+                v = vals[SKILL_RETURN]
+                vals[SKILL_RETURN] = v * 1.3 if v > 0 else v + 0.3
         # ensure every candidate has an entry (unseen -> 0)
         bucket = _bucket(ws)   # SAME key ExperienceStore uses, so the count-based
                                # exploration bonus actually differentiates candidates
