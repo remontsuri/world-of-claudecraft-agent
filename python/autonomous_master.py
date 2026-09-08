@@ -453,7 +453,7 @@ def main() -> None:
             candidates = agent.policy._candidates(
                 info,
                 ws,
-                goal=fsm.goal,
+                phase=fsm.phase,
             )
 
             pre = autonomy.before_action(info, ws, candidates)
@@ -475,7 +475,7 @@ def main() -> None:
                         info_after_nav,
                         ws_after_nav,
                         reward=0.0,
-                        goal=fsm.goal,
+                        phase=fsm.phase,
                     )
                 except Exception:
                     traceback.print_exc()
@@ -532,7 +532,7 @@ def main() -> None:
                     info_after,
                     ws_after,
                     reward=float(rec.get("reward") or 0.0),
-                    goal=fsm.goal,
+                    phase=fsm.phase,
                 )
             except Exception:
                 traceback.print_exc()

@@ -535,7 +535,7 @@ class Agent:
         # Pass ws_before explicitly so decide() and learn() use the IDENTICAL
         # WorldState -> identical bucket key (see world_state.py for the bug this
         # prevents).
-        fsm_goal = self.fsm.goal if self.fsm is not None else None
+
         # step_idx нужен политике для разведочного бюджета gather-гейта
         # (GATHER_PROBE_EVERY): раз в N шагов пробуем действие вопреки фильтру.
         self._step_counter = getattr(self, "_step_counter", 0) + 1
@@ -548,9 +548,10 @@ class Agent:
         _decide_kwargs = {}
         if _ctx is not None:
             _decide_kwargs["context"] = _ctx
+        fsm_phase = self.fsm.phase if self.fsm is not None else None
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
-                                          goal=fsm_goal, **_decide_kwargs)
+                                          goal=fsm_phase, **_decide_kwargs)
 
         # TELEMETRY: policy owns the decision now.
         # Survival override removed (duplicate of _retreat_if_needed in
@@ -578,7 +579,7 @@ class Agent:
             # candidate set of the NEXT state, so the TD bootstrap maxes only over
             # reachable actions (not over globally-unreachable ones).
             next_cands = self.policy._candidates(after, ws_after,
-                                                 goal=fsm_goal)
+                                                 goal=fsm_phase)
             self.policy.learn(ws_before, action, reward, next_state=ws_after,
                               outcome_kind=outcome_kind, candidates=next_cands)
             # 7b. ReplayBuffer + StrategyMemory are fed by play_autonomous.py

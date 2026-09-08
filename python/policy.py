@@ -236,7 +236,7 @@ class GoalManager:
         return build_world_state(info, getattr(self, "world_mem", None))
 
     # ---- candidate skills from current world ----
-    def _candidates(self, info: dict, ws: dict, goal: str = None,
+    def _candidates(self, info: dict, ws: dict, phase: str = None,
                     class_cfg: dict = None, playstyle: str = None) -> List[str]:
         # Класс игрока НЕ передавался параметром, хотя ниже используется для
         # выбора классовых способностей -> NameError на первом же шаге воина
@@ -402,7 +402,7 @@ class GoalManager:
         # agent farms under a return phase (measured: goal=RETURN_TO_GIVER for 29
         # steps while actions were farm/loot/cast). The skills handle distance
         # honestly themselves (PARTIAL when far).
-        goal_phase = goal.split(":")[0] if goal else goal
+        goal_phase = phase  # passed directly from arbitration layer
         if goal_phase in ("RETURN_TO_GIVER", "TURN_IN"):
             if SKILL_RETURN not in cands:
                 cands.append(SKILL_RETURN)
@@ -526,7 +526,7 @@ class GoalManager:
         # quest. Healing is always allowed when hurt (survival > phase).
         # 2026-09-03 FIX: goal включает quest_id ("DO_OBJECTIVE:q_wolves"),
         # а PHASE_ALLOWED ключи без суффикса. Извлекаем фазу перед проверкой.
-        goal_phase = goal.split(":")[0] if goal else goal
+        goal_phase = phase  # passed directly from arbitration layer
         if goal_phase in PHASE_ALLOWED:
             allowed = PHASE_ALLOWED[goal_phase]
             gated = [c for c in cands if c in allowed]
@@ -693,7 +693,7 @@ class GoalManager:
 
     # ---- main decision ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
-                goal: Optional[str] = None,
+                phase: Optional[str] = None,
                 context: "DecisionContext" = None) -> Tuple[str, dict]:
         """Choose one skill. `ws` may be passed in by the caller so the decision
         and the later learn() call are guaranteed to use the SAME WorldState
@@ -709,14 +709,14 @@ class GoalManager:
         if ws is None:
             ws = self._world_state(info)
         # 2026-09-03 FIX: goal_phase нужна для детерминированных проверок ниже
-        goal_phase = goal.split(":")[0] if goal else goal
+        goal_phase = phase  # passed directly from arbitration layer
         # Определяем класс игрока (warrior/mage/hunter)
         player_class = (info.get("player_class")
                         or (ws or {}).get("player_class")
                         or "warrior")  # fallback = warrior (our class)
         class_cfg = get_class_config(player_class)
         playstyle = get_playstyle(player_class)
-        cands = self._candidates(info, ws, goal=goal,
+        cands = self._candidates(info, ws, phase=phase,
                                   class_cfg=class_cfg, playstyle=playstyle)
         # /GOAL п.10 fix 2026-09-03: when DO_OBJECTIVE has NO mob in nearby
         # (all mobs 50+yd), cands is empty -> silent explore fallback.

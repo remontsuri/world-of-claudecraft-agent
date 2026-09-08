@@ -152,6 +152,19 @@ class GoalFSM:
             pass
 
     @property
+    def phase(self) -> Optional[str]:
+        """Current quest phase (without quest_id suffix).
+
+        Returns the QuestState name for use by the arbitration layer.
+        Examples: "QUEST_NONE", "DO_OBJECTIVE", "RETURN_TO_GIVER", "DONE".
+        """
+        if self.state == QuestState.QUEST_NONE:
+            return "QUEST_NONE"
+        if self.state == QuestState.DONE:
+            return "DONE"
+        return self.state.name
+
+    @property
     def quest_id(self) -> Optional[str]:
         """ID текущего квеста."""
         if self.active_quest:

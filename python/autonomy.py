@@ -276,7 +276,7 @@ class AutonomyLoop:
     def after_action(self, action: str, info_after: Dict[str, Any],
                      ws_after: Dict[str, Any],
                      reward: float = 0.0,
-                     goal: Optional[str] = None,
+                     phase: Optional[str] = None,
                      world_mem=None) -> Dict[str, Any]:
         """Проверить постусловия, решить recovery, записать в LoopGuard."""
         obs_after = encode_observation(ws_after, info_after)
