@@ -71,8 +71,17 @@ def main(steps=20):
                 cmd["max_steps"] = 25
                 _, after = call(cmd, timeout=180)
             else:
-                skill = pre["forced_skill"] or (pre["candidates"][0]
-                                               if pre["candidates"] else "explore")
+                # STREAM J6: signals replace forced_skill
+                _signals = pre.get("signals")
+                if _signals and "recovery_needed" in _signals:
+                    skill = _signals["recovery_needed"].get("skill", pre["candidates"][0])
+                elif _signals and "loop_detected" in _signals:
+                    # Pick first non-looping candidate
+                    skill = pre["candidates"][0] if pre["candidates"] else "explore"
+                elif _signals and "anchor_needed" in _signals:
+                    skill = "navigate" if "navigate" in pre["candidates"] else pre["candidates"][0]
+                else:
+                    skill = pre["candidates"][0] if pre["candidates"] else "explore"
                 ep = endpoint_of(skill)
                 if ep == "respawn":
                     # respawn — свой endpoint моста (двухэтапная цепочка)

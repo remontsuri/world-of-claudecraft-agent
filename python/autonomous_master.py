@@ -549,7 +549,7 @@ def main() -> None:
                 "fsm_state": fsm.state.name,
                 "fsm_goal": fsm.goal,
                 "subgoal": pre.get("subgoal"),
-                "forced_skill": pre.get("forced_skill"),
+                "signals": pre.get("signals"),
                 "hp_before": _hp_frac(ws, info),
                 "hp_after": _hp_frac(ws_after, info_after),
                 "quest_status": ws_after.get("quest_status"),

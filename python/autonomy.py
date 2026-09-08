@@ -108,9 +108,9 @@ class AutonomyLoop:
                       candidates: List[str]) -> Dict[str, Any]:
         """Что политике разрешено делать сейчас и зачем.
 
-        Возвращает {candidates, subgoal, forced_skill, obs, blocked}.
-        forced_skill не None -> контур настаивает (recovery/loop), политика
-        может его использовать вместо своего выбора.
+        Возвращает {candidates, subgoal, signals, obs, blocked}.
+        signals не None -> контур обнаружил условие (recovery/loop/anchor),
+        ArbitrationLayer решает, что делать.
         """
         obs = encode_observation(ws, info)
         self.obs_before = obs
@@ -138,13 +138,13 @@ class AutonomyLoop:
         # 2. снять действия на cooldown-е после зафиксированного цикла
         masked = self.guard.filter_candidates(masked)
 
-        # 3. форс: recovery -> цикл -> subgoal
-        forced = None
+        # 3. signals: recovery / loop / anchor
+        # AutonomyLoop detects CONDITIONS, ArbitrationLayer DECIDES what to do.
+        signals: Optional[Dict] = None
         nav_command = None
         nav_status = None
 
-        # 3a. P0.6: незакрытая стратегия восстановления имеет приоритет —
-        # иначе «recovery» остаётся строчкой в логе, а поведение не меняется.
+        # 3a. P0.6: recovery signal — AutonomyLoop detects, ArbitrationLayer decides
         pend = self.pending_recovery
         if pend:
             self.pending_recovery = None
@@ -152,76 +152,47 @@ class AutonomyLoop:
                 "recoveries_executed", 0) + 1
             if pend["kind"] == "navigate":
                 nav_command, nav_status = self._nav_to(obs, pend["target"])
-                if nav_command:
-                    forced = "explore"
             elif pend["kind"] == "skill":
                 sk = pend["skill"]
                 if sk == "explore" or check_preconditions(sk, obs)["ok"]:
-                    forced = sk
+                    signals = signals or {}
+                    signals["recovery_needed"] = {"skill": sk, "action": pend.get("action")}
 
-        # 0. ANCHOR: если агент ушёл далеко от гивера при активном квесте,
-        # принудительно возвращаемся. НЕ применять, если текущая цель — убийство
-        # (agent должен быть в поле, а не у гивера).
+        # 0. ANCHOR: if agent is far from giver during active quest, signal anchor
         _giver_dist = ws.get("distance_to_giver", 999.0)
         _quest_active = (obs.get("quest") or {}).get("active", 0) > 0
         _is_kill_objective = (obs.get("quest") or {}).get("next_objective") and ((obs.get("quest") or {}).get("next_objective") or {}).get("type") in ("kill", "collect")
         if _quest_active and isinstance(_giver_dist, (int, float)) and _giver_dist > 80 and not _is_kill_objective:
-            forced = "return_to_giver"
-            print(f"[anchor] dist={_giver_dist:.1f} -> forced return_to_giver", flush=True)
+            signals = signals or {}
+            signals["anchor_needed"] = {"distance": _giver_dist}
+            print(f"[anchor] dist={_giver_dist:.1f} -> signal anchor_needed", flush=True)
 
-        # 0. QUEST SEEK: если нет активного квеста и рядом есть гивер —
-        # форсируем return_to_giver (подойти к гиверу), иначе агент будет
-        # фермитить бесконечно (farm имеет известный высокий Q).
-        # УБРАНО: return_to_giver не работает без активного квеста (нет giver position).
-        # Вместо этого убран farm из candidates в policy.py — агент будет explore.
-
-        if forced is None and self.guard.is_looping():
+        # Loop detection signal
+        if signals is None and self.guard.is_looping():
             trip = self.guard.trip()
             self.stats["loops_tripped"] += 1
-            forced = RECOVERY_TO_SKILL.get(trip["recovery_action"])
+            signals = {"loop_detected": trip}
             self.last["loop"] = trip
-        elif forced is None:
+        elif signals is None:
             self.last["loop"] = None
             sg_skill = (subgoal or {}).get("skill")
             kind = target_kind_for_subgoal(subgoal)
             if sg_skill:
                 pre = check_preconditions(sg_skill, obs)
-                # Planner supplies a subgoal/context; it does not own the final
-                # action. Forcing sg_skill here bypassed Q-learning on normal
-                # steps. Only distance-only preconditions may emit navigation;
-                # the learning action remains the policy's decision.
                 if not pre["ok"]:
                     dist_only = [f for f in pre["failed"]
                                  if f in DISTANCE_PRECONDITIONS]
                     if dist_only and len(dist_only) == len(pre["failed"]) and kind:
                         nav_command, nav_status = self._nav_to(
                             obs, kind, (subgoal or {}).get("target"))
-            # Подцель, у которой ЕСТЬ цель перемещения, обязана идти через
-            # навигацию. Раньше условие смотрело на имя (GO_TO*/RETURN*), и
-            # FIND_MOB с skill=explore проваливался мимо: у explore нет
-            # предусловий -> forced=explore -> шаг на месте, pos не менялась
-            # (живой замер: 8 шагов FIND_MOB, pos=(0,0), nav_commands=0).
             if kind and nav_command is None and (subgoal or {}).get("skill") == "explore":
-                # Если моб УЖЕ в зоне видимости (nearby_mobs>0), НЕ форсируем
-                # слепой explore — это уводило агента на 290yd от гивера
-                # (живой замер: dist=267..290 при qs=ACTIVE). farm (scripted
-                # chase) сам дойдёт до моба и добьёт его; оставляем выбор
-                # политики. Explore оставляем только для РЕАЛЬНОГО поиска,
-                # когда мобов нет в радиусе сканирования.
                 _nearby_mobs = (obs.get("world") or {}).get("nearby_mobs", 0) or 0
                 if _nearby_mobs <= 0:
                     nav_command, nav_status = self._nav_to(
                         obs, kind, (subgoal or {}).get("target"))
                     if nav_command:
-                        forced = "explore"
-
-        if forced and forced not in masked:
-            # форсируем только исполнимое
-            if forced == "explore" or check_preconditions(forced, obs)["ok"]:
-                masked = [forced] + masked
-
-        name = (subgoal or {}).get("subgoal") or "?"
-        self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
+                        signals = signals or {}
+                        signals["subgoal_nav"] = {"kind": kind, "subgoal": (subgoal or {}).get("subgoal")}
 
         # Build explicit decision context (replaces hidden hints channel)
         _nav_intent = None
@@ -229,16 +200,20 @@ class AutonomyLoop:
             _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
         decision_ctx = DecisionContext(
             allowed_skills=tuple(masked),
-            forced_skill=forced,
+            signals=signals,
             subgoal=(subgoal or {}).get("subgoal"),
             navigation_intent=_nav_intent,
             target=(self.nav.target if self.nav else None),
             reason=(
-                "recovery" if forced and self.last.get("loop")
-                else "forced_skill" if forced
-                else "subgoal" if forced
+                "recovery" if signals and "recovery_needed" in signals
+                else "loop" if signals and "loop_detected" in signals
+                else "anchor" if signals and "anchor_needed" in signals
+                else "subgoal" if signals and "subgoal_nav" in signals
                 else "policy"),
         )
+
+        name = (subgoal or {}).get("subgoal") or "?"
+        self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
 
         # TELEMETRY: log autonomy loop decision
         try:
@@ -249,7 +224,7 @@ class AutonomyLoop:
                 "step": self.stats["steps"],
                 "chooser": "autonomy_loop",
                 "reason": decision_ctx.reason,
-                "forced_skill": forced,
+                "signals": signals,
                 "subgoal": (subgoal or {}).get("subgoal"),
                 "allowed_skills": tuple(masked),
                 "nav_command": nav_command,
@@ -265,7 +240,7 @@ class AutonomyLoop:
         return {
             "candidates": masked,
             "subgoal": subgoal,
-            "forced_skill": forced,
+            "signals": signals,
             "nav_command": nav_command,
             "nav_status": nav_status,
             "obs": obs,

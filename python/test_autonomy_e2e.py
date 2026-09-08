@@ -275,7 +275,7 @@ def test_e2e_5b_repeated_failure_does_not_loop_forever(bridge_up):
     seen = []
     for _ in range(6):
         pre = loop.before_action(info, ws, [skill, "explore"])
-        seen.append(pre["forced_skill"])
+        seen.append(pre["signals"])
         loop.after_action(skill, info, ws)
 
     escalated = (loop.stats.get("loops_tripped", 0) > 0
@@ -284,6 +284,6 @@ def test_e2e_5b_repeated_failure_does_not_loop_forever(bridge_up):
                  or loop.stats.get("blacklist_skips", 0) > 0)
     assert escalated, ("шесть одинаковых отказов не вызвали ни одной эскалации: %s"
                        % loop.stats)
-    print("\n  forced: %s\n  stats: loops=%s rec_exec=%s abandoned=%s" % (
+    print("\n  signals: %s\n  stats: loops=%s rec_exec=%s abandoned=%s" % (
         seen, loop.stats.get("loops_tripped"),
         loop.stats.get("recoveries_executed"), loop.stats.get("abandoned")))

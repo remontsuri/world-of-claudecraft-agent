@@ -555,13 +555,9 @@ def main():
                                 _nav_substeps += 1
                                 _nav_substeps_since_learning += 1
                                 continue
-                            # подсказка политике через её же hints-канал
-                            # (legacy — будет удалён после полного перехода на DecisionContext)
-                            _forced = _pre.get("forced_skill")
-                            if _forced and isinstance(
-                                    getattr(agent.policy, "hints", None), dict):
-                                agent.policy.hints["autonomy_subgoal"] = {
-                                    "key": "autonomy_subgoal", "skill": _forced}
+                            # Legacy hints channel removed — signals route through
+                            # DecisionContext -> ArbitrationLayer (STREAM J6).
+                            # _pre.get("forced_skill") is no longer emitted.
                             # Explicit decision context — основной канал
                             _ctx = _pre.get("decision_context")
                             if _ctx is not None:

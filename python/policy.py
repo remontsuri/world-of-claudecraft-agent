@@ -727,16 +727,6 @@ class GoalManager:
             # can compare approach against combat instead of silently falling back.
             if "navigate" not in cands:
                 cands.append("navigate")
-        # /GOAL п.10 fix 2026-09-03 (anchor path): when forced skill is
-        # 'return_to_giver' (agent > 80yd from giver) and cands doesn't
-        # include it, the hard override at line 718+ returns early ONLY
-        # when cands already contains forced. Without this add, anchor
-        # is set but policy still picks 'explore' first. Add the forced
-        # skill to cands so the hard-override path actually fires.
-        if context is not None:
-            _fs = getattr(context, "forced_skill", None)
-            if _fs and _fs not in cands:
-                cands.append(_fs)
         # Explicit decision context replaces the old hidden hints channel.
         # AutonomyLoop builds ONE DecisionContext per step; Policy reads it.
         if context is not None:
@@ -752,21 +742,19 @@ class GoalManager:
                     cands = ["navigate"]
                 else:
                     cands = [_masked[0]]
-            # Forced skill (recovery/anchor) may NOT be in policy._candidates
-            # (e.g. return_to_giver when the agent wandered far). The autonomy
-            # loop explicitly asked for it and verified its precondition, so we
-            # must surface it as a candidate — otherwise the filter above drops
-            # it and the agent keeps farming at dist=270 instead of returning.
-            _fs = getattr(context, "forced_skill", None)
-            if _fs and _fs in _masked and _fs not in cands:
-                cands = [_fs] + cands
-            # HARD OVERRIDE: when the autonomy loop forces a skill (anchor/loop/
-            # recovery), it has already verified the precondition and decided it
-            # is the ONLY safe action (e.g. return_to_giver at dist=270). Soft-
-            # max must NOT override it back to farm — that would undo the anchor.
-            if _fs and _fs in cands:
-                self._log_decision(ws, info, goal_phase, "forced_skill", _fs, None, "forced_recovery", {"forced_skill": _fs})
-                return _fs, {}
+            # STREAM J6: ArbitrationLayer decides on signals, not policy
+            _signals = getattr(context, "signals", None)
+            if _signals:
+                from arbitration_layer import ArbitrationLayer
+                arb = ArbitrationLayer()
+                _fsm = self._fsm if hasattr(self, "_fsm") else None
+                if _fsm is not None:
+                    _action, _ctx = arb.decide_with_signals(
+                        _fsm, ws, info, _signals, tuple(cands))
+                    self._log_decision(ws, info, goal_phase, "arbitration_signals",
+                                       _action, None, "arbitration_layer",
+                                       {"signals": str(_signals)})
+                    return _action, _ctx
         elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
             # Legacy fallback: still support hints for backward compatibility
             _masked = self.hints.get("masked_candidates")
