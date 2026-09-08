@@ -987,7 +987,34 @@ def main():
         # steps and the journal was never written in a 3000-step run — hints
         # never existed. reflect() stays on the SAVE_EVERY cadence.
         try:
-            refl.observe(rec)
+            # STREAM J4: extract target mob identity for causal chain learning
+            _target_mob_id = None
+            _target_hp = None
+            _target_dead = False
+            _loot_attempted = False
+            _loot_success = False
+            try:
+                for _e in (env._last_info or {}).get("nearby") or []:
+                    if _e.get("kind") == "mob" or _e.get("type") == "mob":
+                        if _e.get("id") == (env._last_info or {}).get("targetId"):
+                            _target_mob_id = _e.get("templateId") or _e.get("mobId") or str(_e.get("id"))
+                            _target_hp = _e.get("hp")
+                            _target_dead = bool(_e.get("dead") or _e.get("lootable"))
+                            break
+                if a == "loot":
+                    _loot_attempted = True
+                    _loot_success = verdict == "SUCCESS"
+            except Exception:
+                pass
+
+            refl.observe({
+                **rec,
+                "target_mob_id": _target_mob_id,
+                "target_hp": _target_hp,
+                "target_dead": _target_dead,
+                "loot_attempted": _loot_attempted,
+                "loot_success": _loot_success,
+            })
         except Exception:
             traceback.print_exc()
         # Failure Analyzer (план 2026-08-24, п.4): каждая FAILURE ->

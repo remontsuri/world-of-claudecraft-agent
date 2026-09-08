@@ -15,6 +15,9 @@ Conclusions the loop can draw (each -> a strategy key):
                        "farming here doesn't advance q_X" -> key stall:<quest>.
   4. VENDOR_CYCLE    — sell_junk SUCCESS repeatedly with rising copper:
                        "vendor route works" -> positive reinforcement only.
+  5. CAUSAL_STALL    — farm mob#ID -> mob dies -> loot attempted -> objective
+                       unchanged: "target resolver inconsistent" ->
+                       key exclude:mob#ID ; policy must exclude that target.
 """
 import json
 import os
@@ -132,7 +135,11 @@ class SelfReflection:
         return out
 
     def observe(self, rec):
-        """Feed one step record (autonomous_log-style dict)."""
+        """Feed one step record (autonomous_log-style dict).
+
+        Extended (STREAM J4) to capture target mob identity, HP trajectory,
+        death/loot events — the raw material for causal chain reasoning.
+        """
         self.window.append({
             "step": rec.get("step"),
             "action": rec.get("action"),
@@ -145,9 +152,97 @@ class SelfReflection:
             "qprog": rec.get("qprog"),
             "deaths": rec.get("deaths"),
             "quest_status": rec.get("quest_status"),
+            # STREAM J4: target identity + state for causal chain
+            "target_mob_id": rec.get("target_mob_id"),
+            "target_hp": rec.get("target_hp"),
+            "target_dead": rec.get("target_dead", False),
+            "loot_attempted": rec.get("loot_attempted", False),
+            "loot_success": rec.get("loot_success", False),
         })
         if len(self.window) > 150:
             self.window = self.window[-100:]
+
+    def _detect_causal_stall(self, w):
+        """Detect a causal chain: farm mob#ID -> mob dies -> loot -> no progress.
+
+        The chain is:
+          observation: farming a specific mob_id
+          effect: mob HP reaches 0 (dies)
+          action: loot attempted
+          failure: objective (qprog) didn't change
+          cause: target resolver picked a mob that doesn't match quest objective
+          lesson: exclude this mob_id from target selection
+          strategy: search another target
+
+        Returns a conclusion dict or None.
+        """
+        if len(w) < 10:
+            return None
+
+        # Find windows where a specific mob was farmed, died, looted, but qprog frozen
+        mob_events = {}  # mob_id -> {farmed_steps, died, looted, qprog_values}
+
+        for d in w:
+            mid = d.get("target_mob_id")
+            if not mid:
+                continue
+            if mid not in mob_events:
+                mob_events[mid] = {
+                    "farmed_steps": 0, "died": False, "looted": False,
+                    "loot_success": False, "qprog_values": [],
+                    "hp_values": [],
+                }
+            ev = mob_events[mid]
+            if d.get("action") in ("farm", "cast_fireball", "cast_frostbolt"):
+                ev["farmed_steps"] += 1
+            if d.get("target_dead"):
+                ev["died"] = True
+            if d.get("loot_attempted"):
+                ev["looted"] = True
+            if d.get("loot_success"):
+                ev["loot_success"] = True
+            if d.get("qprog") is not None:
+                ev["qprog_values"].append(d["qprog"])
+            if d.get("target_hp") is not None:
+                ev["hp_values"].append(d["target_hp"])
+
+        for mid, ev in mob_events.items():
+            if ev["farmed_steps"] < 3:
+                continue
+            if not ev["died"]:
+                continue
+            # qprog frozen across all observations?
+            qvals = ev["qprog_values"]
+            if len(qvals) < 2:
+                continue
+            if max(qvals) != min(qvals):
+                continue  # progress was made — not a stall
+
+            # CAUSAL CHAIN detected
+            chain_detail = (
+                f"farm mob#{mid} -> no objective progress -> "
+                f"mob hp=0 -> entity remains selectable -> "
+                f"loot attempted -> objective didn't change -> "
+                f"target resolver inconsistent -> "
+                f"exclude mob#{mid} -> search another target"
+            )
+            return {
+                "kind": "CAUSAL_STALL",
+                "detail": chain_detail,
+                "key": f"exclude:mob#{mid}",
+                "hint": "exclude_target",
+                "target_mob_id": mid,
+                "causal_chain": [
+                    {"node": "observation", "value": f"farming mob#{mid} ({ev['farmed_steps']} steps)"},
+                    {"node": "effect", "value": f"mob hp reached 0 (died)"},
+                    {"node": "action", "value": f"loot attempted (success={ev['loot_success']})"},
+                    {"node": "failure", "value": f"objective stuck at {qvals[0]}"},
+                    {"node": "cause", "value": "target resolver picked non-objective mob"},
+                    {"node": "lesson", "value": f"mob#{mid} does not advance quest"},
+                    {"node": "strategy", "value": f"exclude mob#{mid}, search another target"},
+                ],
+            }
+        return None
 
     def reflect(self) -> list:
         """Run the review; append conclusions to journal; return them."""
@@ -230,6 +325,11 @@ class SelfReflection:
                 "key": "cycle:sell",
                 "hint": "keep_going",
             })
+
+        # 5. CAUSAL_STALL (STREAM J4): farm mob#ID -> mob dies -> loot -> no progress
+        causal = self._detect_causal_stall(w)
+        if causal:
+            conclusions.append(causal)
 
         t = time.time()
         for c in conclusions:
