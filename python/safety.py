@@ -64,3 +64,13 @@ def safety_check(info: dict, ws: dict) -> Optional[str]:
         return "noop"  # wait for regen, don't waste actions
 
     return None
+
+
+# Critical HP threshold — below this, the agent MUST heal regardless of policy
+CRITICAL_HP_FRAC = 0.2
+
+
+def should_force_heal(world_state: dict) -> bool:
+    """Convenience predicate: True if HP is below critical threshold."""
+    hp_frac = world_state.get("hp_frac", 1.0)
+    return hp_frac < CRITICAL_HP_FRAC
