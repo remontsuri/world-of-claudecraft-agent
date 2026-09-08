@@ -62,11 +62,11 @@ def test_hints_do_not_leak_into_decide():
 
     # Baseline: decision WITHOUT any hints
     pol.hints = {}
-    action_baseline, _ = pol.decide(info, ws, goal="NO_QUEST")
+    action_baseline, _ = pol.decide(info, ws, phase="NO_QUEST")
 
     # Now simulate what Autonomy does: write masked_candidates hint
     pol.hints = {"masked_candidates": ["explore"]}
-    action_with_hint, _ = pol.decide(info, ws, goal="NO_QUEST")
+    action_with_hint, _ = pol.decide(info, ws, phase="NO_QUEST")
 
     # The hint must NOT silently override the decision.
     # If action_with_hint != action_baseline, hints are leaking.
@@ -87,11 +87,11 @@ def test_autonomy_subgoal_hint_does_not_force():
     info, ws = _fake_info_ws()
 
     pol.hints = {}
-    action_baseline, _ = pol.decide(info, ws, goal="NO_QUEST")
+    action_baseline, _ = pol.decide(info, ws, phase="NO_QUEST")
 
     # Simulate Autonomy writing a forced skill hint
     pol.hints = {"autonomy_subgoal": {"skill": "accept_quest"}}
-    action_with_hint, _ = pol.decide(info, ws, goal="NO_QUEST")
+    action_with_hint, _ = pol.decide(info, ws, phase="NO_QUEST")
 
     # If the hint silently forces a different action, it's a hidden command bus.
     assert action_with_hint == action_baseline, (

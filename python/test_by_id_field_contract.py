@@ -124,7 +124,7 @@ class TestHasHealingFromCanonicalState(unittest.TestCase):
                        "quality": "common"}])
         snap.pop("inventory_by_id", None)
         ws = gm._world_state(snap)
-        cands = gm._candidates(snap, ws, goal="DO_OBJECTIVE")
+        cands = gm._candidates(snap, ws, phase="DO_OBJECTIVE")
         self.assertIn(
             "heal", cands,
             "hp=60/100 и зелье в сумке, а heal не предложен: %r" % (cands,),

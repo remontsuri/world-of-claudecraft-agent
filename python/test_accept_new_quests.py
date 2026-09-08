@@ -46,7 +46,7 @@ def test_accept_offered_when_npc_has_quest_we_dont_have():
     gm = _gm()
     info = _info(npc_quests=["q_new_a", "q_new_b"], have=["q_old"])
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" in cands, f"accept не предложен при новых квестах: {cands}"
 
 
@@ -56,7 +56,7 @@ def test_accept_not_offered_when_all_npc_quests_already_taken():
     gm = _gm()
     info = _info(npc_quests=["q_old"], have=["q_old"])
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" not in cands, f"accept предложен зря: {cands}"
 
 
@@ -64,7 +64,7 @@ def test_accept_offered_with_no_quests_at_all():
     gm = _gm()
     info = _info(npc_quests=["q_first"], have=[])
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="NO_QUEST")
+    cands = gm._candidates(info, ws, phase="NO_QUEST")
     assert "accept_quest" in cands
 
 
@@ -72,5 +72,5 @@ def test_accept_not_offered_without_npc_nearby():
     gm = _gm()
     info = _info(npc_quests=(), have=["q_old"])
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" not in cands

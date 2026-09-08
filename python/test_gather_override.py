@@ -37,7 +37,7 @@ def test_gather_offered_when_quest_items_in_bags_and_object_near():
                        "componentTags": ["silk"], "dist": 4.0,
                        "x": 1.0, "z": 1.0, "name": "spider"}]
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" in cands, f"gather not offered with object near: {cands}"
 
 
@@ -49,7 +49,7 @@ def test_gather_not_offered_without_object_even_with_quest_items():
     gm.step_idx = 1                      # не шаг разведочной пробы
     info = _info_with_inv({"spider_silk": 5})
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" not in cands, f"gather предложен в пустоту: {cands}"
 
 
@@ -59,7 +59,7 @@ def test_gather_not_forced_without_quest_items():
     gm = GoalManager(ExperienceStore(), reflection_hints={})
     info = _info_with_inv({})
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     # без квестовых предметов gather не обязан появляться (может от других причин)
     assert "gather" not in cands or True
 
@@ -74,6 +74,6 @@ def test_survival_still_gates_low_hp():
     info = _info_with_inv({"spider_silk": 5, "minor_healing_potion": 2},
                           hp=10, max_hp=142)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     # при критическом hp выживание важнее: heal должен быть в кандидатах
     assert "heal" in cands, cands

@@ -60,9 +60,9 @@ def _make_agent(respawn_seq):
             pass
 
     class _StubPolicy:
-        def decide(self, info, ws=None, goal=None, exploration_weight=1.0):
+        def decide(self, info, ws=None, phase=None, exploration_weight=1.0):
             return "farm", {}
-        def _candidates(self, info, ws=None, goal=None):
+        def _candidates(self, info, ws=None, phase=None):
             return []
         def learn(self, *a, **k):
             pass

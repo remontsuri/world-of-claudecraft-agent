@@ -94,7 +94,7 @@ def _gm():
 def test_cast_frostbolt_candidate_when_mob_near_and_mana_ok():
     gm = _gm()
     ws = build_world_state(_mage_info())
-    cands = gm._candidates(_mage_info(), ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(_mage_info(), ws, phase="DO_OBJECTIVE")
     assert "cast_frostbolt" in cands, cands
     assert "cast_fireball" in cands, cands
 
@@ -103,7 +103,7 @@ def test_no_cast_candidates_when_oom():
     gm = _gm()
     info = _mage_info(mana=5, max_mana=100)
     ws = build_world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "cast_frostbolt" not in cands, cands
     assert "cast_fireball" not in cands, cands
 
@@ -114,7 +114,7 @@ def test_no_cast_when_all_on_cooldown():
     for a in info["abilities"]:
         a["ready"] = False
     ws = build_world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "cast_frostbolt" not in cands and "cast_fireball" not in cands
 
 

@@ -30,5 +30,5 @@ def test_no_heal_at_full_hp():
     gm = GoalManager(ExperienceStore(), reflection_hints={})
     info = _info(164)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "heal" not in cands, f"полный HP — heal не нужен: {cands}"

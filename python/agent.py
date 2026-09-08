@@ -551,7 +551,7 @@ class Agent:
         fsm_phase = self.fsm.phase if self.fsm is not None else None
         action, ctx = self.policy.decide(info_before, ws=ws_before,
                                           exploration_weight=exploration_weight,
-                                          goal=fsm_phase, **_decide_kwargs)
+                                          phase=fsm_phase, **_decide_kwargs)
 
         # TELEMETRY: policy owns the decision now.
         # Survival override removed (duplicate of _retreat_if_needed in
@@ -579,7 +579,7 @@ class Agent:
             # candidate set of the NEXT state, so the TD bootstrap maxes only over
             # reachable actions (not over globally-unreachable ones).
             next_cands = self.policy._candidates(after, ws_after,
-                                                 goal=fsm_phase)
+                                                 phase=fsm_phase)
             self.policy.learn(ws_before, action, reward, next_state=ws_after,
                               outcome_kind=outcome_kind, candidates=next_cands)
             # 7b. ReplayBuffer + StrategyMemory are fed by play_autonomous.py

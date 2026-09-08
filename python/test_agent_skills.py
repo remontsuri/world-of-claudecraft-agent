@@ -56,7 +56,7 @@ def test_buy_forces_when_tool_missing():
     }
     gm = GoalManager(ExperienceStore(), reflection_hints={})
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    action, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     assert action == SKILL_BUY, \
         f"нет handaxe для wood квеста → ожидал buy, получили {action}"
     assert ctx.get("buyItemId") == "handaxe", \

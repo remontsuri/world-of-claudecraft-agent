@@ -47,7 +47,7 @@ def test_incomplete_objective_plan_is_gather():
     gm = _gm()
     info = _info(ore=5)
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    action, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     assert action in ("gather", "farm"), \
         f"5/8 ore: ожидал gather/farm, получили {action}"
 
@@ -66,7 +66,7 @@ def test_complete_objective_forces_return_to_giver():
     ws = gm._world_state(info)
     assert ws["quest"].get("complete") is True or ws["quest"].get("phase") == "READY", \
         f"world_state должен видеть завершённый квест: {ws.get('quest')}"
-    action, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    action, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     assert action in ("return_to_giver", "turn_in_quest"), \
         f"8/8 ore: агент обязан идти сдавать, получили {action} — это и есть фарм-бот"
     assert action != "farm" and action != "gather", \
@@ -84,6 +84,6 @@ def test_ready_quest_at_giver_forces_turn_in():
     assert ws["quest"].get("phase") == "READY", f"{ws['quest']}"
     assert ws["quest"].get("giver_distance", 999) <= 6, \
         f"тест предполагает гивера рядом, dist={ws['quest'].get('giver_distance')}"
-    action, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    action, ctx = gm.decide(info, ws=ws, phase="TURN_IN")
     assert action == "turn_in_quest", f"READY у гивера: ожидал turn_in, получили {action}"
     assert ctx.get("questId"), "turn_in без questId — верификатор ослепнёт"

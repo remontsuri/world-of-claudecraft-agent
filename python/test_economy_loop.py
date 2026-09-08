@@ -100,10 +100,10 @@ def test_policy_offers_craft_only_when_craftable():
     }
     info = _info(inv=[{"itemId": "rough_hide", "count": 32}], recipes=[recipe])
     ws = build_world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "craft_item" in cands, cands
     # ctx must carry the chosen recipeId via decide()
-    act, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    act, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     if act == "craft_item":
         assert ctx.get("recipeId") == "recipe_tanned_leather_jerkin"
 
@@ -112,7 +112,7 @@ def test_policy_no_craft_without_materials():
     gm = GoalManager(ExperienceStore())
     info = _info()  # empty bags, no recipes
     ws = build_world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "craft_item" not in cands
 
 
@@ -146,9 +146,9 @@ def test_turn_in_offered_when_ready_bucket_nonempty():
     }
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "turn_in_quest" in cands, cands
-    act, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    act, ctx = gm.decide(info, ws=ws, phase="TURN_IN")
     if act == SKILL_TURN_IN_IF_IMPORTED():
         pass
 

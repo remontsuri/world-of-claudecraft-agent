@@ -11,7 +11,7 @@ class FakeResp:
     def __exit__(self, *a): return False
 
 
-def _ok_content(goal="DO_OBJECTIVE", reason="r"):
+def _ok_content(phase="DO_OBJECTIVE", reason="r"):
     return {"choices": [{"message": {"content": json.dumps({"goal": goal, "reason": reason})}}]}
 
 

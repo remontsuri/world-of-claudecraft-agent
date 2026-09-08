@@ -81,7 +81,7 @@ def test_stuck_hint_suppresses_action():
                                    "turnInNpc": {"x": 3.0, "z": 4.0}}],
                        "ready": [], "done": []}}
     ws = gm._world_state(info)
-    gm._candidates(info, ws, goal="RETURN_TO_GIVER")
+    gm._candidates(info, ws, phase="RETURN_TO_GIVER")
     assert "return_to_giver" in gm._suppressed, (
         f"stuck-хинт не подавил скилл: {gm._suppressed}")
 

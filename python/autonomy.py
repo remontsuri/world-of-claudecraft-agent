@@ -360,7 +360,7 @@ class AutonomyLoop:
             "progress_delta": progress,
             "postconditions": post,
             "subgoal": (self.planner.current or {}).get("subgoal"),
-            "goal": goal,
+            "goal": phase,
             "reward": reward,
             "action_index": index_of(action),
             "timestamp": time.time(),

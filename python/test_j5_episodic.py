@@ -122,7 +122,7 @@ def test_policy_suppresses_farm_on_negative_target():
     ws = build_world_state(info)
 
     # Get candidate values
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert SKILL_FARM in cands, f"farm should be a candidate: {cands}"
 
     vals = mem.candidate_values(ws, cands)
@@ -134,7 +134,7 @@ def test_policy_suppresses_farm_on_negative_target():
     farm_count = 0
     n_trials = 200
     for i in range(n_trials):
-        action, ctx = gm.decide(info, ws=ws, exploration_weight=0.0, goal="DO_OBJECTIVE")
+        action, ctx = gm.decide(info, ws=ws, exploration_weight=0.0, phase="DO_OBJECTIVE")
         if action == SKILL_FARM:
             farm_count += 1
 

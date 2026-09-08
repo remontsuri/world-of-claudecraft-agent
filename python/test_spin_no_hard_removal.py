@@ -41,7 +41,7 @@ def test_spin_hint_does_not_remove_action_from_candidates():
     gm = GoalManager(ExperienceStore(), reflection_hints=_hints("return_to_giver"))
     info = _info()
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="RETURN_TO_GIVER")
+    cands = gm._candidates(info, ws, phase="RETURN_TO_GIVER")
     assert "return_to_giver" in cands, (
         f"spin-хинт не должен УДАЛЯТЬ скилл, только подавлять вес: {cands}")
 
@@ -55,7 +55,7 @@ def test_spin_hint_suppresses_weight_not_membership():
     gm = GoalManager(ExperienceStore(), reflection_hints=_hints("heal"))
     info = _info(hp=60)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "heal" in cands
 
 
@@ -67,7 +67,7 @@ def test_deterministic_override_survives_spin_hint():
     gm = GoalManager(ExperienceStore(), reflection_hints=_hints("return_to_giver"))
     info = _info()
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="RETURN_TO_GIVER")
+    action, ctx = gm.decide(info, ws=ws, phase="RETURN_TO_GIVER")
     assert action == "return_to_giver", f"got {action}"
 
 
@@ -81,7 +81,7 @@ def test_multiple_spin_hints_keep_every_action_available():
                      reflection_hints=_hints("heal", "return_to_giver", "farm"))
     info = _info(hp=60)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "farm" in cands, f"farm вырезан хинтом: {cands}"
     assert "heal" in cands, f"heal вырезан хинтом: {cands}"
     # и подавление зафиксировано, а не потеряно

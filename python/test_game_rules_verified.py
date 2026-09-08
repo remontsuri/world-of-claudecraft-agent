@@ -67,7 +67,7 @@ def test_accept_candidate_filters_identity_blocked():
                    "ready": [], "done": []},
     }
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" not in cands, (
         f"предложен accept для identity-заблокированных квестов: {cands}")
 
@@ -91,7 +91,7 @@ def test_accept_offered_for_normal_quest_nearby():
         "quest_states": {"q_bones": "available", "q_whispers": "available"},
     }
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" in cands, f"обычный квест должен предлагаться: {cands}"
 
 
@@ -117,7 +117,7 @@ def test_turn_in_phase_far_from_giver_walks_instead_of_turning_in():
                               "turnInNpc": {"x": 60.0, "z": 0.0}}]},
     }
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    action, ctx = gm.decide(info, ws=ws, phase="TURN_IN")
     assert action == "return_to_giver", (
         f"при 60yd до гивера надо ИДТИ, а не сдавать; выбрано: {action}")
 
@@ -138,5 +138,5 @@ def test_turn_in_phase_close_to_giver_turns_in():
                               "turnInNpc": {"x": 4.0, "z": 0.0}}]},
     }
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    action, ctx = gm.decide(info, ws=ws, phase="TURN_IN")
     assert action == "turn_in_quest", f"в 4yd надо сдавать; выбрано: {action}"

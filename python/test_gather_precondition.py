@@ -40,7 +40,7 @@ def test_gather_filtered_out_when_no_object_nearby():
     gm = _gm(step_idx=1)
     info = _info(corpses=0, nodes=0)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" not in cands, f"gather предложен без объекта: {cands}"
 
 
@@ -49,7 +49,7 @@ def test_gather_offered_when_corpse_nearby():
     gm = _gm(step_idx=1)
     info = _info(corpses=1, nodes=0)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" in cands, f"gather не предложен при трупе рядом: {cands}"
 
 
@@ -57,7 +57,7 @@ def test_gather_offered_when_node_nearby():
     gm = _gm(step_idx=1)
     info = _info(corpses=0, nodes=1)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" in cands, f"gather не предложен при узле рядом: {cands}"
 
 
@@ -68,7 +68,7 @@ def test_exploration_budget_allows_periodic_probe():
     gm = _gm(step_idx=GATHER_PROBE_EVERY)
     info = _info(corpses=0, nodes=0)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" in cands, (
         f"разведочная проба не сработала на шаге {GATHER_PROBE_EVERY}: {cands}")
 
@@ -78,5 +78,5 @@ def test_probe_is_rare_not_every_step():
     gm = _gm(step_idx=GATHER_PROBE_EVERY + 1)
     info = _info(corpses=0, nodes=0)
     ws = gm._world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "gather" not in cands, "проба должна быть редкой, не каждый шаг"

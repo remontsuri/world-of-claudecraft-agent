@@ -59,7 +59,7 @@ def test_spin_hint_suppresses_action():
                                 "turnInNpc": {"x": 2.0, "z": 2.0}}]
     ws = build_world_state(info)
     vals = gm.mem.candidate_values(ws, ["turn_in_quest"]) if hasattr(gm.mem, "candidate_values") else {}
-    act, ctx = gm.decide(info, ws=ws, goal="TURN_IN")
+    act, ctx = gm.decide(info, ws=ws, phase="TURN_IN")
     # with the spin hint, even if turn_in is chosen the WEIGHT was suppressed;
     # the hard assertion: hint is applied inside decide (meta carries flag)
     assert act in ("turn_in_quest", "return_to_giver", "heal", "farm"), act
@@ -76,7 +76,7 @@ def test_death_cell_hint_drops_farm_at_low_hp():
     gm = GoalManager(ExperienceStore(), reflection_hints=hints)
     info = _info(hp=40, max_hp=106)  # 0.38 — low but above 0.35 gate
     ws = build_world_state(info)
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "farm" not in cands, ("death-cell hint must suppress farm here", cands)
     assert "cast_frostbolt" in cands, cands
 
@@ -90,5 +90,5 @@ def test_no_hints_file_no_crash():
     info = _info()
     from world_state import build_world_state
     ws = build_world_state(info)
-    act, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    act, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     assert act, "must still decide without hints"

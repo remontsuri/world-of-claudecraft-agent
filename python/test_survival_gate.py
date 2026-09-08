@@ -30,7 +30,7 @@ def test_no_walk_skills_below_35pct_hp():
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
     for goal in ("DO_OBJECTIVE", "TURN_IN"):
-        cands = gm._candidates(info, ws, goal=goal)
+        cands = gm._candidates(info, ws, phase=goal)
         assert "turn_in_quest" not in cands, (goal, cands)
         assert "return_to_giver" not in cands, (goal, cands)
 
@@ -39,5 +39,5 @@ def test_walk_skills_back_above_threshold():
     info = _info(hp=90)
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "turn_in_quest" in cands, cands

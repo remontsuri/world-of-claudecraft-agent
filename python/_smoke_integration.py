@@ -144,12 +144,12 @@ pmem = ExperienceStore(path=os.path.join(HERE, "_smoke_pol.json"))
 gm = GoalManager(pmem, temperature=0.001, seed=1)
 # with goal=RETURN_TO_GIVER, decide must NOT offer explore/farm
 ws = build_world_state(fake_info("ready"))
-a, ctx = gm.decide(fake_info("ready"), ws=ws, goal="RETURN_TO_GIVER")
+a, ctx = gm.decide(fake_info("ready"), ws=ws, phase="RETURN_TO_GIVER")
 check("phase gate: RETURN_TO_GIVER -> only return/turn_in",
       a in ("return_to_giver", "turn_in_quest"), f"action={a}")
 # with goal=DO_OBJECTIVE, decide must NOT offer explore/turn_in
 ws2 = build_world_state(fake_info("active"))
-a2, _ = gm.decide(fake_info("active"), ws=ws2, goal="DO_OBJECTIVE")
+a2, _ = gm.decide(fake_info("active"), ws=ws2, phase="DO_OBJECTIVE")
 check("phase gate: DO_OBJECTIVE -> only farm/loot/gather",
       a2 in ("farm", "loot", "gather"), f"action={a2}")
 # cleanup (files may not exist if save() was never triggered)

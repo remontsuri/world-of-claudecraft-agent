@@ -90,7 +90,7 @@ def test_accepted_quest_masks_accept_action():
     ]
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "accept_quest" not in cands, "accepted quest must NOT offer accept_quest: %s" % cands
     # farm/loot should be offered for objective progress
     assert "farm" in cands, cands
@@ -106,7 +106,7 @@ def test_complete_quest_offers_turn_in_not_accept():
                         "questIds": ["q_bones"], "x": 2, "z": 3}]
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
-    cands = gm._candidates(info, ws, goal="TURN_IN")
+    cands = gm._candidates(info, ws, phase="TURN_IN")
     assert "turn_in_quest" in cands, cands
     assert "accept_quest" not in cands, "complete quest must NOT offer accept_quest: %s" % cands
 
@@ -119,7 +119,7 @@ def test_explore_suppressed_while_quest_active():
     }])
     ws = build_world_state(info)
     gm = GoalManager(ExperienceStore())
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "explore" not in cands, "explore must be suppressed while quest active: %s" % cands
 
 

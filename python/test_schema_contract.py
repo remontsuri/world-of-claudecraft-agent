@@ -87,7 +87,7 @@ def test_policy_decision_runs_on_real_snapshot(snap):
     info = _info_from_bridge(snap)
     gm = GoalManager(ExperienceStore(), reflection_hints={})
     ws = gm._world_state(info)
-    action, ctx = gm.decide(info, ws=ws, goal="DO_OBJECTIVE")
+    action, ctx = gm.decide(info, ws=ws, phase="DO_OBJECTIVE")
     assert action
     if action == "buy":
         assert ctx.get("buyItemId")

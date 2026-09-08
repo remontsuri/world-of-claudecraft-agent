@@ -74,7 +74,7 @@ def test_return_to_giver_offered_in_danger_with_active_quest():
     # hp_frac 0.32: below the 0.35 survival floor -> walking skills are gated.
     # (danger itself requires hp<0.3 or combat; this test pins the GATE.)
     gm = GoalManager.__new__(GoalManager); gm.hints = {}  # skip __init__
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     # 0.32 < 0.35 -> survival gate holds, no walking skills
     assert "return_to_giver" not in cands, cands
     assert "turn_in_quest" not in cands, cands
@@ -91,7 +91,7 @@ def test_retreat_offered_when_danger_above_floor():
     ws = build_world_state(info)
     assert ws["danger"] is True and ws["hp_frac"] >= 0.35
     gm = GoalManager.__new__(GoalManager); gm.hints = {}
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "return_to_giver" in cands, cands
 
 
@@ -106,7 +106,7 @@ def test_no_retreat_when_safe():
     ws = build_world_state(info)
     assert ws["danger"] is False
     gm = GoalManager.__new__(GoalManager); gm.hints = {}
-    cands = gm._candidates(info, ws, goal="DO_OBJECTIVE")
+    cands = gm._candidates(info, ws, phase="DO_OBJECTIVE")
     assert "return_to_giver" not in cands, cands
 
 
