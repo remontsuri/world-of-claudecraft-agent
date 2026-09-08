@@ -23,6 +23,25 @@ def _gather_tool_needed(info: dict):
     return None
 
 
+def _resolve_target_mob_id(info):
+    """Resolve the canonical identity of the currently targeted mob.
+
+    Returns a string like "152|forest_wolf" (instance id + template) or None.
+    The pair is the right grain: a specific instance of a known kind.
+    """
+    target_id = info.get("targetId")
+    if target_id is None:
+        return None
+    for e in (info.get("nearby") or []):
+        if e.get("id") != target_id:
+            continue
+        if e.get("kind") != "mob" and e.get("type") != "mob":
+            continue
+        tpl = e.get("templateId") or e.get("mobId") or e.get("name") or "unknown"
+        return f"{target_id}|{tpl}"
+    return f"{target_id}|?"
+
+
 def _objectives_view(quest: dict):
     """Objectives exactly as the game reports them (sim.questLog objectives)."""
     out = []
@@ -555,4 +574,10 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
         # Сбор ресурсов: id инструмента берётся ИЗ ИГРЫ (objective.toolItemId),
         # без статических таблиц профессий.
         "needs_tool": _gather_tool_needed(info) or None,
+        # J5: target identity for episodic memory — the specific mob instance
+        # the player is currently targeting (info["targetId"]). This lets the
+        # ExperienceStore link outcomes to a CONCRETE mob, so the agent can
+        # learn "farm target#152 is meaningless" (dead/gone) without poisoning
+        # Q(farm) for all mobs. None when no target is selected.
+        "target_mob_id": _resolve_target_mob_id(info),
     }

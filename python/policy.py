@@ -890,6 +890,19 @@ class GoalManager:
             if bad in vals:
                 v = vals[bad]
                 vals[bad] = v * SPIN_WEIGHT_MULT if v > 0 else v - 0.2
+        # J5: identity-aware episodic suppression — if the current target has
+        # a negative episodic record for farm (dead/gone/unkillable), suppress
+        # farm so the agent picks an alternative instead of re-engaging a
+        # meaningless target. This is the "don't farm mob#152 again" lesson.
+        _cur_target = ws.get("target_mob_id") if isinstance(ws, dict) else None
+        if _cur_target and SKILL_FARM in vals:
+            _neg = self.mem.negative_targets("farm")
+            if _cur_target in _neg:
+                v = vals[SKILL_FARM]
+                vals[SKILL_FARM] = v * SPIN_WEIGHT_MULT if v > 0 else v - 0.2
+                self._log_decision(ws, info, goal_phase, "episodic_target_suppress",
+                                   SKILL_FARM, vals, "episodic_memory",
+                                   {"target": _cur_target, "negative_targets": list(_neg)})
         # ensure every candidate has an entry (unseen -> 0)
         bucket = _bucket(ws)   # SAME key ExperienceStore uses, so the count-based
                                # exploration bonus actually differentiates candidates
@@ -1021,6 +1034,15 @@ class GoalManager:
         bootstrap so it maxes only over reachable actions.
         """
         self.mem.update(ws, action, reward, next_state=next_state, outcome_kind=outcome_kind, candidates=candidates)
+        # J5: record identity-aware episodic memory when there's a target
+        target_id = ws.get("target_mob_id") if isinstance(ws, dict) else None
+        if target_id:
+            self.mem.record_episodic(
+                ws, action, reward, outcome_kind,
+                goal=self._strategy_key(ws, ws) if isinstance(ws, dict) else None,
+                cause=f"target={target_id}",
+                lesson=f"{action} on {target_id} -> {outcome_kind} (r={reward:+.2f})",
+            )
         # P0 №5 (stateful buy): считаем неудачи покупки -> cooldown 30 шагов
         # после 3 неудач ПО ОДНОМУ И ТОМУ ЖЕ предмету. Успех сбрасывает.
         # Fix (review 1d4cceb): last_item устанавливается при КАЖДОЙ попытке,

@@ -119,6 +119,13 @@ class ExperienceStore:
         # This is the REAL memory the user wants: not "farm is bad" but
         # "in a similar state I did farm -> X happened -> -0.48 -> P(farm) dropped".
         self.experiences: List[Tuple[str, str, float, str, str]] = []
+        # J5: identity-aware episodic memory — per-target outcomes so the agent
+        # can learn "farm target#152 is meaningless" (dead/gone) without
+        # poisoning Q(farm) for all mobs. Each entry is a dict with:
+        #   target_mob_id, goal, context, action, result, cause, lesson
+        self.episodic: List[dict] = []
+        # J5: index from target_mob_id -> list of episodic record indices
+        self._episodic_by_target: Dict[str, List[int]] = defaultdict(list)
         self.lr = lr
         # `decay` is accepted for backward compatibility but NO LONGER APPLIED.
         # Per-step decay exponentially erased all lessons (incl. good ones) by
@@ -163,6 +170,13 @@ class ExperienceStore:
             (b, a, float(r), nb, ok)
             for (b, a, r, nb, ok) in (data.get("experiences") or [])
         ]
+        # J5: load episodic memory
+        self.episodic = data.get("episodic") or []
+        self._episodic_by_target = defaultdict(list)
+        for idx, rec in enumerate(self.episodic):
+            tid = rec.get("target_mob_id")
+            if tid:
+                self._episodic_by_target[tid].append(idx)
 
     def save(self):
         """Atomically persist memory. Write to a temp file in the same directory
@@ -175,6 +189,8 @@ class ExperienceStore:
                 "weights": [[list(k), v] for k, v in self.weights.items()],
                 "counts": [[list(k), v] for k, v in self.counts.items()],
                 "experiences": [[b, a, r, nb, ok] for (b, a, r, nb, ok) in self.experiences[-500:]],
+                # J5: persist episodic memory (capped to last 200 records)
+                "episodic": self.episodic[-200:],
             }
             d = os.path.dirname(os.path.abspath(self.path)) or "."
             fd, tmp = tempfile.mkstemp(dir=d, prefix=".mem_", suffix=".tmp")
@@ -205,6 +221,57 @@ class ExperienceStore:
         bucket = _bucket(state)
         next_bucket = _bucket(next_state)
         self.experiences.append((bucket, action, round(reward, 4), next_bucket, outcome_kind))
+
+    def record_episodic(self, state: dict, action: str, reward: float,
+                        outcome_kind: str, goal: str = None, cause: str = None,
+                        lesson: str = None):
+        """J5: record an identity-aware episodic memory tied to a specific
+        target (mob instance). Unlike the generic experience tuple, this links
+        the outcome to a concrete target_mob_id so the agent can later query
+        "did I already fail at this exact target?" and avoid repeating.
+
+        Fields: target_mob_id, goal, context (state bucket), action, result
+        (outcome_kind), reward, cause, lesson.
+        """
+        bucket = _bucket(state) if isinstance(state, dict) else str(state)
+        rec = {
+            "target_mob_id": state.get("target_mob_id") if isinstance(state, dict) else None,
+            "goal": goal,
+            "context": bucket,
+            "action": action,
+            "result": outcome_kind,
+            "reward": round(reward, 4),
+            "cause": cause,
+            "lesson": lesson,
+        }
+        idx = len(self.episodic)
+        self.episodic.append(rec)
+        tid = rec["target_mob_id"]
+        if tid:
+            self._episodic_by_target[tid].append(idx)
+        return rec
+
+    def negative_targets(self, action: str = "farm") -> set:
+        """J5: return the set of target_mob_ids that have a NEGATIVE episodic
+        outcome for the given action. The policy uses this to suppress farm on
+        targets that have already proven meaningless (dead/gone/unkillable).
+
+        A target is "negative" if its latest episodic record for `action` has
+        reward < 0 or outcome_kind in (FAILURE, ENV_ERROR).
+        """
+        neg = set()
+        for tid, indices in self._episodic_by_target.items():
+            # find the latest record for this action
+            for idx in reversed(indices):
+                rec = self.episodic[idx]
+                if rec.get("action") != action:
+                    continue
+                reward = rec.get("reward", 0)
+                result = rec.get("result", "OK")
+                if reward < 0 or result in ("FAILURE", "ENV_ERROR"):
+                    neg.add(tid)
+                break  # only the latest record for this action matters
+        return neg
 
     def max_q(self, state: dict, actions: Optional[List[str]] = None) -> float:
         """max_a' Q(bucket(state), a') for the TD bootstrap target.
