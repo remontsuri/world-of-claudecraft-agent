@@ -298,14 +298,12 @@ class GoalManager:
             # Если нет активного квеста и рядом есть гивер — убираем farm,
             # иначе агент будет бесконечно фермитить (farm имеет высокий Q).
             _no_quest = not ws.get("quest", {}).get("active")
-            _has_giver = (ws.get("quest_givers") or 0) > 0
+            _world = ws.get("world") or {}
+            _has_giver = len(_world.get("quest_givers") or []) > 0
             if _no_quest and _has_giver:
                 pass  # skip farm, prioritize quest taking
             else:
                 cands.append(SKILL_FARM)
-        # Классовые способности (warrior/mage/hunter)
-        # Вместо хардкод-магии — используем class_config
-        if class_cfg["resource"] == "ranged" and playstyle == "ranged_kite":
             # Дальний бой: mage/hunter
             primary = get_ability_for_class(player_class, "primary")
             ranged = get_ability_for_class(player_class, "ranged")

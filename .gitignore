@@ -95,7 +95,7 @@ output/
 # WoC agent regenerable runtime state — do not grow Git history with these
 python/experience_autonomous.json
 python/replay_buffer.json
-python/autonomous_log.jsonl
+python/*.jsonl
 python/step_trace.json
 python/agent_crash.log
 python/agent_lifecycle.log
