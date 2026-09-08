@@ -272,6 +272,17 @@ class ArbitrationLayer:
         self.fsm.update_from_world(ws)
         phase = self.fsm.phase
 
+        # 3b. QUEST_NONE + quest giver nearby → FORCE accept_quest.
+        # Softmax over Q-values (all 0 at start) picks farm ~50% of the time
+        # even when a giver is right there. Farming with no quest = useless:
+        # kills don't count, dist stays 999 forever. The arbitration layer is
+        # the single decision owner — override policy when the right action is
+        # unambiguous.
+        if phase in ("QUEST_NONE", "FIND_GIVER"):
+            forced = self._force_accept_if_giver_nearby(info, ws)
+            if forced:
+                return forced[0], forced[1], "policy"
+
         # 4. PLANNER ADVISOR
         from observation import encode_observation
         obs = encode_observation(ws, info)
@@ -304,3 +315,78 @@ class ArbitrationLayer:
                                  nxt.get("target_mob_id") or nxt.get("item_id")
                                  or nxt.get("node_type") or "")
         return None
+
+    def _force_accept_if_giver_nearby(self, info: dict, ws: dict) -> Optional[Tuple[str, dict]]:
+        """Force accept_quest when a quest giver with an available quest is nearby.
+
+        This prevents the farm→loot→heal loop: when QUEST_NONE and a giver is
+        visible with an available quest, the agent should take the quest instead
+        of farming (which yields no quest progress and keeps dist=999 forever).
+
+        Returns (action, ctx) if a giver is nearby, else None.
+        """
+        from quest_truth import accept_blocked_by_identity
+
+        near = info.get("nearby") or []
+        quests = info.get("quests") or {}
+        quest_states = info.get("quest_states") or {}
+
+        # Collect IDs of quests we already have (active, ready, or done)
+        have_ids = set()
+        for q in (quests.get("active") or []):
+            if q.get("id"):
+                have_ids.add(str(q["id"]))
+        for q in (quests.get("ready") or []):
+            if q.get("id"):
+                have_ids.add(str(q["id"]))
+        for q in (quests.get("done") or []):
+            if q.get("id"):
+                have_ids.add(str(q["id"]))
+
+        active_ids = [q.get("id") for q in (quests.get("active") or []) if q.get("id")]
+
+        # Find quest givers with available quests
+        givers = []
+        for e in near:
+            if not isinstance(e, dict):
+                continue
+            if not (e.get("kind") == "npc" or e.get("type") == "npc"):
+                continue
+            qids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
+            if not qids:
+                continue
+            # Filter to quests that are available and not already taken
+            available = []
+            for qid in qids:
+                if not qid or str(qid) in have_ids:
+                    continue
+                if accept_blocked_by_identity(qid, active_ids):
+                    continue
+                if quest_states.get(qid) != "available":
+                    continue
+                available.append(qid)
+            if available:
+                e["_available_quests"] = available
+                givers.append(e)
+
+        if not givers:
+            return None
+
+        # Sort by distance (closest first)
+        givers.sort(key=lambda n: n.get("dist", float("inf")))
+        giver = givers[0]
+
+        # Get the first available quest for this giver
+        avail = giver.get("_available_quests") or []
+        if not avail:
+            return None
+        quest_id = avail[0]
+
+        # Build ctx for accept_quest
+        ctx = {
+            "npc": giver,
+            "npcId": giver.get("id"),
+            "questId": quest_id,
+        }
+
+        return "accept_quest", ctx

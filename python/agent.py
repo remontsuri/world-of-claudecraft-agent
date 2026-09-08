@@ -547,6 +547,7 @@ class Agent:
         except Exception:
             pass
         # Phase 5: ArbitrationLayer decides (safety > recovery > policy)
+        fsm_phase = self.fsm.phase if self.fsm is not None else None
         if self.arbitration is not None:
             action, ctx, _reason = self.arbitration.decide(info_before, ws_before, self.policy)
         else:
@@ -555,7 +556,6 @@ class Agent:
             _decide_kwargs = {}
             if _ctx is not None:
                 _decide_kwargs["context"] = _ctx
-            fsm_phase = self.fsm.phase if self.fsm is not None else None
             action, ctx = self.policy.decide(info_before, ws=ws_before,
                                               exploration_weight=exploration_weight,
                                               phase=fsm_phase, **_decide_kwargs)
