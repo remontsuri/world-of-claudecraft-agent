@@ -1,7 +1,12 @@
 """test_autonomy_no_force.py — verify before_action doesn't force skills.
 
-Run: cd python && python -m pytest test_autonomy_no_force.py -v
+Phase 5: before_action is now a thin wrapper that:
+- Returns candidates unchanged
+- Returns signals=None
+- Returns decision_context=None
+- ArbitrationLayer handles all forcing
 """
+
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,7 +28,6 @@ def _info(hp=100, maxhp=100, copper=0, kills=0, deaths=0, dead=False,
 
 
 def _ws(info, **over):
-    """Минимальный ws: контур толерантен, ему хватает info + пары полей."""
     ws = dict(info)
     ws["hp_frac"] = info["player"]["hp"] / max(1, info["player"]["maxHp"])
     ws["bag_capacity"] = 26
@@ -32,6 +36,7 @@ def _ws(info, **over):
 
 
 def test_before_action_returns_advisor():
+    """Phase 5: before_action still returns advisor context."""
     loop = AutonomyLoop()
     info = _info()
     out = loop.before_action(info, _ws(info), ["farm", "buy", "gather"])
@@ -41,61 +46,62 @@ def test_before_action_returns_advisor():
 
 
 def test_before_action_no_force_explore_for_find_mob():
-    """When planner says FIND_MOB, before_action must NOT force explore."""
+    """Phase 5: When planner says FIND_MOB, before_action must NOT force explore."""
     loop = AutonomyLoop()
-    # kill objective with no mobs nearby -> planner says FIND_MOB
     info = _info(quests={"active": [{"id": "q1", "objectives": [
         {"type": "kill", "targetMobId": "forest_wolf", "current": 0, "required": 5}
     ]}], "done": []})
     out = loop.before_action(info, _ws(info), ["farm", "explore", "loot"])
-    # The advisor should say FIND_MOB, but the candidates should not be
-    # forced to only explore — policy decides
+    # The advisor should say FIND_MOB
     assert out["advisor"]["subgoal"] == "FIND_MOB"
     # Candidates should still include explore (policy may choose)
     assert "explore" in out["candidates"]
 
 
 def test_before_action_no_anchor_force():
-    """When agent is far from giver, before_action must NOT force return_to_giver."""
+    """Phase 5: When agent is far from giver, before_action must NOT force return_to_giver."""
     loop = AutonomyLoop()
     info = _info(quests={"active": [{"id": "q1", "objectives": [
         {"type": "kill", "targetMobId": "wolf", "current": 0, "required": 3}
     ]}], "done": []})
     ws = _ws(info, distance_to_giver=100.0)
     out = loop.before_action(info, ws, ["farm", "explore", "return_to_giver"])
-    # No anchor_needed signal should be present
+    # No anchor_needed signal should be present (thin wrapper doesn't detect)
     signals = out.get("signals") or {}
     assert "anchor_needed" not in signals
 
 
-def test_before_action_masks_candidates():
-    """before_action should still mask candidates by preconditions."""
+def test_before_action_passes_candidates_through():
+    """Phase 5: before_action no longer masks candidates."""
     loop = AutonomyLoop()
-    # buy requires a vendor nearby -> should be masked out when no vendor
     info = _info(nearby=[{"kind": "mob", "hp": 10, "level": 1, "dist": 6.0, "x": 5.0, "z": 0.0}])
     out = loop.before_action(info, _ws(info), ["buy", "farm", "explore"])
-    # buy should be masked out (no vendor nearby)
-    assert "buy" not in out["candidates"]
-    # farm should pass (mob nearby)
+    # Candidates are passed through unchanged
+    assert "buy" in out["candidates"]
     assert "farm" in out["candidates"]
+    assert "explore" in out["candidates"]
 
 
-def test_before_action_builds_decision_context():
-    """before_action should still build a DecisionContext."""
+def test_before_action_no_decision_context():
+    """Phase 5: before_action no longer builds DecisionContext."""
     loop = AutonomyLoop()
     info = _info()
     out = loop.before_action(info, _ws(info), ["farm", "explore"])
-    assert "decision_context" in out
-    dc = out["decision_context"]
-    assert dc.subgoal is not None
+    # decision_context is None in thin wrapper
+    assert out["decision_context"] is None
 
 
 def test_before_action_no_subgoal_nav_signal():
-    """When no recovery/loop, before_action should NOT emit subgoal_nav signal."""
+    """Phase 5: before_action should NOT emit any signals."""
     loop = AutonomyLoop()
     info = _info(quests={"active": [{"id": "q1", "objectives": [
         {"type": "kill", "targetMobId": "forest_wolf", "current": 0, "required": 5}
     ]}], "done": []})
     out = loop.before_action(info, _ws(info), ["farm", "explore", "loot"])
-    signals = out.get("signals") or {}
-    assert "subgoal_nav" not in signals
+    # Signals is None in thin wrapper
+    assert out["signals"] is None
+
+
+if __name__ == "__main__":
+    import pytest
+    pytest.main([__file__, "-v"])

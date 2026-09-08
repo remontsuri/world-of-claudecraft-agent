@@ -334,6 +334,9 @@ def main():
     # snapshot's turnInNpc and never used persisted giver_pos.
     agent = Agent(env, mem, seed=SEED * 3 + 7, world_mem=world_mem,
                   fsm=goal_fsm, replay=replay, strat_mem=strat_mem)
+    # Phase 5: Wire AutonomyLoop into Agent via ArbitrationLayer
+    if autonomy is not None:
+        agent.set_autonomy(autonomy)
 
     # metrics — extended per user audit (2026-08-20). These separate real
     # long-horizon autonomy from short-loop survival, and are the acceptance

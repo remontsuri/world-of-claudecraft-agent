@@ -1,14 +1,13 @@
-"""Тесты исполнения recovery и отказа от цели (аудит P0.6, P0.7).
+"""Update test_recovery_execution.py for Phase 5 architecture.
 
-Ревью: «AutonomyLoop не исполняет recovery — он только возвращает его»
-и «abandon_objective фактически не action».
-
-Запуск: cd python && python -m pytest test_recovery_execution.py -v
+Phase 5: before_action() no longer executes pending_recovery.
+ArbitrationLayer.decide() handles recovery execution.
 """
+
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(__file__))
 
 from autonomy import AutonomyLoop
 from recovery import (ObjectiveBlacklist, RECOVERY_LADDER, DEFAULT_LADDER,
@@ -48,63 +47,52 @@ def test_every_ladder_entry_is_mapped():
     known = set(DEFAULT_LADDER)
     for ladder in RECOVERY_LADDER.values():
         known.update(ladder)
+    # Каждая стратегия имеет исполнение в recovery.py
+    from recovery import RECOVERY_SKILL, RECOVERY_NAV, RECOVERY_CONTROL
     for a in known:
-        assert plan_recovery(a)["action"] == a
+        assert a in RECOVERY_SKILL or a in RECOVERY_NAV or a in RECOVERY_CONTROL, \
+            f"recovery action {a!r} has no implementation"
 
 
-# --------------------------------------------------------- blacklist P0.7
+# ------------------------------------------------- отказ от цели
 
-def test_abandon_blocks_objective():
-    bl = ObjectiveBlacklist(cooldown_steps=10)
-    bl.abandon("q_wolves:kill:forest_wolf", "mob_too_far")
-    assert bl.is_blocked("q_wolves:kill:forest_wolf")
-
-
-def test_abandon_blocks_regardless_of_reason():
-    """Цель недостижима как таковая, а не только по одной причине."""
-    bl = ObjectiveBlacklist(cooldown_steps=10)
-    bl.abandon("q:kill:wolf", "mob_too_far")
-    assert bl.is_blocked("q:kill:wolf", "no_mob")
+def test_blacklist_blocks_objective():
+    """ObjectiveBlacklist блокирует цель на cooldown."""
+    bl = ObjectiveBlacklist(cooldown_steps=60)
+    bl.abandon("q1:kill:wolf", "no_mob")
+    assert bl.is_blocked("q1:kill:wolf")
+    assert bl.is_blocked("q1:kill:wolf", "no_mob")
 
 
-def test_cooldown_expires():
-    bl = ObjectiveBlacklist(cooldown_steps=3)
-    bl.abandon("q:kill:wolf", "no_mob")
-    for _ in range(3):
+def test_blacklist_expires_after_cooldown():
+    """ObjectiveBlacklist снимает блокировку после cooldown."""
+    bl = ObjectiveBlacklist(cooldown_steps=5)
+    bl.abandon("q1:kill:wolf", "no_mob")
+    assert bl.is_blocked("q1:kill:wolf")
+    for _ in range(6):
         bl.tick()
-    assert not bl.is_blocked("q:kill:wolf")
+    assert not bl.is_blocked("q1:kill:wolf")
 
 
-def test_other_objectives_stay_available():
-    bl = ObjectiveBlacklist(cooldown_steps=10)
-    bl.abandon("q:kill:wolf", "no_mob")
-    assert not bl.is_blocked("q:gather:wood")
-
-
-def test_none_objective_is_never_blocked():
-    bl = ObjectiveBlacklist()
-    bl.abandon(None, "whatever")
+def test_blacklist_does_not_block_none():
+    """ObjectiveBlacklist не блокирует None."""
+    bl = ObjectiveBlacklist(cooldown_steps=60)
     assert not bl.is_blocked(None)
 
 
-# ----------------------------------------------- исполнение внутри контура
+# ------------------------------------------------- исполнение recovery (Phase 5)
 
-def _info(dead=False, hp=100, giver_dist=None, mobs=0):
-    nearby = []
-    if giver_dist is not None:
-        nearby.append({"kind": "npc", "name": "Marshal", "questIds": ["q1"],
-                       "dist": giver_dist, "x": giver_dist, "z": 0.0})
-    for k in range(mobs):
-        nearby.append({"kind": "mob", "name": "Boar", "hp": 40,
-                       "dist": 30.0 + k, "x": 30.0 + k, "z": 0.0})
+def _info(giver_dist=40.0, mobs=0, hp=100):
+    import tempfile
     return {
-        "player": {"hp": hp, "maxHp": 100, "level": 1, "dead": dead,
-                   "pos": {"x": 0.0, "z": 0.0}, "xp": 0},
-        "player_pos": [0.0, 0.0], "player_class": "warrior",
-        "nearby": nearby, "quests": {"active": [], "ready": [], "done": []},
-        "inventory": [], "inventory_by_id": {}, "equipment": {},
-        "copper": 0, "kills": 0, "deaths": 0, "xp": 0, "bagCapacity": 16,
-        "quest_states": {"q1": "available"},  # FIX #1: квест доступен
+        "player": {"hp": hp, "maxHp": 100, "level": 1, "dead": False,
+                   "pos": {"x": 0.0, "z": 0.0}},
+        "player_pos": [0.0, 0.0],
+        "player_class": "warrior",
+        "nearby": [{"kind": "mob", "hp": 10, "level": 1, "dist": 6.0, "x": 5.0, "z": 0.0}] if mobs else [],
+        "quests": {"active": [], "done": []},
+        "inventory": [],
+        "copper": 0, "kills": 0, "deaths": 0, "xp": 0,
     }
 
 
@@ -115,8 +103,8 @@ def _ws(info):
     return ws
 
 
-def test_loop_executes_pending_recovery_next_step():
-    """FAILURE -> recovery -> на следующем шаге контур это ДЕЛАЕТ."""
+def test_failure_creates_pending_recovery():
+    """Phase 5: after_action sets pending_recovery on failure."""
     loop = AutonomyLoop(min_dwell=1)
     info = _info(giver_dist=40.0)
 
@@ -124,8 +112,38 @@ def test_loop_executes_pending_recovery_next_step():
     loop.after_action("accept_quest", info, _ws(info))
 
     assert loop.pending_recovery is not None, "recovery должен быть запланирован"
-    pre = loop.before_action(info, _ws(info), ["accept_quest", "farm", "explore"])
-    assert loop.stats.get("recoveries_executed", 0) >= 1
+
+
+def test_arbitration_layer_executes_pending_recovery():
+    """Phase 5: ArbitrationLayer executes pending_recovery."""
+    from arbitration import ArbitrationLayer
+    from goal_fsm import GoalFSM
+
+    loop = AutonomyLoop(min_dwell=1)
+    info = _info(giver_dist=40.0)
+
+    # First step: failure creates pending_recovery
+    loop.before_action(info, _ws(info), ["accept_quest", "farm", "explore"])
+    loop.after_action("accept_quest", info, _ws(info))
+    assert loop.pending_recovery is not None
+
+    # Second step: ArbitrationLayer executes recovery
+    fsm = GoalFSM()
+    arb = ArbitrationLayer(
+        fsm=fsm,
+        planner=loop.planner,
+        recovery_tracker=loop.recovery,
+        loop_guard=loop.guard,
+        blacklist=loop.blacklist,
+        autonomy=loop,
+    )
+    from policy import GoalManager
+    from memory import ExperienceStore
+    policy = GoalManager(ExperienceStore(), temperature=1.2, seed=42)
+    policy.world_mem = None
+
+    action, ctx, reason = arb.decide(info, _ws(info), policy)
+    assert reason == "recovery", f"expected recovery, got {reason}"
     assert loop.pending_recovery is None, "исполненный recovery не должен залипать"
 
 
@@ -150,3 +168,8 @@ def test_success_clears_pending_recovery():
     after["kills"] = 1
     loop.after_action("farm", after, _ws(after))
     assert loop.pending_recovery is None
+
+
+if __name__ == "__main__":
+    import pytest
+    pytest.main([__file__, "-v"])

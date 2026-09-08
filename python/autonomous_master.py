@@ -406,6 +406,8 @@ def main() -> None:
         world_mem=world_mem,
         fsm=fsm,
     )
+    # Phase 5: Wire AutonomyLoop into Agent via ArbitrationLayer
+    agent.set_autonomy(autonomy)
 
     learning_steps = 0
     nav_substeps = 0

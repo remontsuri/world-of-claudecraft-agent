@@ -1,21 +1,22 @@
-"""arbitration.py — Priority-ordered decision layer above the policy.
+"""arbitration.py — Single decision point for the agent.
 
-This module contains the decision overrides that were previously embedded in
-GoalManager.decide(). It implements the arbitration layer from the unified
-decision hierarchy:
+Priority-ordered decision flow:
+1. Safety (death, critical HP) — safety.py
+2. Recovery (loop, stuck, pending_recovery) — recovery.py + anti_loop.py
+3. FSM sync (read-only phase label) — goal_fsm.py
+4. Planner advisor (subgoal context) — planner.py
+5. Candidate filtering (phase + preconditions + blacklist) — policy.py + anti_loop.py
+6. Policy softmax (Q-learning) — policy.py
 
-  1. SAFETY  → death/critical HP → respawn/heal/noop (safety.py)
-  2. RECOVERY → stuck/loop → recovery skill (arbitration_layer.py)
-  3. PHASE   → RETURN_TO_GIVER/TURN_IN → navigate to giver
-  4. ECONOMY → bags_full → sell_junk (if vendor near)
-  5. LOOT    → corpses nearby → loot
-  6. POLICY  → softmax over candidates (Q-learning)
-
-Each check returns (action, ctx) if it fires, or None if the decision should
-pass to the next lower priority.
+Replaces AutonomyLoop.before_action() which had conflicting force logic.
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple, Dict, Any, List
+
+from safety import safety_check
+
+
+# ---- Legacy override functions (kept for backward compatibility with policy.py) ----
 
 from policy import (
     SKILL_LOOT,
@@ -36,7 +37,7 @@ def _turn_ctx(info: dict, action: str) -> dict:
         return {"quest": ready[0]}
     preferred = None
     for q in (quests.get("active") or []):
-        if (q.get("turnInNpc") or {}).get("x") is not None:
+        if (q.get("turnInpc") or {}).get("x") is not None:
             preferred = q
             break
     ctx = {}
@@ -78,11 +79,7 @@ def _giver_distance(ws: dict) -> Optional[float]:
 
 
 def _bag_survival_sell(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dict]]:
-    """Economy override: bags almost full → sell_junk (if vendor near).
-
-    Server rejects quest turn-in (bagsFullError) if reward doesn't fit.
-    Force sell when bag is >= capacity - 3 and vendor is nearby.
-    """
+    """Economy override: bags almost full -> sell_junk (if vendor near)."""
     inv = info.get("inventory") or []
     bag_slots = len([s for s in inv if s])
     bag_capacity = ws.get("bag_capacity", 16)
@@ -113,11 +110,7 @@ def _bag_survival_sell(info: dict, ws: dict, cands: list) -> Optional[Tuple[str,
 
 
 def _loot_priority(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dict]]:
-    """Loot override: corpses nearby → loot.
-
-    Softmax rarely picks loot (measured: 1/777 steps), so force it when
-    corpses are present and loot is a valid candidate.
-    """
+    """Loot override: corpses nearby -> loot."""
     corpses = _corpses_nearby(info)
     if corpses and SKILL_LOOT in cands:
         return SKILL_LOOT, {}
@@ -125,12 +118,7 @@ def _loot_priority(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dic
 
 
 def _phase_return(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dict]]:
-    """Phase override: RETURN_TO_GIVER → return_to_giver (if giver far).
-
-    Inside RETURN_TO_GIVER phase the correct skill is deterministic —
-    navigate toward the giver. Leaving the choice to softmax let Q-values
-    re-derive a farm/heal loop while the ready quest waited.
-    """
+    """Phase override: RETURN_TO_GIVER -> return_to_giver (if giver far)."""
     if ws.get("hp_frac", 1.0) < 0.35:
         return None  # survival gate: don't walk when hurt
     if SKILL_RETURN in cands:
@@ -139,11 +127,7 @@ def _phase_return(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dict
 
 
 def _turn_in_phase(info: dict, ws: dict, cands: list) -> Optional[Tuple[str, Dict]]:
-    """Phase override: TURN_IN → turn_in (if giver close) or return (if far).
-
-    Turn-in only succeeds within QUEST_INTERACT_RANGE (7yd). If giver is farther,
-    must navigate closer first.
-    """
+    """Phase override: TURN_IN -> turn_in (if giver close) or return (if far)."""
     d = _giver_distance(ws)
     if d is None:
         return None
@@ -169,20 +153,10 @@ def arbitrate(
     Returns (action, ctx) from the first matching check, or None if no
     override fires (policy decides via softmax).
 
-    Args:
-        info: Raw info dict from the bridge.
-        ws: World state dict.
-        phase: Current FSM phase string.
-        cands: Candidate skills from policy._candidates().
-        tool_need: Item ID needed for gather quest (from ws["needs_tool"]).
-        buy_state: Dict with fails/cooldown for tool priority cooldown.
-        step_idx: Current step index for cooldown check.
-        world_mem: WorldMemory instance for vendor positions.
-
-    Returns:
-        (action, ctx) if an override fires, None otherwise.
+    Legacy function — kept for backward compatibility with policy.py.
+    New code should use ArbitrationLayer.decide() instead.
     """
-    # 1. Plan-stack: READY quest at giver (dist<=6) → turn_in immediately
+    # 1. Plan-stack: READY quest at giver (dist<=6) -> turn_in immediately
     if (ws.get("quest_status") == "READY_TO_TURN_IN"
             and ws.get("quest", {}).get("giver_distance", 999) <= 6):
         ctx = {}
@@ -192,7 +166,7 @@ def arbitrate(
             ctx["quest"] = {"id": qid}
         return SKILL_TURN_IN, ctx
 
-    # 2. Tool priority: gather quest needs tool → buy (with cooldown)
+    # 2. Tool priority: gather quest needs tool -> buy (with cooldown)
     if tool_need:
         has_tool = any(
             s.get("itemId") == tool_need
@@ -207,27 +181,126 @@ def arbitrate(
                         ctx["vendorPos"] = vendor
                 return "buy", ctx
 
-    # 3. Bag survival: bags almost full → sell_junk (if vendor near)
+    # 3. Bag survival: bags almost full -> sell_junk (if vendor near)
     result = _bag_survival_sell(info, ws, cands)
     if result is not None:
         return result
 
-    # 4. Loot priority: corpses nearby → loot
+    # 4. Loot priority: corpses nearby -> loot
     if phase in ("DO_OBJECTIVE", "RETURN_TO_GIVER", "TURN_IN"):
         result = _loot_priority(info, ws, cands)
         if result is not None:
             return result
 
-    # 5. Phase return: RETURN_TO_GIVER → return_to_giver
+    # 5. Phase return: RETURN_TO_GIVER -> return_to_giver
     if phase == "RETURN_TO_GIVER":
         result = _phase_return(info, ws, cands)
         if result is not None:
             return result
 
-    # 6. Turn-in phase: TURN_IN → turn_in or return
+    # 6. Turn-in phase: TURN_IN -> turn_in or return
     if phase == "TURN_IN":
         result = _turn_in_phase(info, ws, cands)
         if result is not None:
             return result
 
     return None
+
+
+# ---- New ArbitrationLayer (Phase 5) ----
+
+class ArbitrationLayer:
+    """Single decision point for the agent.
+
+    Priority-ordered decision flow:
+      1. Safety (death, critical HP)
+      2. Recovery (loop, stuck, pending_recovery)
+      3. FSM sync (read-only phase label)
+      4. Planner advisor (subgoal context)
+      5. Candidate filtering (phase + preconditions + blacklist)
+      6. Policy softmax (Q-learning)
+
+    Replaces AutonomyLoop.before_action() which had conflicting force logic.
+    """
+
+    def __init__(self, fsm, planner, recovery_tracker, loop_guard, blacklist,
+                 autonomy=None):
+        self.fsm = fsm
+        self.planner = planner
+        self.recovery = recovery_tracker
+        self.guard = loop_guard
+        self.blacklist = blacklist
+        self.autonomy = autonomy  # Reference to AutonomyLoop for pending_recovery
+
+    def decide(self, info: dict, ws: dict, policy: 'GoalManager') -> Tuple[str, dict, str]:
+        """Return (action, ctx, reason).
+
+        reason: "safety" | "recovery" | "policy" | "fallback"
+        """
+        # 1. SAFETY — death/critical HP
+        forced = safety_check(info, ws)
+        if forced:
+            return forced, {}, "safety"
+
+        # 2. RECOVERY — pending recovery from after_action()
+        if self.autonomy is not None and self.autonomy.pending_recovery:
+            pend = self.autonomy.pending_recovery
+            self.autonomy.pending_recovery = None
+            if self.autonomy is not None:
+                self.autonomy.stats["recoveries_executed"] = \
+                    self.autonomy.stats.get("recoveries_executed", 0) + 1
+            if pend["kind"] == "skill":
+                sk = pend["skill"]
+                return sk, {"reason": "recovery_action", "recovery": pend}, "recovery"
+            elif pend["kind"] == "navigate":
+                # Navigation is handled by the runner, not the policy
+                # Return explore as fallback; runner will handle nav
+                return "explore", {"reason": "recovery_navigate", "target": pend.get("target")}, "recovery"
+
+        # 2b. RECOVERY — loop detection
+        if self.guard.is_looping():
+            trip = self.guard.trip()
+            action_name = trip.get("action", "explore")
+            rec = self.recovery.next_action(action_name, "loop_detected", ws)
+            if rec:
+                from autonomy import RECOVERY_TO_SKILL
+                skill = RECOVERY_TO_SKILL.get(rec.get("recovery_action"))
+                if skill:
+                    return skill, {"reason": "loop_recovery", "trip": trip}, "recovery"
+
+        # 3. FSM SYNC (read-only)
+        self.fsm.update_from_world(ws)
+        phase = self.fsm.phase
+
+        # 4. PLANNER ADVISOR
+        from observation import encode_observation
+        obs = encode_observation(ws, info)
+        advisor = self.planner.advisor_context(obs)
+
+        # 5. CANDIDATE FILTERING
+        cands = policy._candidates(info, ws, phase=phase, advisor=advisor)
+        cands = self.guard.filter_candidates(cands)
+
+        # Blacklist check — remove blocked objectives
+        objective_key = self._objective_key(ws)
+        if objective_key and self.blacklist.is_blocked(objective_key):
+            current_skill = (self.planner.current or {}).get("skill")
+            cands = [c for c in cands if c != current_skill]
+
+        if not cands:
+            return "explore", {}, "fallback"
+
+        # 6. POLICY SOFTMAX
+        action, ctx = policy.decide(info, ws, phase=phase, advisor=advisor, allowed=cands)
+        return action, ctx, "policy"
+
+    @staticmethod
+    def _objective_key(ws: dict) -> Optional[str]:
+        """Stable key for current objective (for blacklist)."""
+        q = (ws or {}).get("quest") or {}
+        nxt = q.get("next_objective") or {}
+        if nxt:
+            return "%s:%s:%s" % (nxt.get("quest_id"), nxt.get("type"),
+                                 nxt.get("target_mob_id") or nxt.get("item_id")
+                                 or nxt.get("node_type") or "")
+        return None

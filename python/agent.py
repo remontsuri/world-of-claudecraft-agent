@@ -39,6 +39,7 @@ from world_state import build_world_state
 import quest_skill
 from quest_capability import QuestCapability
 from game_source import GameSource
+from arbitration import ArbitrationLayer
 
 # Survival is learned from observed consequences. There is no hidden HP-based
 # action override in Agent._cycle(); recovery is owned by AutonomyLoop after an
@@ -106,6 +107,8 @@ class Agent:
         # и счётчик шагов для stateful buy (cooldown после неудач).
         self.policy.world_mem = self.world_mem
         self.cap = QuestCapability(env)
+        # Phase 5: ArbitrationLayer (will be initialized when autonomy is set)
+        self.arbitration = None
         # GoalFSM: explicit current_goal, persisted to goal_state.json so an
         # infra restart resumes the in-progress quest instead of NO_QUEST.
         self.fsm = fsm
@@ -543,15 +546,19 @@ class Agent:
             self.policy.step_idx = self._step_counter
         except Exception:
             pass
-        # Explicit decision context from Autonomy (replaces hidden hints channel)
-        _ctx = getattr(self.policy, "_ctx", None)
-        _decide_kwargs = {}
-        if _ctx is not None:
-            _decide_kwargs["context"] = _ctx
-        fsm_phase = self.fsm.phase if self.fsm is not None else None
-        action, ctx = self.policy.decide(info_before, ws=ws_before,
-                                          exploration_weight=exploration_weight,
-                                          phase=fsm_phase, **_decide_kwargs)
+        # Phase 5: ArbitrationLayer decides (safety > recovery > policy)
+        if self.arbitration is not None:
+            action, ctx, _reason = self.arbitration.decide(info_before, ws_before, self.policy)
+        else:
+            # Fallback: direct policy call (for standalone mode)
+            _ctx = getattr(self.policy, "_ctx", None)
+            _decide_kwargs = {}
+            if _ctx is not None:
+                _decide_kwargs["context"] = _ctx
+            fsm_phase = self.fsm.phase if self.fsm is not None else None
+            action, ctx = self.policy.decide(info_before, ws=ws_before,
+                                              exploration_weight=exploration_weight,
+                                              phase=fsm_phase, **_decide_kwargs)
 
         # TELEMETRY: policy owns the decision now.
         # Survival override removed (duplicate of _retreat_if_needed in
@@ -600,6 +607,18 @@ class Agent:
             "ws_before": ws_before,
             "ws_after": ws_after,
         }
+
+    def set_autonomy(self, autonomy):
+        """Set the AutonomyLoop and create the ArbitrationLayer."""
+        self.autonomy = autonomy
+        self.arbitration = ArbitrationLayer(
+            fsm=self.fsm,
+            planner=autonomy.planner,
+            recovery_tracker=autonomy.recovery,
+            loop_guard=autonomy.guard,
+            blacklist=autonomy.blacklist,
+            autonomy=autonomy,
+        )
 
     def run(self, n_steps: int = 200, accept_welcome: bool = True, save_every: int = 50):
         """Run n learning-cycle steps. Optionally accept the welcome quest first

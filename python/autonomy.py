@@ -106,121 +106,26 @@ class AutonomyLoop:
 
     def before_action(self, info: Dict[str, Any], ws: Dict[str, Any],
                       candidates: List[str]) -> Dict[str, Any]:
-        """Что политике разрешено делать сейчас и зачем.
+        """Phase 5: Thin wrapper — ArbitrationLayer is the single decision point.
 
-        Возвращает {candidates, subgoal, signals, obs, blocked}.
-        signals не None -> контур обнаружил условие (recovery/loop/anchor),
-        ArbitrationLayer решает, что делать.
+        This method is kept for backward compatibility with runners that call
+        it directly. It now delegates to the ArbitrationLayer via Agent.set_autonomy().
         """
+        # Return a minimal dict for runners that still call before_action
+        # The actual decision is made by ArbitrationLayer.decide() in agent._cycle()
         obs = encode_observation(ws, info)
         self.obs_before = obs
         self.blacklist.tick()
-
-        urgent = bool((obs.get("player") or {}).get("dead"))
-        subgoal = self.planner.step(obs, force=urgent)
-
-        # Цель под отказом (P0.7): не берём её снова, пока не истёк cooldown.
-        # Раньше abandon_objective ничего не менял, и policy выбирала ту же
-        # цель: failure -> abandon -> policy -> тот же навык -> failure.
-        if subgoal and self.blacklist.is_blocked(self._objective_key(obs)):
-            self.planner.force_replan()
-            self.stats["blacklist_skips"] = self.stats.get("blacklist_skips", 0) + 1
-            subgoal = self.planner.step(obs, force=True)
-
-        # 1. отсечь то, чьи предусловия не выполнены
-        masked = mask_candidates(list(candidates or []), obs)
-        # считаем именно отсеянные кандидаты: mask_candidates может подставить
-        # explore-fallback, поэтому разница длин занижала бы счётчик
-        dropped = [c for c in (candidates or []) if c not in masked]
-        if dropped:
-            self.stats["masked_out"] += len(dropped)
-
-        # 2. снять действия на cooldown-е после зафиксированного цикла
-        masked = self.guard.filter_candidates(masked)
-
-        # 3. signals: recovery / loop / anchor
-        # AutonomyLoop detects CONDITIONS, ArbitrationLayer DECIDES what to do.
-        signals: Optional[Dict] = None
-        nav_command = None
-        nav_status = None
-
-        # 3a. P0.6: recovery signal — AutonomyLoop detects, ArbitrationLayer decides
-        pend = self.pending_recovery
-        if pend:
-            self.pending_recovery = None
-            self.stats["recoveries_executed"] = self.stats.get(
-                "recoveries_executed", 0) + 1
-            if pend["kind"] == "navigate":
-                nav_command, nav_status = self._nav_to(obs, pend["target"])
-            elif pend["kind"] == "skill":
-                sk = pend["skill"]
-                if sk == "explore" or check_preconditions(sk, obs)["ok"]:
-                    signals = signals or {}
-                    signals["recovery_needed"] = {"skill": sk, "action": pend.get("action")}
-                    
-        # Loop detection signal
-        if signals is None and self.guard.is_looping():
-            trip = self.guard.trip()
-            self.stats["loops_tripped"] += 1
-            signals = {"loop_detected": trip}
-            self.last["loop"] = trip
-        elif signals is None:
-            self.last["loop"] = None
-
-        # STREAM J Phase 3: advisor context (soft, non-forcing)
         advisor = self.planner.advisor_context(obs)
-
-        _nav_intent = None
-        if nav_command:
-            _nav_intent = (subgoal or {}).get("subgoal") or "EXPLORE"
-        decision_ctx = DecisionContext(
-            allowed_skills=tuple(masked),
-            signals=signals,
-            subgoal=(subgoal or {}).get("subgoal"),
-            navigation_intent=_nav_intent,
-            target=(self.nav.target if self.nav else None),
-            reason=(
-                "recovery" if signals and "recovery_needed" in signals
-                else "loop" if signals and "loop_detected" in signals
-                else "anchor" if signals and "anchor_needed" in signals
-                else "subgoal" if signals and "subgoal_nav" in signals
-                else "policy"),
-        )
-
-        name = (subgoal or {}).get("subgoal") or "?"
-        self.stats["subgoals"][name] = self.stats["subgoals"].get(name, 0) + 1
-
-        # TELEMETRY: log autonomy loop decision
-        try:
-            import json, os, time
-            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "autonomy_log.jsonl")
-            entry = {
-                "t": time.time(),
-                "step": self.stats["steps"],
-                "chooser": "autonomy_loop",
-                "reason": decision_ctx.reason,
-                "signals": signals,
-                "subgoal": (subgoal or {}).get("subgoal"),
-                "allowed_skills": tuple(masked),
-                "nav_command": nav_command,
-                "nav_status": nav_status,
-                "loop_detected": self.guard.is_looping(),
-                "recovery_pending": self.pending_recovery,
-            }
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception:
-            pass
-
         return {
-            "candidates": masked,
-            "subgoal": subgoal,
-            "signals": signals,
-            "nav_command": nav_command,
-            "nav_status": nav_status,
+            "candidates": candidates,
+            "subgoal": self.planner.current,
+            "signals": None,
+            "nav_command": None,
+            "nav_status": None,
             "obs": obs,
             "blocked": self.guard.blocked_actions(),
-            "decision_context": decision_ctx,
+            "decision_context": None,
             "advisor": advisor,
         }
 

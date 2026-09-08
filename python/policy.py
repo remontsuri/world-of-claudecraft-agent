@@ -696,7 +696,8 @@ class GoalManager:
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
                 phase: Optional[str] = None,
                 context: "DecisionContext" = None,
-                advisor: Optional[dict] = None) -> Tuple[str, dict]:
+                advisor: Optional[dict] = None,
+                allowed: Optional[List[str]] = None) -> Tuple[str, dict]:
         """Choose one skill. `ws` may be passed in by the caller so the decision
         and the later learn() call are guaranteed to use the SAME WorldState
         instance (and therefore the same bucket key). `exploration_weight` scales
@@ -720,6 +721,9 @@ class GoalManager:
         playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, phase=phase,
                                   class_cfg=class_cfg, playstyle=playstyle)
+        # Phase 5: ArbitrationLayer can restrict candidates
+        if allowed is not None:
+            cands = [c for c in cands if c in allowed] or list(allowed)
         # /GOAL п.10 fix 2026-09-03: when DO_OBJECTIVE has NO mob in nearby
         # (all mobs 50+yd), cands is empty -> silent explore fallback.
         # Add 'navigate' so policy picks it (the autonomy loop then runs
@@ -744,19 +748,6 @@ class GoalManager:
                     cands = ["navigate"]
                 else:
                     cands = [_masked[0]]
-            # STREAM J6: ArbitrationLayer decides on signals, not policy
-            _signals = getattr(context, "signals", None)
-            if _signals:
-                from arbitration_layer import ArbitrationLayer
-                arb = ArbitrationLayer()
-                _fsm = self._fsm if hasattr(self, "_fsm") else None
-                if _fsm is not None:
-                    _action, _ctx = arb.decide_with_signals(
-                        _fsm, ws, info, _signals, tuple(cands))
-                    self._log_decision(ws, info, goal_phase, "arbitration_signals",
-                                       _action, None, "arbitration_layer",
-                                       {"signals": str(_signals)})
-                    return _action, _ctx
         elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
             # Legacy fallback: still support hints for backward compatibility
             _masked = self.hints.get("masked_candidates")
