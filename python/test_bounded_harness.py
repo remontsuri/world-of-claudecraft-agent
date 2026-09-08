@@ -1,7 +1,6 @@
 """BOUNDED HARNESS: FSM stress test — never crashes, never invalid state.
 
-Runs all possible (initial_state, quest_status) combinations for N iterations
-and verifies the FSM always ends in a valid QuestState.
+After STREAM J2: FSM has no decide(). Tests verify state tracking only.
 """
 import sys, os, tempfile
 sys.path.insert(0, os.path.dirname(__file__))
@@ -33,25 +32,25 @@ def test_bounded_harness_random_walk():
         qs = random.choice(statuses)
         f.update_from_world({"quest_status": qs, "quest": {"id": "q1"}})
         assert isinstance(f.state, QuestState)
-        # State must always be valid
         assert f.state in list(QuestState)
 
 
-def test_bounded_harness_never_crashes_on_decide():
-    """FSM.decide() must never crash regardless of state."""
+def test_fsm_has_no_decide_method():
+    """STREAM J2: FSM must NOT have decide() — decision logic moved to ArbitrationLayer."""
+    f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "fsm.json"))
+    assert not hasattr(f, "decide"), "FSM.decide() must be removed — decision logic belongs to ArbitrationLayer"
+
+
+def test_fsm_state_always_valid_after_update():
+    """FSM state must always be a valid QuestState after any update_from_world call."""
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "fsm.json"))
     ws = {"quest_status": "ACTIVE", "quest": {"id": "q1"},
           "hp_frac": 0.5, "has_mob": True, "distance_to_giver": 10.0}
-    info = {"nearby": [], "player_pos": [0, 0]}
     for state in QuestState:
         f.state = state
         f.active_quest = {"id": "q1"}
-        try:
-            action, ctx = f.decide(ws, info)
-        except Exception as e:
-            raise AssertionError(f"decide() crashed in state {state.name}: {e}")
-        assert isinstance(action, str), f"{state.name} -> {action} is not a string"
-        assert isinstance(ctx, dict), f"{state.name} -> {ctx} is not a dict"
+        f.update_from_world(ws)
+        assert isinstance(f.state, QuestState), f"{state.name} -> {f.state} is not a QuestState"
 
 
 def test_bounded_harness_recovery_actions_valid():

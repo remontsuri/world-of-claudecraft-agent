@@ -11,75 +11,63 @@ def _ws(phase="COMPLETE_OBJECTIVE", qid="q_a", cur=5, req=8, has_ready=False):
 
 
 def test_fsm_is_single_writer_marks_source():
-    """Доказано по коду 2026-08-24: цель писали ТРИ места —
-    play_autonomous:327 (FSM), play_autonomous:384 (LLM через apply_decision) и
-     agent.py:304 (FSM внутри step, ЗАТИРАЛ решение LLM через 6 строк).
-    Теперь у goal ровно один писатель, и он себя помечает."""
-    from goal_fsm import GoalFSM
+    from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS)
     assert f.goal_source == "fsm"
 
 
 def test_advisory_write_does_not_change_goal():
-    """LLM больше НЕ пишет цель: её вход — совет, который не меняет фазу.
-    Иначе мы возвращаемся к goal_switches=0.71/шаг."""
-    from goal_fsm import GoalFSM
+    from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS)
     changed = f.suggest("TURN_IN", reason="llm says so")
     assert changed is False, "совет не должен менять цель"
-    # goal is a formatted property "STATE:quest_id"
     assert f.goal == "DO_OBJECTIVE:q_a"
     assert f.last_suggestion == "TURN_IN"
 
 
 def test_suggestion_is_recorded_for_learning():
-    """Совет сохраняется — по нему потом можно измерить, был ли он полезен."""
-    from goal_fsm import GoalFSM
+    from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")
-    f.suggest("SELL_REPAIR", reason="bags full")
-    assert f.last_suggestion == "SELL_REPAIR"
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS)
+    f.suggest("TURN_IN", reason="bags full")
+    assert f.last_suggestion == "TURN_IN"
     assert f.last_suggestion_reason == "bags full"
 
 
 def test_goal_switch_counter_only_counts_real_changes():
-    """Метрика goal_switches должна считать РЕАЛЬНЫЕ смены фазы, а не
-    повторные записи той же цели (иначе цифра 0.71/шаг обманывает)."""
-    from goal_fsm import GoalFSM
+    from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS)
     base = f.switch_count
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")      # та же цель
-    f.set("DO_OBJECTIVE", "q_a", source="fsm")
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS + 1)
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS + 2)
     assert f.switch_count == base, "повторная запись той же цели — не смена"
-    f.set("TURN_IN", "q_a", source="fsm")
+    f.set("TURN_IN", "q_a", source="fsm", step=MIN_DWELL_STEPS * 3)
     assert f.switch_count == base + 1
 
 
 def test_min_dwell_blocks_thrashing():
-    """Контракт со-архитектора (Q11): даже легитимная смена не чаще, чем раз в
-    MIN_DWELL_STEPS шагов, кроме форсирующих событий (смерть)."""
     from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
     f.set("DO_OBJECTIVE", "q_a", source="fsm", step=100)
-    ok = f.set("SELL_REPAIR", "q_a", source="fsm", step=100 + MIN_DWELL_STEPS - 1)
+    ok = f.set("TURN_IN", "q_a", source="fsm", step=100 + MIN_DWELL_STEPS - 1)
     assert ok is False, "смена раньше min-dwell должна быть отклонена"
     assert f.goal == "DO_OBJECTIVE:q_a"
-    ok2 = f.set("SELL_REPAIR", "q_a", source="fsm", step=100 + MIN_DWELL_STEPS)
-    assert ok2 is True and f.goal == "SELL_REPAIR:q_a"
+    ok2 = f.set("TURN_IN", "q_a", source="fsm", step=100 + MIN_DWELL_STEPS)
+    assert ok2 is True and f.goal == "TURN_IN:q_a"
 
 
 def test_death_forces_switch_ignoring_dwell():
-    from goal_fsm import GoalFSM
+    from goal_fsm import GoalFSM, MIN_DWELL_STEPS
     import tempfile
     f = GoalFSM(memory_path=os.path.join(tempfile.mkdtemp(), "g.json"))
-    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=100)
-    ok = f.set("HEAL", "q_a", source="fsm", step=101, force=True)
-    assert ok is True and f.goal == "HEAL:q_a", "смерть/критический hp обязаны форсировать"
+    f.set("DO_OBJECTIVE", "q_a", source="fsm", step=MIN_DWELL_STEPS)
+    ok = f.set("TURN_IN", "q_a", source="fsm", step=MIN_DWELL_STEPS + 1, force=True)
+    assert ok is True and f.goal == "TURN_IN:q_a", "смерть/критический hp обязаны форсировать"

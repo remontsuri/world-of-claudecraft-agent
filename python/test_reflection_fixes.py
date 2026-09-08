@@ -18,41 +18,46 @@ Root causes (each test below pins one):
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from goal_fsm import GoalFSM, NO_QUEST, TURN_IN, DO_OBJECTIVE
+from goal_fsm import GoalFSM, QuestState, MIN_DWELL_STEPS
 from self_reflection import SelfReflection
 
 
 # ---- R1: stale TURN_IN goal against a live ACTIVE quest --------------------
 
 def _fsm_turnin():
-    f = GoalFSM(path=os.path.join(os.path.dirname(__file__), "_test_fsm.json"))
-    f.set(TURN_IN, "q_greyjaw")
+    f = GoalFSM(memory_path=os.path.join(os.path.dirname(__file__), "_test_fsm.json"))
+    f.set("TURN_IN", "q_greyjaw", step=MIN_DWELL_STEPS)
     return f
 
 
-def test_fsm_resets_when_tracked_quest_vanished_from_world():
-    """Persisted TURN_IN/q_greyjaw + live world showing a DIFFERENT active quest
-    (q_greyjaw absent) -> FSM must not keep TURN_IN."""
+def test_fsm_demotes_turnin_when_active_quest_observed():
+    """Persisted TURN_IN/q_greyjaw + live world showing ACTIVE quest_status
+    -> FSM must demote to DO_OBJECTIVE (Fix5 regression)."""
     f = _fsm_turnin()
-    ws = {"quest": {"id": "q_prof_attune_smith", "phase": "ACTIVE",
-                    "progress": 0, "required": 3}}
+    ws = {"quest_status": "ACTIVE", "quest": {"id": "q_prof_attune_smith"}}
     f.update_from_world(ws)
-    assert f.goal != TURN_IN, (
-        f"stale TURN_IN kept for vanished quest, now {f.goal}/{f.quest_id}")
-    # it should be working the NEW quest's objective, or looking for a giver —
-    # anything except the turn-in pocket.
-    assert f.goal in (DO_OBJECTIVE, NO_QUEST), f"unexpected {f.goal}"
+    assert f.state == QuestState.DO_OBJECTIVE, (
+        f"stale TURN_IN kept, now {f.state}")
 
 
 def test_fsm_keeps_turnin_when_same_quest_still_ready():
     f = _fsm_turnin()
-    ws = {"quest": {"id": "q_greyjaw", "phase": "READY",
-                    "progress": 8, "required": 8}}
+    ws = {"quest_status": "READY_TO_TURN_IN", "quest": {"id": "q_greyjaw"}}
     f.update_from_world(ws)
-    assert f.goal == TURN_IN
+    assert f.state == QuestState.TURN_IN
+
+
+def test_fsm_reset_when_tracked_quest_vanished_from_world():
+    """Persisted TURN_IN/q_greyjaw + live world showing NONE quest_status
+    (quest gone) -> FSM must reset to QUEST_NONE."""
+    f = _fsm_turnin()
+    ws = {"quest_status": "NONE", "quest": {"id": "q_greyjaw"}}
+    f.update_from_world(ws)
+    assert f.state == QuestState.QUEST_NONE
 
 
 # ---- R2: reflection observes every step -------------------------------------

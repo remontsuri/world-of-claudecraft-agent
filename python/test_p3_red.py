@@ -3,6 +3,9 @@
 These tests verify the core game mechanics that the agent depends on.
 They are RED (verified) — they test real behavior, not mocks.
 
+After STREAM J2: FSM is state-tracker only (no decide()). Tests updated to
+verify state transitions via update_from_world() and set().
+
 Run: cd python && python -m pytest test_p3_red.py -v
 """
 import math
@@ -250,89 +253,37 @@ class TestKillReward:
 
 
 # ============================================================
-# QUEST CYCLE (FSM transitions)
+# QUEST CYCLE (FSM state transitions via update_from_world)
 # ============================================================
 
 class TestQuestCycle:
-    """Full quest lifecycle: NONE -> FIND -> ACCEPT -> DO -> RETURN -> TURN_IN -> DONE."""
+    """Full quest lifecycle via update_from_world: NONE -> DO -> RETURN -> DONE."""
 
-    def test_quest_none_to_find_giver(self):
+    def test_quest_none_to_do_objective_on_active(self):
         f = _fsm()
         assert f.state == QuestState.QUEST_NONE
-        action, ctx = f.decide({}, {"nearby": [_giver(3, 0)]})
-        assert f.state == QuestState.FIND_GIVER
-        assert action == "navigate"
-
-    def test_find_giver_to_accept_when_close(self):
-        f = _fsm()
-        f.set(QuestState.FIND_GIVER, "q1")
-        f.quest_giver = {"x": 3, "z": 0, "dist": 3.0}
-        action, ctx = f.decide({}, {"player_pos": [0, 0]})
-        assert f.state == QuestState.ACCEPT
-        assert action == "accept_quest"
-
-    def test_accept_to_verify(self):
-        f = _fsm()
-        f.set(QuestState.ACCEPT, "q1")
-        f.quest_giver = {"x": 0, "z": 0}
-        action, ctx = f.decide({}, {})
-        assert f.state == QuestState.VERIFY_ACCEPT
-        assert action == "accept_quest"
-
-    def test_verify_accept_to_do_objective(self):
-        f = _fsm()
-        f.set(QuestState.VERIFY_ACCEPT, "q1")
-        f.quest_giver = {"x": 0, "z": 0}
-        action, ctx = f.decide({"quest_status": "ACTIVE"}, {})
+        f.update_from_world({"quest_status": "ACTIVE", "quest": {"id": "q1"}})
         assert f.state == QuestState.DO_OBJECTIVE
 
-    def test_do_objective_farms_when_mob_present(self):
+    def test_do_objective_to_return_on_ready(self):
         f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
-        action, ctx = f.decide({"quest_status": "ACTIVE", "has_mob": True}, {})
-        assert action == "farm"
-
-    def test_do_objective_explores_when_no_mob(self):
-        f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
-        action, ctx = f.decide({"quest_status": "ACTIVE", "has_mob": False}, {})
-        assert action == "explore"
-
-    def test_ready_to_turn_in_transitions_to_return(self):
-        f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
-        f.quest_giver = {"x": 50, "z": 0}
-        action, ctx = f.decide({"quest_status": "READY_TO_TURN_IN"}, {"player_pos": [0, 0]})
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
+        f.update_from_world({"quest_status": "READY_TO_TURN_IN", "quest": {"id": "q1"}})
         assert f.state == QuestState.RETURN_TO_GIVER
-        assert action == "navigate"
 
-    def test_return_to_giver_arrives_then_turn_in(self):
+    def test_return_to_giver_to_done(self):
         f = _fsm()
-        f.set(QuestState.RETURN_TO_GIVER, "q1")
-        f.quest_giver = {"x": 3, "z": 0}
-        action, ctx = f.decide({}, {"player_pos": [0, 0]})
-        assert f.state == QuestState.TURN_IN
-        assert action == "turn_in_quest"
-
-    def test_turn_in_to_verify(self):
-        f = _fsm()
-        f.set(QuestState.TURN_IN, "q1")
-        f.quest_giver = {"x": 0, "z": 0}
-        action, ctx = f.decide({}, {})
-        assert f.state == QuestState.VERIFY_TURN_IN
-        assert action == "turn_in_quest"
-
-    def test_verify_turn_in_to_done(self):
-        f = _fsm()
-        f.set(QuestState.VERIFY_TURN_IN, "q1")
-        f.quest_giver = {"x": 0, "z": 0}
-        action, ctx = f.decide({"quest_status": "DONE"}, {})
+        f.state = QuestState.RETURN_TO_GIVER
+        f.active_quest = {"id": "q1"}
+        f.update_from_world({"quest_status": "DONE", "quest": {"id": "q1"}})
         assert f.state == QuestState.DONE
 
     def test_done_resets_to_none(self):
         f = _fsm()
-        f.set(QuestState.DONE, "q1")
-        action, ctx = f.decide({}, {})
+        f.state = QuestState.DONE
+        f.active_quest = {"id": "q1"}
+        f.update_from_world({"quest_status": "NONE", "quest": {"id": "q1"}})
         assert f.state == QuestState.QUEST_NONE
         assert f.active_quest is None
 
@@ -341,39 +292,33 @@ class TestQuestCycle:
         f = _fsm()
         # 1. Start: no quest
         assert f.state == QuestState.QUEST_NONE
-        # 2. Find giver
-        f.decide({}, {"nearby": [_giver(3, 0, qids=["q_bones"])]})
-        assert f.state == QuestState.FIND_GIVER
-        # 3. Approach giver
-        f.quest_giver = {"x": 3, "z": 0, "dist": 3.0}
-        f.decide({}, {"player_pos": [0, 0]})
-        assert f.state == QuestState.ACCEPT
-        # 4. Accept quest
-        f.decide({}, {})
-        assert f.state == QuestState.VERIFY_ACCEPT
-        # 5. Quest becomes active
-        f.decide({"quest_status": "ACTIVE"}, {})
+        # 2. Quest becomes active
+        f.update_from_world({"quest_status": "ACTIVE", "quest": {"id": "q1"}})
         assert f.state == QuestState.DO_OBJECTIVE
-        # 6. Farm mobs
-        f.decide({"quest_status": "ACTIVE", "has_mob": True}, {})
-        assert f.state == QuestState.DO_OBJECTIVE
-        # 7. Quest ready to turn in
-        f.quest_giver = {"x": 50, "z": 0}
-        f.decide({"quest_status": "READY_TO_TURN_IN"}, {"player_pos": [0, 0]})
+        # 3. Quest ready to turn in
+        f.update_from_world({"quest_status": "READY_TO_TURN_IN", "quest": {"id": "q1"}})
         assert f.state == QuestState.RETURN_TO_GIVER
-        # 8. Arrive at giver
-        f.quest_giver = {"x": 3, "z": 0}
-        f.decide({}, {"player_pos": [0, 0]})
-        assert f.state == QuestState.TURN_IN
-        # 9. Turn in
-        f.decide({}, {})
-        assert f.state == QuestState.VERIFY_TURN_IN
-        # 10. Quest done
-        f.decide({"quest_status": "DONE"}, {})
+        # 4. Quest done
+        f.update_from_world({"quest_status": "DONE", "quest": {"id": "q1"}})
         assert f.state == QuestState.DONE
-        # 11. Reset
-        f.decide({}, {})
+        # 5. Quest cleared
+        f.update_from_world({"quest_status": "NONE", "quest": {"id": "q1"}})
         assert f.state == QuestState.QUEST_NONE
+
+    def test_turnin_demotes_when_active(self):
+        """Fix5 regression: TURN_IN against incomplete ACTIVE demotes."""
+        f = _fsm()
+        f.state = QuestState.TURN_IN
+        f.active_quest = {"id": "q1"}
+        f.update_from_world({"quest_status": "ACTIVE", "quest": {"id": "q1"}})
+        assert f.state == QuestState.DO_OBJECTIVE
+
+    def test_verify_turnin_demotes_when_active(self):
+        f = _fsm()
+        f.state = QuestState.VERIFY_TURN_IN
+        f.active_quest = {"id": "q1"}
+        f.update_from_world({"quest_status": "ACTIVE", "quest": {"id": "q1"}})
+        assert f.state == QuestState.DO_OBJECTIVE
 
 
 # ============================================================
@@ -385,7 +330,8 @@ class TestRespawn:
 
     def test_enter_dead_saves_quest(self):
         f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
         f.quest_giver = {"x": 10, "z": 10}
         f.enter_dead()
         assert f.state == QuestState.RESPAWN
@@ -395,7 +341,8 @@ class TestRespawn:
 
     def test_resume_from_dead_restores_quest(self):
         f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
         f.quest_giver = {"x": 10, "z": 10}
         f.enter_dead()
         f.resume_from_dead()
@@ -405,28 +352,15 @@ class TestRespawn:
 
     def test_resume_from_dead_no_quest_goes_to_none(self):
         f = _fsm()
-        f.set(QuestState.QUEST_NONE)
+        f.state = QuestState.QUEST_NONE
         f.enter_dead()
         f.resume_from_dead()
         assert f.state == QuestState.QUEST_NONE
 
-    def test_respawn_handler_waits_when_dead(self):
-        f = _fsm()
-        f.set(QuestState.RESPAWN, "q1")
-        action, ctx = f.decide({}, {"player": {"dead": True, "hp": 0}})
-        assert action == "heal"
-        assert ctx["reason"] == "awaiting_respawn"
-
-    def test_respawn_handler_recovers_when_alive(self):
-        f = _fsm()
-        f.set(QuestState.RESPAWN, "q1")
-        action, ctx = f.decide({}, {"player": {"dead": False, "hp": 50}})
-        assert f.state == QuestState.QUEST_NONE
-        assert action == "explore"
-
     def test_death_counter_increments(self):
         f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
         f.enter_dead()
         assert f.total_deaths == 1
         f.enter_dead()  # already in RESPAWN, should not double-count
@@ -444,7 +378,8 @@ class TestFSMPersistence:
         d = tempfile.mkdtemp()
         path = os.path.join(d, "fsm.json")
         f1 = GoalFSM(memory_path=path)
-        f1.set(QuestState.DO_OBJECTIVE, "q_persist")
+        f1.state = QuestState.DO_OBJECTIVE
+        f1.active_quest = {"id": "q_persist"}
         f1.total_kills = 5
         f1.total_deaths = 2
         f1.total_xp = 100
@@ -463,7 +398,8 @@ class TestFSMPersistence:
         d = tempfile.mkdtemp()
         path = os.path.join(d, "fsm.json")
         f1 = GoalFSM(memory_path=path)
-        f1.set(QuestState.RETURN_TO_GIVER, "q1")
+        f1.state = QuestState.RETURN_TO_GIVER
+        f1.active_quest = {"id": "q1"}
         f1.quest_giver = {"x": 42, "z": 17, "id": "elder"}
         f1.save()
 
@@ -613,46 +549,6 @@ class TestNavigationIntegration:
 
 
 # ============================================================
-# FSM DECISION INTEGRATION
-# ============================================================
-
-class TestFSMDecision:
-    """FSM decide() returns correct actions for each state."""
-
-    def test_critical_hp_returns_heal(self):
-        f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
-        action, ctx = f.decide({"hp_frac": 0.1}, {})
-        assert action == "heal"
-        assert ctx["reason"] == "critical_hp"
-
-    def test_error_with_quest_recovers(self):
-        f = _fsm()
-        f.set(QuestState.ERROR, "q1")
-        action, ctx = f.decide({"quest_status": "ACTIVE"}, {})
-        assert f.state == QuestState.DO_OBJECTIVE
-
-    def test_error_without_quest_resets(self):
-        f = _fsm()
-        f.set(QuestState.ERROR)
-        f.active_quest = None
-        action, ctx = f.decide({}, {})
-        assert f.state == QuestState.QUEST_NONE
-
-    def test_quest_none_with_no_nearby_explores(self):
-        f = _fsm()
-        action, ctx = f.decide({}, {"nearby": []})
-        assert action == "explore"
-        assert ctx["reason"] == "no_quest_giver"
-
-    def test_quest_none_with_giver_navigates(self):
-        f = _fsm()
-        action, ctx = f.decide({}, {"nearby": [_giver(20, 0)]})
-        assert f.state == QuestState.FIND_GIVER
-        assert action == "navigate"
-
-
-# ============================================================
 # UPDATE_FROM_WORLD EDGE CASES
 # ============================================================
 
@@ -666,19 +562,22 @@ class TestUpdateFromWorld:
 
     def test_ready_from_do_objective(self):
         f = _fsm()
-        f.set(QuestState.DO_OBJECTIVE, "q1")
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
         f.update_from_world({"quest_status": "READY_TO_TURN_IN"})
         assert f.state == QuestState.RETURN_TO_GIVER
 
     def test_done_from_verify_turn_in(self):
         f = _fsm()
-        f.set(QuestState.VERIFY_TURN_IN, "q1")
+        f.state = QuestState.VERIFY_TURN_IN
+        f.active_quest = {"id": "q1"}
         f.update_from_world({"quest_status": "DONE"})
         assert f.state == QuestState.DONE
 
     def test_none_from_done_resets(self):
         f = _fsm()
-        f.set(QuestState.DONE, "q1")
+        f.state = QuestState.DONE
+        f.active_quest = {"id": "q1"}
         f.update_from_world({"quest_status": "NONE"})
         assert f.state == QuestState.QUEST_NONE
         assert f.active_quest is None
@@ -686,15 +585,53 @@ class TestUpdateFromWorld:
     def test_turnin_demotes_when_active(self):
         """Fix5 regression: TURN_IN against incomplete ACTIVE demotes."""
         f = _fsm()
-        f.set(QuestState.TURN_IN, "q_greyjaw")
+        f.state = QuestState.TURN_IN
+        f.active_quest = {"id": "q_greyjaw"}
         f.update_from_world({"quest_status": "ACTIVE"})
         assert f.state == QuestState.DO_OBJECTIVE
 
     def test_verify_turnin_demotes_when_active(self):
         f = _fsm()
-        f.set(QuestState.VERIFY_TURN_IN, "q1")
+        f.state = QuestState.VERIFY_TURN_IN
+        f.active_quest = {"id": "q1"}
         f.update_from_world({"quest_status": "ACTIVE"})
         assert f.state == QuestState.DO_OBJECTIVE
+
+
+# ============================================================
+# FSM IS STATE TRACKER ONLY (no decide)
+# ============================================================
+
+class TestFSMIsStateTrackerOnly:
+    """STREAM J2: FSM must NOT have decide() method."""
+
+    def test_fsm_has_no_decide_method(self):
+        """FSM must not contain decision logic."""
+        f = _fsm()
+        assert not hasattr(f, "decide"), "FSM.decide() must be removed"
+
+    def test_fsm_has_no_handle_methods(self):
+        """FSM must not have _handle_* methods."""
+        f = _fsm()
+        handle_methods = [m for m in dir(f) if m.startswith("_handle_")]
+        assert len(handle_methods) == 0, f"FSM still has handle methods: {handle_methods}"
+
+    def test_fsm_goal_property_reflects_state(self):
+        """FSM.goal returns state-based string, not action."""
+        f = _fsm()
+        f.state = QuestState.DO_OBJECTIVE
+        f.active_quest = {"id": "q1"}
+        assert f.goal == "DO_OBJECTIVE:q1"
+
+    def test_fsm_goal_none_when_no_quest(self):
+        f = _fsm()
+        assert f.goal is None
+
+    def test_fsm_goal_complete_when_done(self):
+        f = _fsm()
+        f.state = QuestState.DONE
+        f.active_quest = {"id": "q1"}
+        assert f.goal == "QUEST_COMPLETE"
 
 
 # ============================================================
