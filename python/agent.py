@@ -28,9 +28,10 @@ import os
 import sys
 import time
 import traceback
+from typing import Set
 from browser_env import BrowserBridgeError
 
-from hierarchical_env import HierarchicalWoWEnv, ACT_FORWARD, ACT_TURN_LEFT, SKILLS
+from hierarchical_env import ACT_FORWARD, ACT_TURN_LEFT, SKILLS
 from verifiers_py import verify_skill
 from policy import GoalManager, _has_healing
 from memory import ExperienceStore, _bucket, WorldMemory
@@ -38,6 +39,7 @@ from reward import outcome_reward
 from world_state import build_world_state
 import quest_skill
 from quest_capability import QuestCapability
+from quest_chain import QuestChain
 from game_source import GameSource
 from arbitration import ArbitrationLayer
 
@@ -85,7 +87,7 @@ def _world_state_dict(info: dict, world_mem=None) -> dict:
 
 
 class Agent:
-    def __init__(self, env: HierarchicalWoWEnv, memory: ExperienceStore, seed=None,
+    def __init__(self, env, memory: ExperienceStore, seed=None,
                  world_mem: "WorldMemory" = None, fsm=None, replay=None,
                  strat_mem=None, reflection_hints: dict = None,
                  journal_dir: str = None):
@@ -122,14 +124,14 @@ class Agent:
         # 3 is enough to survive a transient healer rejection without burning the
         # whole run; beyond that it is a real recovery failure, not bad luck.
         self.RESPAWN_MAX_ATTEMPTS = 3
+        # K6: quest chain — done quest IDs (never re-accept)
+        self.done_ids: Set[str] = set()
         # Dynamic game truth adapter — reads window.__game.sim.worldContent.npcs
         # (91 NPCs with questIds) via CDP. This is the canonical source for giver
         # positions; static giver_positions.json is DEPRECATED. Initialized lazily
         # on first accept_quest so we don't pay CDP connect cost when the agent
         # never needs quests.
         self._game_source = None
-
-    def refresh_hints(self):
         """Reload reflection hints from the journal into the live policy.
 
         Called by the runner every SAVE_EVERY steps so conclusions drawn at
@@ -257,6 +259,15 @@ class Agent:
                 after = self.env._last_info
                 if res == "SUCCESS":
                     verdict = "SUCCESS"
+                    # K6: record quest ID in done_ids on successful turn-in
+                    _q = ctx.get("quest")
+                    if isinstance(_q, dict):
+                        _qid = _q.get("id")
+                        if _qid:
+                            self.done_ids.add(str(_qid))
+                            _fsm = getattr(self, "fsm", None)
+                            if _fsm is not None:
+                                _fsm.record_quest_done(str(_qid))
                 elif res == "PARTIAL":
                     verdict = "INCONCLUSIVE"
                 else:
@@ -286,6 +297,18 @@ class Agent:
                 # giver first. Coordinates come from the LIVE snapshot (info.nearby), NOT
                 # ctx (policy does not guarantee ctx["npc"]["x"/"z"]).
                 if action == "accept_quest":
+                    # K6: use quest_chain.discover() to find the best quest giver
+                    # (filtering out done quests). This prevents re-accepting the same
+                    # quest after turn-in.
+                    try:
+                        _qc = QuestChain(self, self.env)
+                        _qc.done_ids = self.done_ids
+                        _discovery = _qc.discover()
+                        if _discovery is not None:
+                            ctx["npc"] = _discovery["npc"]
+                            ctx["questId"] = _discovery["quest_id"]
+                    except Exception:
+                        pass  # best-effort; fall through to existing logic
                     import sys as _sys
                     _sys.stderr.write("\n[AGENT accept_quest] === START ===\n")
                     _sys.stderr.write("[AGENT accept_quest] ctx keys: %r\n" % list(ctx.keys()))
@@ -510,6 +533,10 @@ class Agent:
                     "reward": 0.0,
                     "ws_before": _world_state_dict(_info_after, self.world_mem), "ws_after": _world_state_dict(_info_after, self.world_mem),
                 }
+
+        # K1: start timing for DecisionTrace
+        _cycle_start = time.time()
+
         info_before = self.env._last_info
         self._remember_visible_world(info_before)
         ws_before = _world_state_dict(info_before, self.world_mem)
@@ -531,6 +558,9 @@ class Agent:
                 self.fsm.update_from_world(ws_before)
             except Exception:
                 traceback.print_exc()
+
+        # K1: capture FSM phase BEFORE decision (for DecisionTrace)
+        fsm_phase_before = self.fsm.phase if self.fsm is not None else None
 
         # 1. Policy decides (learned + exploration), CONSTRAINED to the current
         # FSM phase. This stops the flat softmax from choosing a global action
@@ -560,6 +590,18 @@ class Agent:
                                               exploration_weight=exploration_weight,
                                               phase=fsm_phase, **_decide_kwargs)
 
+        # K1: capture FSM phase AFTER decision + planner subgoal
+        fsm_phase_after = self.fsm.phase if self.fsm is not None else None
+        _planner_subgoal = None
+        if self.arbitration is not None and getattr(self.arbitration, 'planner', None) is not None:
+            try:
+                from observation import encode_observation
+                _obs = encode_observation(ws_before, info_before)
+                _adv = self.arbitration.planner.advisor_context(_obs)
+                _planner_subgoal = _adv.get("subgoal")
+            except Exception:
+                pass
+
         # TELEMETRY: policy owns the decision now.
         # Survival override removed (duplicate of _retreat_if_needed in
         # autonomous_master.py). Policy learns survival via reward shaping:
@@ -580,6 +622,10 @@ class Agent:
         reward = outcome_reward(ws_before, ws_after, verdict, outcome_kind)
         _trace("REWARD_DONE r=%.2f" % (reward,))
 
+        # K1: capture policy scores (stored on self.policy by decide())
+        _policy_scores = getattr(self.policy, "_trace_vals", {}) or {}
+        _candidate_actions = getattr(self.policy, "_trace_cands", []) or []
+
         # 7. Memory learns — UNLESS infra error (ENV_ERROR -> no false lesson)
         #    or measurement mode (learn=False).
         if learn and outcome_kind != "ENV_ERROR":
@@ -596,6 +642,36 @@ class Agent:
             # train_from_replay(). See play_autonomous.py ~line 562.
         _trace("MEMORY_DONE")
 
+        # K1: DecisionTrace — canonical forensic record
+        _trace_record = None
+        try:
+            from decision_trace import (
+                make_decision_trace, write_decision_trace, decompose_reward,
+            )
+            _duration_ms = (time.time() - _cycle_start) * 1000.0
+            _reward_components = decompose_reward(ws_before, ws_after, verdict, outcome_kind)
+            _trace_record = make_decision_trace(
+                step=self._step_counter,
+                ws_before=ws_before,
+                ws_after=ws_after,
+                fsm_phase_before=fsm_phase_before,
+                fsm_phase_after=fsm_phase_after,
+                planner_subgoal=_planner_subgoal,
+                candidate_actions=_candidate_actions,
+                policy_scores=_policy_scores,
+                arbitration_reason=_reason if self.arbitration is not None else "policy",
+                action=action,
+                verdict=verdict,
+                outcome_kind=outcome_kind,
+                reward=reward,
+                reward_components=_reward_components,
+                duration_ms=_duration_ms,
+                ctx=ctx,
+            )
+            write_decision_trace(_trace_record)
+        except Exception:
+            pass  # telemetry must never crash the agent
+
         return {
             "action": action,
             "policy_action": _policy_action,
@@ -606,6 +682,7 @@ class Agent:
             "reward": reward,
             "ws_before": ws_before,
             "ws_after": ws_after,
+            "decision_trace": _trace_record if '_trace_record' in dir() else None,
         }
 
     def set_autonomy(self, autonomy):
@@ -724,27 +801,7 @@ class Agent:
             self.env._last_info = self.env._last_info
 
 
-if __name__ == "__main__":
-    # Long autonomous self-play: the agent balances the FULL skill set
-    # (quest/loot/sell/farm/heal/buy/equip/explore) via its learned policy,
-    # not a scripted bot. 3000 steps ~ enough to walk out of the start zone,
-    # reach mobs + trade-vendors, and exercise buy/heal/equip for real.
-    env = HierarchicalWoWEnv(player_class="warrior", max_steps=5000, seed=42)
-    obs, info = env.reset(seed=42)
-    mem = ExperienceStore()
-    agent = Agent(env, mem, seed=12345)
-    # В standalone-режиме раннера play_autonomous нет, значит НИКТО не
-    # синхронизирует FSM с миром — включаем тумблер, чтобы фаза не замерла.
-    # В обычном режиме (play_autonomous) он ВЫКЛЮЧЕН: там синхронизация одна,
-    # в раннере, и второй вызов затирал бы решения (см. комментарий в _cycle).
-    agent.sync_fsm_in_step = True
-    learned = agent.run(n_steps=3000, save_every=100)
-    print("\n=== Learned value snapshot (state_bucket -> {action: value}) ===")
-    for bucket, acts in learned.items():
-        print(bucket)
-        for a, v in sorted(acts.items(), key=lambda kv: -kv[1]):
-            print(f"    {a:14s} {v:+.3f}")
-    env.close()
+
 
 def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
                       json_givers, player_pos, game_source=None,

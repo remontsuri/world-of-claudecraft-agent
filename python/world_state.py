@@ -273,6 +273,10 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
         "giver_known": False,
         "giver_distance": 999.0,
         "objectives": [],
+        # K6: quest chain tracking
+        "done_ids": [],
+        "objectives_complete": 0,
+        "total_objectives": 0,
     }
     if all_q:
         any_incomplete = False
@@ -383,6 +387,10 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
                 "giver_known": tNpc.get("x") is not None,
                 "giver_distance": distance_to_giver,
                 "objectives": _objectives_view(q),
+                # K6: quest chain tracking
+                "done_ids": [],
+                "objectives_complete": 0,
+                "total_objectives": len(q.get("objectives") or []),
             }
 
     in_combat = bool(info.get("in_combat"))

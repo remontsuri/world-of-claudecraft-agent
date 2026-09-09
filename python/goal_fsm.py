@@ -17,7 +17,7 @@ Removed (moved to ArbitrationLayer):
   - stuck detection (now in recovery_layer.py)
 """
 from enum import Enum, auto
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 import json
 import os
 
@@ -100,6 +100,9 @@ class GoalFSM:
         self.switch_count: int = 0
         self._last_set_step: int = 0
         self._goal_str: Optional[str] = None
+        # K6: quest chain tracking
+        self.done_ids: Set[str] = set()
+        self.current_objective_idx: int = 0
         # Backward compat: path= alias for memory_path (old tests use path=)
         self.memory_path = memory_path or path or os.path.join(
             os.path.dirname(__file__), "goal_fsm_state.json"
@@ -129,6 +132,10 @@ class GoalFSM:
             self.total_copper = data.get("total_copper", 0)
             self.active_quest = data.get("active_quest")
             self.quest_giver = data.get("quest_giver")
+            # K6: restore chain tracking
+            done_ids_list = data.get("done_ids", [])
+            self.done_ids = set(done_ids_list) if isinstance(done_ids_list, list) else set()
+            self.current_objective_idx = data.get("current_objective_idx", 0)
         except Exception:
             pass
 
@@ -144,6 +151,9 @@ class GoalFSM:
             "step_count": self.step_count,
             "active_quest": self.active_quest,
             "quest_giver": self.quest_giver,
+            # K6: persist chain tracking
+            "done_ids": list(self.done_ids),
+            "current_objective_idx": self.current_objective_idx,
         }
         try:
             with open(self.memory_path, "w") as f:
@@ -252,6 +262,13 @@ class GoalFSM:
         ):
             self.reset()
 
+        # K6: DONE -> QUEST_NONE transition with done_ids update
+        if quest_status == "DONE" and old_state != QuestState.DONE and self.active_quest:
+            qid = self.active_quest.get("id")
+            if qid:
+                self.done_ids.add(str(qid))
+            self.state = QuestState.DONE
+
         if old_state != self.state:
             print(f"[fsm] {old_state.name} -> {self.state.name} (qs={quest_status})", flush=True)
 
@@ -261,6 +278,27 @@ class GoalFSM:
         self.active_quest = None
         self.quest_giver = None
         self.failure_reason = FailureReason.NONE
+        self.current_objective_idx = 0
+        # NOTE: done_ids is NOT cleared — it persists across quests
+
+    def record_quest_done(self, quest_id: str):
+        """Record a quest as done. Called after successful turn-in."""
+        self.done_ids.add(str(quest_id))
+        self.current_objective_idx = 0
+
+    def get_next_objective(self) -> Optional[dict]:
+        """Get the next incomplete objective from the active quest."""
+        if not self.active_quest:
+            return None
+        objectives = self.active_quest.get("objectives") or []
+        idx = self.current_objective_idx
+        while idx < len(objectives):
+            o = objectives[idx]
+            if (o.get("current") or 0) < (o.get("required") or 0):
+                self.current_objective_idx = idx
+                return o
+            idx += 1
+        return None  # All objectives complete
 
     def suggest(self, goal: str, reason: str = "") -> bool:
         """Запомнить совет от LLM/политики. НЕ меняет цель FSM.
