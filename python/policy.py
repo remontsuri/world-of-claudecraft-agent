@@ -835,6 +835,9 @@ class GoalManager:
                                # exploration bonus actually differentiates candidates
         action = _softmax_sample(vals, self.temperature, counts=self.mem.counts,
                                  bucket=bucket, exploration_weight=exploration_weight)
+        # TELEMETRY: store final vals/cands for DecisionTrace (read by agent._cycle)
+        self._trace_vals = dict(vals)
+        self._trace_cands = list(cands)
         # TELEMETRY: log policy decision (the actual Q-values + who decided)
         self._log_decision(ws, info, goal_phase, "softmax_sample", action, vals, "policy", {"bucket": bucket})
         # ctx: pass the active quest if relevant
