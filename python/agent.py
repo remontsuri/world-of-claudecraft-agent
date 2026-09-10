@@ -24,6 +24,8 @@ caches, normalized snapshots, learned memory, own stats. GameSource (game_source
 is the dynamic CDP adapter; static JSON (giver_positions.json) is deprecated.
 """
 
+import json
+import math
 import os
 import sys
 import time
@@ -33,7 +35,7 @@ from browser_env import BrowserBridgeError
 
 from hierarchical_env import ACT_FORWARD, ACT_TURN_LEFT, SKILLS
 from verifiers_py import verify_skill
-from policy import GoalManager, _has_healing
+from policy import GoalManager, _has_healing, load_reflection_hints
 from memory import ExperienceStore, _bucket, WorldMemory
 from reward import outcome_reward
 from world_state import build_world_state
@@ -98,11 +100,9 @@ class Agent:
         # GoalManager was built with no reflection_hints and nothing ever
         # called load_reflection_hints() in production — the hint loop was
         # closed in tests only.
-        from policy import load_reflection_hints
         base_dir = journal_dir or os.path.dirname(os.path.abspath(__file__))
         self._journal_dir = base_dir
-        hints = dict(reflection_hints or {}) or \
-            load_reflection_hints(base_dir)
+        hints = dict(reflection_hints or {}) or load_reflection_hints(base_dir)
         self.policy = GoalManager(memory, temperature=1.2, seed=seed,
                                   reflection_hints=hints)
         # P0 №5 / P1 №11 fix: политика получает WorldMemory (vendor positions)
@@ -138,7 +138,6 @@ class Agent:
         runtime (spin:<action>, death:<cell>) steer decisions within seconds,
         not after the next restart.
         """
-        from policy import load_reflection_hints
         self.policy.hints = load_reflection_hints(self._journal_dir)
         return self.policy.hints
 
@@ -309,12 +308,6 @@ class Agent:
                             ctx["questId"] = _discovery["quest_id"]
                     except Exception:
                         pass  # best-effort; fall through to existing logic
-                    import sys as _sys
-                    _sys.stderr.write("\n[AGENT accept_quest] === START ===\n")
-                    _sys.stderr.write("[AGENT accept_quest] ctx keys: %r\n" % list(ctx.keys()))
-                    _sys.stderr.write("[AGENT accept_quest] ctx.npcId=%r ctx.questId=%r\n" % (ctx.get("npcId"), ctx.get("questId")))
-                    _sys.stderr.write("[AGENT accept_quest] ctx[npc]=%r\n" % str((ctx.get("npc") or {}))[:200])
-                    _json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "giver_positions.json")
                     _fsm = getattr(self, "fsm", None)
                     _qg = getattr(_fsm, "quest_giver", None) if _fsm is not None else None
                     _giver_id = (ctx.get("npcId")
@@ -322,17 +315,6 @@ class Agent:
                                  or (_qg.get("id") if isinstance(_qg, dict) else None))
                     _nearby = (info_before.get("nearby") if isinstance(info_before, dict)
                                else (self.env._last_info or {}).get("nearby")) or []
-                    _npcs_with_quests = [e for e in _nearby if isinstance(e, dict) and (e.get("questIds") or e.get("questId"))]
-                    _sys.stderr.write("[AGENT accept_quest] giver_id=%r nearby_n=%d npcs_with_quests=%d\n" % (_giver_id, len(_nearby), len(_npcs_with_quests)))
-                    for _qn in _npcs_with_quests[:3]:
-                        _sys.stderr.write("  [AGENT nearby qnpc] %s id=%s dist=%s questIds=%s\n" % (_qn.get("name"), _qn.get("id"), _qn.get("dist"), _qn.get("questIds")))
-                    if not hasattr(self, "_giver_positions"):
-                        try:
-                            import json as _json
-                            with open(_json_path, "r", encoding="utf-8") as _f:
-                                self._giver_positions = _json.load(_f)
-                        except Exception:
-                            self._giver_positions = {}
                     _pp = (info_before.get("player_pos") if isinstance(info_before, dict) else None) or (self.env._last_info or {}).get("player_pos") or [0, 0]
                     _quest_id = ctx.get("questId") or (ctx.get("npc") or {}).get("questIds", [None])[0]
                     _gs = getattr(self, "_game_source", None)
@@ -351,22 +333,13 @@ class Agent:
                             _tNpc_coords = (_tNpc.get("x"), _tNpc.get("z"))
                     _gpos = resolve_giver_pos(
                         _quest_id, _giver_id, _nearby, _qg, getattr(self, "world_mem", None),
-                        getattr(self, "_giver_positions", {}), _pp,
-                        game_source=_gs,
-                        turnInNpc_coords=_tNpc_coords)
-                    _sys.stderr.write("[AGENT accept_quest] gpos=%r json_givers_count=%d quest_id=%r\n" % (_gpos, len(getattr(self, "_giver_positions", {})), _quest_id))
+                        _pp, game_source=_gs, turnInNpc_coords=_tNpc_coords)
                     if _gpos is not None:
                         try:
-                            _arrived = self.env._navigate_to_coord(_gpos[0], _gpos[1], max_steps=80)
+                            self.env._navigate_to_coord(_gpos[0], _gpos[1], max_steps=80)
                         except Exception:
-                            pass  # best-effort; accept_quest reports honestly if still far
+                            pass
                     if _gpos is None:
-                        # Giver not visible in the live snapshot (out of scan
-                        # range). Standing still and calling acceptQuest is a
-                        # guaranteed INCONCLUSIVE loop. Instead, walk the world
-                        # to bring a giver into view — the Policy will learn that
-                        # accept_quest with no visible giver is a no-op and stop
-                        # selecting it in empty zones (self-correction loop).
                         try:
                             self.env.explore_walk(steps=12)
                         except Exception:
@@ -377,12 +350,10 @@ class Agent:
                     return info_before, "FAILURE", "OK"
                 before = info_before
                 if action == "accept_quest":
-                    import sys as _sys
                     _sys.stderr.write("[AGENT accept_quest] payload to bridge: idx=%d ctx=%r\n" % (idx, {k: ctx.get(k) for k in ["npcId", "questId", "quest", "npc"]}))
                 self.env.step(idx, ctx)
                 after = self.env._last_info
                 if action == "accept_quest":
-                    import sys as _sys
                     _sys.stderr.write("[AGENT accept_quest] bridge returned: giver=%r\n" % (getattr(self.env, "last_giver", None)))
                 # Persist the turn-in NPC in WorldMemory when we just accepted a quest.
                 # The live game does NOT return giverId in sim.questLog, so this is
@@ -804,7 +775,7 @@ class Agent:
 
 
 def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
-                      json_givers, player_pos, game_source=None,
+                      player_pos, game_source=None,
                       turnInNpc_coords=None):
     """Resolve giver (x, z) for accept_quest navigation.
 
@@ -815,8 +786,7 @@ def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
       2. live snapshot: nearest quest-NPC in nearby
       2.5. GameSource (dynamic, from window.__game.sim.worldContent.npcs)
       3. fsm.quest_giver x/z
-      4. STATIC game table (giver_positions.json) — DEPRECATED
-      5. world_mem.quest_givers - LAST
+      4. world_mem.quest_givers - LAST
     Returns (x, z) or None.
     """
     # Priority 0: active quest turnInNpc — authoritative, never stale.
@@ -840,7 +810,7 @@ def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
     # Dynamic game truth: GameSource reads window.__game.sim.worldContent.npcs
     # which has 91 NPCs with questIds — this is where offline NPC positions live,
     # since offline does NOT spawn NPCs into sim.entities (info.nearby is empty
-    # for NPCs offline). Use it before falling back to stale static JSON.
+    # for NPCs offline). Use it before falling back to stale fallbacks.
     if gpos is None and game_source is not None and quest_id:
         try:
             _gs_pos = game_source.get_giver_pos_for_quest(quest_id)
@@ -850,23 +820,6 @@ def resolve_giver_pos(quest_id, giver_id, nearby, quest_giver, world_mem,
             pass  # best-effort; fall through to stale fallbacks
     if gpos is None and isinstance(quest_giver, dict) and quest_giver.get("x") is not None:
         gpos = (quest_giver.get("x"), quest_giver.get("z"))
-    if gpos is None and json_givers:
-        # DEPRECATED — static duplicate, kept only until GameSource proven stable.
-        # Exact match by giver_id first (policy named a specific NPC).
-        if giver_id is not None and str(giver_id) in json_givers:
-            _gd = json_givers[str(giver_id)]
-            gpos = (_gd.get("x"), _gd.get("z"))
-        else:
-            best = None
-            best_d = float("inf")
-            px, pz = (player_pos or [0, 0])[0], (player_pos or [0, 0])[1]
-            for gid, gd in json_givers.items():
-                d = (gd.get("x", 0) - px) ** 2 + (gd.get("z", 0) - pz) ** 2
-                if d < best_d:
-                    best_d = d
-                    best = gd
-            if best is not None:
-                gpos = (best.get("x"), best.get("z"))
     if gpos is None and world_mem:
         gm = getattr(world_mem, "quest_givers", None) or {}
         for gd in gm.values():
