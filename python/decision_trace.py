@@ -1,8 +1,4 @@
-"""Canonical forensic record for every agent decision.
-
-The decision trace is intentionally a thin telemetry layer. It must never own
-control flow, block the agent, or become a second source of world state.
-"""
+"""Canonical telemetry record for every agent decision."""
 
 from __future__ import annotations
 
@@ -15,10 +11,11 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
-
 TRACE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "decision_trace.jsonl")
 _TRACE_LOCK = threading.Lock()
 _TRACE_FILE = None
+_TRACE_PENDING = 0
+_TRACE_FLUSH_EVERY = 32
 
 
 def _canonical_json(obj: Any) -> str:
@@ -53,7 +50,7 @@ class DecisionTrace:
 
 
 def _close_trace_file() -> None:
-    global _TRACE_FILE
+    global _TRACE_FILE, _TRACE_PENDING
     with _TRACE_LOCK:
         if _TRACE_FILE is not None:
             try:
@@ -62,29 +59,33 @@ def _close_trace_file() -> None:
             except Exception:
                 pass
             _TRACE_FILE = None
+        _TRACE_PENDING = 0
 
 
 atexit.register(_close_trace_file)
 
 
 def write_decision_trace(trace: DecisionTrace) -> None:
-    """Append one trace without reopening the file for every decision.
+    """Append telemetry with one open handle and batched flushes.
 
-    The file is line-buffered, so normal decisions are persisted promptly while
-    avoiding the open/close syscall on every agent step. Telemetry failures are
-    isolated from control flow; a later call retries opening the file.
+    Flushing every record made the previous optimization retain most of the
+    filesystem overhead at high headless FPS. A small batch keeps normal loss
+    bounded while reducing flush syscalls by ~32x. Shutdown still flushes all
+    pending records.
     """
-    global _TRACE_FILE
+    global _TRACE_FILE, _TRACE_PENDING
     try:
         line = json.dumps(asdict(trace), ensure_ascii=False, default=str, separators=(",", ":")) + "\n"
         with _TRACE_LOCK:
             if _TRACE_FILE is None or _TRACE_FILE.closed:
                 os.makedirs(os.path.dirname(TRACE_PATH), exist_ok=True)
-                _TRACE_FILE = open(TRACE_PATH, "a", encoding="utf-8", buffering=1)
+                _TRACE_FILE = open(TRACE_PATH, "a", encoding="utf-8", buffering=8192)
             _TRACE_FILE.write(line)
-            _TRACE_FILE.flush()
+            _TRACE_PENDING += 1
+            if _TRACE_PENDING >= _TRACE_FLUSH_EVERY:
+                _TRACE_FILE.flush()
+                _TRACE_PENDING = 0
     except Exception:
-        # Never turn observability failure into an agent failure.
         try:
             _close_trace_file()
         except Exception:
@@ -118,7 +119,6 @@ def make_decision_trace(
 
     target_id = ws_before.get("target_mob_id")
     progress: Dict[str, float] = {}
-
     for key, before_key, after_key in (
         ("xp_delta", "xp", "xp"),
         ("copper_delta", "copper", "copper"),
@@ -166,15 +166,13 @@ def make_decision_trace(
 
 
 def decompose_reward(before: Dict, after: Dict, verdict: str, outcome_kind: str) -> Dict[str, float]:
-    """Compute the reward component breakdown using the canonical reward weights."""
+    """Compute reward components using the canonical reward weights."""
     if outcome_kind == "ENV_ERROR":
         return {"env_error": 0.0}
 
     from reward import WEIGHTS, _safe_get
-
     c = WEIGHTS
     components: Dict[str, float] = {}
-
     for key, before_key, after_key, weight in (
         ("xp", "xp", "xp", c["xp"]),
         ("copper", "copper", "copper", c["copper"]),
