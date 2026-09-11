@@ -1,3 +1,4 @@
+import math
 """agent.py — the closed learning loop (no orchestrator, no PPO, no Sim edits).
 
 Strict cycle, one decision per call:
@@ -89,7 +90,7 @@ def _world_state_dict(info: dict, world_mem=None) -> dict:
 
 
 class Agent:
-    def __init__(self, env, memory: ExperienceStore, seed=None,
+    def __init__(self, env=None, memory: ExperienceStore = None, seed=None,
                  world_mem: "WorldMemory" = None, fsm=None, replay=None,
                  strat_mem=None, reflection_hints: dict = None,
                  journal_dir: str = None):
@@ -102,6 +103,9 @@ class Agent:
         # closed in tests only.
         base_dir = journal_dir or os.path.dirname(os.path.abspath(__file__))
         self._journal_dir = base_dir
+        hints = dict(reflection_hints or {}) or \
+            load_reflection_hints(base_dir)
+        self.policy = GoalManager(memory or ExperienceStore(), temperature=1.2, seed=seed,
         hints = dict(reflection_hints or {}) or load_reflection_hints(base_dir)
         self.policy = GoalManager(memory, temperature=1.2, seed=seed,
                                   reflection_hints=hints)
@@ -132,14 +136,17 @@ class Agent:
         # on first accept_quest so we don't pay CDP connect cost when the agent
         # never needs quests.
         self._game_source = None
-        """Reload reflection hints from the journal into the live policy.
 
+    def refresh_hints(self) -> dict:
+        """Reload reflection hints from the journal into the live policy."""
+        from policy import load_reflection_hints
         Called by the runner every SAVE_EVERY steps so conclusions drawn at
         runtime (spin:<action>, death:<cell>) steer decisions within seconds,
         not after the next restart.
         """
         self.policy.hints = load_reflection_hints(self._journal_dir)
-        return self.policy.hints
+        hints = self.policy.hints
+        return {"ok": True, "hints_loaded": len(hints)}
 
     def _remember_visible_world(self, info: dict):
         """Persist NPC facts observed by the live browser without steering policy."""
@@ -191,20 +198,52 @@ class Agent:
                 return after, "INCONCLUSIVE", "OK"
             if action == "navigate":
                 # Navigate toward nearest mob (not just quest spawn).
-                # If mobs are nearby, walk toward nearest one — otherwise quest spawn.
+                # If mobs are nearby, walk toward nearest one — otherwise explore.
                 from mob_spawner import nearest_spawn
-                player = (self.env._last_info or {}).get("player", {})
-                px = player.get("x", 0)
-                pz = player.get("z", 0)
-                # Find nearest mob in snapshot
+                info = self.env._last_info or {}
+                # Bridge returns coords in player_pos array [x, z], NOT in player dict
+                pp = info.get("player_pos") or [0, 0]
+                px = pp[0] if len(pp) > 0 else 0
+                pz = pp[1] if len(pp) > 1 else 0
+                # Find nearest mob in snapshot — prefer quest_target mobs
                 nearest = None
                 nd = float("inf")
+                quest_mobs = []
+                # Use target from arbitration if provided (e.g. quest giver)
+                ctx_target = ctx.get("target") if ctx else None
+                if ctx_target and (ctx_target.get("x") is not None) and (ctx_target.get("z") is not None):
+                    tx = ctx_target.get("x")
+                    tz = ctx_target.get("z")
+                    dist_to_target = math.sqrt((px-tx)**2 + (pz-tz)**2)
+                    total_steps = 0
+                    max_total = 200
+                    while total_steps < max_total:
+                        arrived = self.env._navigate_to_coord(tx, tz, max_steps=40)
+                        total_steps += 40
+                        after = self.env._last_info
+                        if arrived:
+                            return after, "SUCCESS", "OK"
+                        after_pp = after.get("player_pos") or [0, 0]
+                        new_dist = math.sqrt((after_pp[0]-tx)**2 + (after_pp[1]-tz)**2) if len(after_pp)>1 else 999
+                        if new_dist >= dist_to_target - 0.5:
+                            break
+                        dist_to_target = new_dist
+                    if hasattr(self.env, "explore_walk"):
+                        self.env.explore_walk(steps=10)
+                    return after, "INCONCLUSIVE", "OK"
                 for e in (self.env._last_info or {}).get("nearby", []):
                     if e.get("kind") == "mob" or e.get("type") == "mob":
                         d = e.get("dist") or 999
+                        if e.get("quest_target"):
+                            quest_mobs.append((d, e))
                         if d < nd:
                             nd = d
                             nearest = e
+                # If active quest, prefer quest_target mobs
+                active_q = self.world_mem.get("active_quest") or self.world_mem.get("pending_quest")
+                if active_q and quest_mobs:
+                    quest_mobs.sort(key=lambda x: x[0])
+                    nearest = quest_mobs[0][1]
                 tx, tz = None, None
                 if nearest:
                     tx = nearest.get("x")
@@ -214,7 +253,54 @@ class Agent:
                     if quest_id:
                         tx, tz = nearest_spawn(quest_id, px, pz)
                 if tx is not None and hasattr(self.env, "_navigate_to_coord"):
-                    self.env._navigate_to_coord(tx, tz, max_steps=40)
+                    # Compute distance to target before navigating
+                    dist_to_target = math.sqrt((px-tx)**2 + (pz-tz)**2)
+                    # Multi-step navigation: keep walking toward target
+                    total_steps = 0
+                    max_total = 200  # ~44 seconds at 220ms/tick
+                    while total_steps < max_total:
+                        # Re-read mob coords each iteration (mobs move!)
+                        if nearest and nearest.get("id") is not None:
+                            fresh = None
+                            for e in (self.env._last_info or {}).get("nearby", []):
+                                if e.get("id") == nearest.get("id"):
+                                    fresh = e
+                                    break
+                            if fresh and fresh.get("x") is not None:
+                                tx = fresh.get("x")
+                                tz = fresh.get("z")
+                                dist_to_target = math.sqrt((px-tx)**2 + (pz-tz)**2)
+                        arrived = self.env._navigate_to_coord(tx, tz, max_steps=40)
+                        total_steps += 40
+                        after = self.env._last_info
+                        if arrived:
+                            break
+                        after_pp = after.get("player_pos") or [0, 0]
+                        new_dist = math.sqrt((after_pp[0]-tx)**2 + (after_pp[1]-tz)**2) if len(after_pp)>1 else 999
+                        # If stuck (no progress), break
+                        if new_dist >= dist_to_target - 0.5:
+                            break
+                        dist_to_target = new_dist
+                    # Attack the mob now that we're in range
+                    if nearest and nearest.get("hostile"):
+                        for _ in range(5):
+                            try:
+                                self.env.step(0, {"targetMobId": nearest.get("id")})  # ACT_FARM with target
+                            except Exception:
+                                pass
+                            after = self.env._last_info
+                            # Check if mob died
+                            if nearest and nearest.get("id") is not None:
+                                still_alive = False
+                                for e in (self.env._last_info or {}).get("nearby", []):
+                                    if e.get("id") == nearest.get("id") and not e.get("dead"):
+                                        still_alive = True
+                                        break
+                                if not still_alive:
+                                    break
+                    if hasattr(self.env, "explore_walk"):
+                        self.env.explore_walk(steps=10)
+                    return after, "INCONCLUSIVE", "OK"
                 elif hasattr(self.env, "explore_walk"):
                     self.env.explore_walk(steps=10)
                 else:
@@ -283,7 +369,11 @@ class Agent:
                     tx = player.get("x", 0) + dx * 10
                     tz = player.get("z", 0) + dz * 10
                     if hasattr(self.env, "_navigate_to_coord"):
-                        self.env._navigate_to_coord(tx, tz, max_steps=15)
+                        arrived = self.env._navigate_to_coord(tx, tz, max_steps=40)
+                        if arrived:
+                            return after, "SUCCESS", "OK"
+                        else:
+                            return after, "INCONCLUSIVE", "OK"
                     elif hasattr(self.env, "explore_walk"):
                         self.env.explore_walk(steps=10)
                 after = self.env._last_info

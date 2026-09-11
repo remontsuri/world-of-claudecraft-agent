@@ -134,6 +134,10 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
     # meaningful margin (can kill the player). This is an OBSERVATION the policy
     # uses to avoid suicidal farm choices — not a hard rule forbidding farm.
     STRONG_RATIO = 1.3
+    # Attack range: mobs beyond this distance cannot be hit by melee attacks.
+    # Official Sim uses MELEE_RANGE = 5 yards. has_mob should only be True when
+    # a mob is close enough to actually attack.
+    ATTACK_RANGE = 5.0
     strong_mob_near = False
     weak_mob_near = False
     nearest_mob_distance = None
@@ -142,10 +146,6 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
     for e in nearby:
         if (e.get("kind") == "mob" or e.get("type") == "mob") and not e.get("lootable"):
             mmax = e.get("maxHp") or 0
-            if mmax > pmax * STRONG_RATIO:
-                strong_mob_near = True
-            elif 0 < mmax <= pmax * STRONG_RATIO:
-                weak_mob_near = True
             # Track nearest live hostile mob (distance from player) for the
             # state-bucket mob_d band. Without this, _bucket() falls back to
             # 'any' and the agent can't learn to approach (RED #1, 2026-09-02).
@@ -156,6 +156,11 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
                     d = math.hypot(ex - px_ws, ez - pz_ws)
                     if nearest_mob_distance is None or d < nearest_mob_distance:
                         nearest_mob_distance = d
+                    if d <= ATTACK_RANGE:
+                        if mmax > pmax * STRONG_RATIO:
+                            strong_mob_near = True
+                        elif 0 < mmax <= pmax * STRONG_RATIO:
+                            weak_mob_near = True
     has_mob = strong_mob_near or weak_mob_near
     has_corpse = any(
         ((e.get("type") == "corpse" or e.get("kind") == "corpse")
