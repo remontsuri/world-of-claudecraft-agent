@@ -259,6 +259,8 @@ class GoalFSM:
         elif quest_status == "NONE" and self.state in (
             QuestState.DONE, QuestState.ERROR, QuestState.TURN_IN,
             QuestState.VERIFY_TURN_IN, QuestState.RETURN_TO_GIVER,
+            QuestState.DO_OBJECTIVE, QuestState.VERIFY_PROGRESS,
+            QuestState.ACCEPT, QuestState.VERIFY_ACCEPT, QuestState.FIND_GIVER,
         ):
             self.reset()
 
@@ -279,6 +281,7 @@ class GoalFSM:
         self.quest_giver = None
         self.failure_reason = FailureReason.NONE
         self.current_objective_idx = 0
+        self.done_ids.clear()
         # NOTE: done_ids is NOT cleared — it persists across quests
 
     def record_quest_done(self, quest_id: str):

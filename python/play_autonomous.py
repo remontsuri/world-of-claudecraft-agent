@@ -174,13 +174,8 @@ def main():
     from replay_buffer import ReplayBuffer
     from strategy_memory import StrategyMemory
 
-    # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
-    # Fail-closed (P0.4): при WOC_AUTONOMY!=0 провал контракта ОСТАНАВЛИВАЕТ
-    # процесс. Раньше здесь стоял `autonomy = None` — агент продолжал работу
-    # БЕЗ автономного контура, лог говорил "agent running", а замер измерял
-    # совсем не то, что собирались измерять. Единственный законный путь к
-    # legacy-режиму — явный WOC_AUTONOMY=0.
-    autonomy = None
+    mem = ExperienceStore(path=EXP_PATH)
+    strat_mem = StrategyMemory()
     _autonomy_requested = os.environ.get("WOC_AUTONOMY", "1") != "0"
     if _autonomy_requested:
         try:
@@ -252,6 +247,7 @@ def main():
         # resume: keep learned memory across runs
         print(f"[autonomous] resuming from {EXP_PATH}")
     mem = ExperienceStore(path=EXP_PATH)
+    strat_mem = StrategyMemory()
     try:
         env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED)
         env.reset(seed=SEED)
@@ -787,7 +783,10 @@ def main():
         qp = rec.get("qprog")
         qps = f" qprog={qp}" if qp is not None else ""
         v = rec.get("verdict")
-        print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={ws.get('distance_to_giver')} hp={ws.get('hp_frac'):.2f} kills={m['kills']}", flush=True)
+        try:
+            print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={ws.get('distance_to_giver')} hp={ws.get('hp_frac'):.2f} kills={m['kills']}", flush=True)
+        except (OSError, UnicodeEncodeError):
+            pass
         # quests
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []

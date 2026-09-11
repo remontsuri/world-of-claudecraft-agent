@@ -46,14 +46,27 @@ def _turn_ctx(info: dict, action: str) -> dict:
     return ctx
 
 
-def _corpses_nearby(info: dict) -> list:
-    """Return list of lootable corpses in nearby."""
+def _corpses_nearby(info: dict, radius: float = 12.0) -> list:
+    """Return list of lootable corpses in nearby within loot radius."""
     near = info.get("nearby") or []
-    return [e for e in near
-            if (e.get("type") == "corpse" or e.get("kind") == "corpse"
+    ppos = info.get("player_pos") or [0, 0]
+    corpses = []
+    for e in near:
+        if not (e.get("type") == "corpse" or e.get("kind") == "corpse"
                 or ((e.get("kind") == "mob" or e.get("type") == "mob")
-                    and (e.get("dead") or e.get("lootable"))))
-            and not e.get("looted")]
+                    and (e.get("dead") or e.get("lootable")))):
+            continue
+        if e.get("looted"):
+            continue
+        # Filter by distance - only return corpses within loot range
+        ex = e.get("x")
+        ez = e.get("z")
+        if ex is not None and ez is not None:
+            d = ((ex - ppos[0]) ** 2 + (ez - ppos[1]) ** 2) ** 0.5
+            if d > radius:
+                continue
+        corpses.append(e)
+    return corpses
 
 
 def _vendor_nearby(info: dict, radius: float = 18.0) -> bool:
@@ -301,8 +314,29 @@ class ArbitrationLayer:
         if not cands:
             return "explore", {}, "fallback"
 
-        # 6. POLICY SOFTMAX
-        action, ctx = policy.decide(info, ws, phase=phase, advisor=advisor, allowed=cands)
+        # 6. POLICY SOFTMAX — policy.decide now returns (q_values, cands, metadata)
+        q_values, _cands, metadata = policy.decide(info, ws, phase=phase, advisor=advisor, allowed=cands)
+        if metadata.get("deterministic_action"):
+            action, ctx, reason = metadata["deterministic_action"]
+            return action, ctx, reason
+        # Select action by argmax of Q-values (mirrors old policy.decide softmax)
+        action = max(q_values, key=q_values.get) if q_values else "explore"
+        # Build ctx for the selected action
+        ctx = {}
+        if action == "accept_quest":
+            done_ids = {str(q.get("id")) for q in (info.get("quests", {}).get("done") or []) if q.get("id")}
+            for e in (info.get("nearby") or []):
+                if not (isinstance(e, dict) and (e.get("kind") == "npc" or e.get("type") == "npc")):
+                    continue
+                qids = e.get("questIds") or ([e.get("questId")] if e.get("questId") else [])
+                available = [qid for qid in qids if qid and str(qid) not in done_ids]
+                if available:
+                    ctx["npc"] = e
+                    ctx["npcId"] = e.get("id")
+                    ctx["questId"] = available[0]
+                    break
+        elif action in ("turn_in_quest", "return_to_giver"):
+            ctx = _turn_ctx(info, action)
         return action, ctx, "policy"
 
     @staticmethod
@@ -325,15 +359,26 @@ class ArbitrationLayer:
 
         Returns (action, ctx) if a giver is nearby, else None.
         """
+        # CRITICAL: If we already have an active quest, DO NOT force accept_quest.
+        # This prevents the accept_quest → accept_quest → accept_quest loop.
+        # Check both info["quests"]["active"] and ws["quest_status"] for robustness.
+        quests = info.get("quests") or {}
+        active_quests = quests.get("active") or []
+        _ws_qs = ws.get("quest_status")
+        if active_quests:
+            return None
+        # Additional gate: if world state says quest is active, do not accept more
+        if _ws_qs in ("ACTIVE", "READY_TO_TURN_IN"):
+            return None
+
         from quest_truth import accept_blocked_by_identity
 
         near = info.get("nearby") or []
-        quests = info.get("quests") or {}
         quest_states = info.get("quest_states") or {}
 
         # Collect IDs of quests we already have (active, ready, or done)
         have_ids = set()
-        for q in (quests.get("active") or []):
+        for q in active_quests:
             if q.get("id"):
                 have_ids.add(str(q["id"]))
         for q in (quests.get("ready") or []):
@@ -343,7 +388,7 @@ class ArbitrationLayer:
             if q.get("id"):
                 have_ids.add(str(q["id"]))
 
-        active_ids = [q.get("id") for q in (quests.get("active") or []) if q.get("id")]
+        active_ids = [q.get("id") for q in active_quests if q.get("id")]
 
         # Find quest givers with available quests
         givers = []

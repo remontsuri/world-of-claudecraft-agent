@@ -24,7 +24,7 @@ import math
 import os
 import random
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from memory import ExperienceStore, _bucket
 from world_state import build_world_state
@@ -37,6 +37,17 @@ SKILL_ACCEPT = "accept_quest"
 SKILL_TURN_IN = "turn_in_quest"
 SKILL_RETURN = "return_to_giver"
 SKILL_HEAL = "heal"
+SKILL_NAVIGATE = "navigate"
+SKILL_EXPLORE = "explore"
+SKILL_SELL = "sell_junk"
+SKILL_GATHER = "gather"
+SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
+SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
+SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
+SKILL_FLEE = "flee"        # run away from current target (survival)
+SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
+SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
+SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Чем в этой игре реально лечатся: зелья и еда. game_meat/rough_hide — сырьё
 # профессий (src/sim/content/profession_items.ts), heal на них — no-op.
@@ -45,14 +56,7 @@ _HAS_HEAL_PAT = re.compile(r"potion|draught|tonic|elixir|heal|bread|water|jerky"
 
 
 def _has_healing(info: dict, ws: dict) -> bool:
-    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет.
-
-    P0.10: читаем ОБА имени. world_state кладёт словарь как `inv_by_id`,
-    мост — как `inventory_by_id` в info. Раньше читалось только второе, и
-    heal работал лишь потому, что поле приходило из моста: любой вызов с
-    canonical ws без мостового поля терял heal полностью (та же поломка,
-    что junk в P0.1 — разъехавшееся имя превращает предикат в вечный False).
-    """
+    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет."""
     items = None
     for src in (info, ws):
         if not isinstance(src, dict):
@@ -67,15 +71,6 @@ def _has_healing(info: dict, ws: dict) -> bool:
     if not isinstance(items, dict) or not items:
         return False
     return any(_HAS_HEAL_PAT.search(str(k)) for k, v in items.items() if (v or 0) > 0)
-SKILL_SELL = "sell_junk"
-SKILL_GATHER = "gather"
-SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
-SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
-SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
-SKILL_FLEE = "flee"        # run away from current target (survival)
-SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
-SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
-SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
 # (мёртвый словарь REWARD удалён 2026-08-24: reward.py имеет свой WEIGHTS,
@@ -89,12 +84,15 @@ SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have
 # DO_OBJECTIVE/RETURN_TO_GIVER/TURN_IN/SELL_REPAIR/HEAL) — they live in
 # goal_fsm.py and are not imported here to avoid a circular dependency.
 PHASE_ALLOWED = {
+    "QUEST_NONE":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "NO_QUEST":        [SKILL_ACCEPT, SKILL_EXPLORE],
+    "NONE":            [SKILL_ACCEPT, SKILL_EXPLORE],
+    None:              [SKILL_ACCEPT, SKILL_EXPLORE],
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
-    "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
+    "DO_OBJECTIVE":    [SKILL_LOOT, SKILL_GATHER,
                         SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT,
-                        SKILL_SELL, SKILL_FLEE],
+                        SKILL_SELL, SKILL_FLEE, SKILL_NAVIGATE, SKILL_EXPLORE],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN, SKILL_FLEE],
     "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL, SKILL_FLEE],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
@@ -335,7 +333,11 @@ class GoalManager:
                     break
             _pmax = float((info.get("player") or {}).get("maxHp") or 0) or 1.0
             if _tgt_max <= _pmax * 3.0:
-                cands.append(SKILL_FARM)
+                # Only offer farm if the target is within attack range
+                # Use nearest_mob_distance from world state (reliable computed distance)
+                _nearest = ws.get("nearest_mob_distance")
+                if _nearest is not None and _nearest <= 10.0:
+                    cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
         # ИСПРАВЛЕНО 2026-08-24 (жалоба пользователя «квесты не берёт»):
@@ -378,7 +380,14 @@ class GoalManager:
             if has_new_quest_nearby:
                 break
         if has_new_quest_nearby:
-            cands.append(SKILL_ACCEPT)
+            # CRITICAL: If we already have an active quest, DO NOT offer accept_quest.
+            # This prevents the accept_quest → accept_quest → accept_quest loop.
+            _have_active = bool(info.get("quests", {}).get("active"))
+            if not _have_active:
+                cands.append(SKILL_ACCEPT)
+            # If we have an active quest, ensure accept_quest is NOT in candidates
+            elif SKILL_ACCEPT in cands:
+                cands.remove(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
         # a single "do quest" button. turn_in only when ready (objectives done);
         # return_to_giver is always an option while a quest is active or ready
@@ -497,13 +506,21 @@ class GoalManager:
         if any((i.get("def") or i.get("itemDef") or {}).get("equipSlot") for i in inv if i):
             cands.append(SKILL_EQUIP)
         # buy: a vendor NPC in range (bridge buyItem targets the nearest vendor).
-        # Only a candidate when a vendor is actually nearby.
+        # Only a candidate when a vendor is actually within INTERACT_RANGE (5 yards).
+        # Official Sim uses INTERACT_RANGE = 5 for all interactions.
         ppos = info.get("player_pos") or [0, 0]
+        VENDOR_INTERACT_RANGE = 5.0  # matches official Sim INTERACT_RANGE
         if any((e.get("kind") == "npc" or e.get("type") == "npc")
                and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
-               and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+               and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= VENDOR_INTERACT_RANGE
                for e in near):
             cands.append(SKILL_BUY)
+        # If vendor is visible but not in interact range, offer navigate to approach
+        elif any((e.get("kind") == "npc" or e.get("type") == "npc")
+                 and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+                 for e in near):
+            if "navigate" not in cands:
+                cands.append("navigate")
         # explore: plain forward walk. Genuine capability the policy may learn,
         # but NOT always-available: when a quest is active/ready the agent must
         # progress it (return_to_giver / turn_in / farm), not drift to fences.
@@ -532,7 +549,7 @@ class GoalManager:
             if gated:
                 cands = gated
             # else: no candidate matched the phase (e.g. giver not yet in range
-            # for accept) -> fall back to the full list so the agent can act.
+                # for accept) -> fall back to the full list so the agent can act.
         if (ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands
                 and _has_healing(info, ws)):
             cands.append(SKILL_HEAL)
@@ -690,64 +707,54 @@ class GoalManager:
                 out[action] = v * mult if v > 0 else v / mult
         return out
 
-    # ---- main decision ----
+    # ---- main decision (Phase 5: data-only, no early returns) ----
     def decide(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
                 phase: Optional[str] = None,
                 context: "DecisionContext" = None,
                 advisor: Optional[dict] = None,
-                allowed: Optional[List[str]] = None) -> Tuple[str, dict]:
-        """Choose one skill. `ws` may be passed in by the caller so the decision
-        and the later learn() call are guaranteed to use the SAME WorldState
-        instance (and therefore the same bucket key). `exploration_weight` scales
-        the count-based bonus; pass 0.0 at MEASUREMENT time so P reflects Q only
-        (removes the exploration/visit-count confound).
+                allowed: Optional[List[str]] = None) -> Tuple[Dict[str, float], List[str], Dict[str, Any]]:
+        """Compute Q-values for candidates. NO early returns.
 
-        `context` is the explicit decision context from AutonomyLoop.
-        When provided, it replaces the old policy.hints["masked_candidates"]
-        hidden channel — Policy reads allowed_skills from context, not mutable
-        state.
+        Phase 5 contract: returns data only. ArbitrationLayer decides.
+
+        Returns:
+            q_values: {action: weight} for all candidates
+            candidates: list of valid action names
+            metadata: {suppressed, preferred, forced_skill, ...} for arbitration
         """
         if ws is None:
             ws = self._world_state(info)
-        # 2026-09-03 FIX: goal_phase нужна для детерминированных проверок ниже
-        goal_phase = phase  # passed directly from arbitration layer
-        # Определяем класс игрока (warrior/mage/hunter)
+        goal_phase = phase
         player_class = (info.get("player_class")
                         or (ws or {}).get("player_class")
-                        or "warrior")  # fallback = warrior (our class)
+                        or "warrior")
         class_cfg = get_class_config(player_class)
         playstyle = get_playstyle(player_class)
         cands = self._candidates(info, ws, phase=phase,
                                   class_cfg=class_cfg, playstyle=playstyle)
-        # Phase 5: ArbitrationLayer can restrict candidates
         if allowed is not None:
             cands = [c for c in cands if c in allowed] or list(allowed)
-        # /GOAL п.10 fix 2026-09-03: when DO_OBJECTIVE has NO mob in nearby
-        # (all mobs 50+yd), cands is empty -> silent explore fallback.
-        # Add 'navigate' so policy picks it (the autonomy loop then runs
-        # navigate_to_coord toward a known mob-spawn area or quest target).
         if goal_phase == "DO_OBJECTIVE" and ws.get("quest", {}).get("id"):
-            # Navigation is a genuine candidate in objective states, so Q-learning
-            # can compare approach against combat instead of silently falling back.
             if "navigate" not in cands:
                 cands.append("navigate")
-        # Explicit decision context replaces the old hidden hints channel.
-        # AutonomyLoop builds ONE DecisionContext per step; Policy reads it.
+        # If no mob in attack range but there's a mob nearby, offer navigate
+        # to approach it. Prevents farm/heal looping at long range.
+        # PLAYER_INTEREST_RADIUS in official Sim is 90 yards.
+        if not ws.get("has_mob") and "navigate" not in cands:
+            _nearest = ws.get("nearest_mob_distance")
+            if _nearest is not None and _nearest <= 100.0:
+                cands.append("navigate")
         if context is not None:
             _masked = list(context.allowed_skills)
             filtered = [c for c in cands if c in _masked]
             if filtered:
                 cands = filtered
             elif _masked:
-                # Никогда не fallback'ить только на explore. /GOAL п.10:
-                # если все skills замаскированы — caller решает через phase.
-                # DO_OBJECTIVE -> navigate; NO_QUEST/FIND_GIVER -> explore.
                 if goal_phase == "DO_OBJECTIVE" and "navigate" in _masked:
                     cands = ["navigate"]
                 else:
                     cands = [_masked[0]]
         elif hasattr(self, "hints") and self.hints.get("masked_candidates"):
-            # Legacy fallback: still support hints for backward compatibility
             _masked = self.hints.get("masked_candidates")
             filtered = [c for c in cands if c in _masked]
             if filtered:
@@ -755,73 +762,127 @@ class GoalManager:
             elif "explore" in _masked:
                 cands = ["explore"]
 
-        # STREAM J Phase 4: Arbitration layer handles all overrides
-        # (plan_stack, tool_priority, bag_survival, loot_priority, phase gates)
-        from arbitration import arbitrate
-        _tool_need = ws.get("needs_tool")
-        _buy_state = getattr(self, "_buy_state", None)
-        _step_idx = getattr(self, "step_idx", 0) or 0
-        _world_mem = getattr(self, "world_mem", None)
-        arb_result = arbitrate(
-            info, ws, goal_phase, cands,
-            tool_need=_tool_need,
-            buy_state=_buy_state,
-            step_idx=_step_idx,
-            world_mem=_world_mem,
-        )
-        if arb_result is not None:
-            _action, _ctx = arb_result
-            self._log_decision(ws, info, goal_phase, "arbitration_override",
-                               _action, {}, "arbitration",
-                               {"phase": goal_phase})
-            return _action, _ctx
+        # Build metadata for arbitration layer
+        metadata = {
+            "goal_phase": goal_phase,
+            "suppressed": set(),
+            "preferred": set(),
+            "forced_skill": None,
+            "deterministic_action": None,
+        }
 
+        # Check for deterministic actions (passed to arbitration, not returned directly)
+        # Plan-stack: READY quest at giver (dist<=6) -> turn_in immediately
+        if (ws.get("quest_status") == "READY_TO_TURN_IN"
+                and ws.get("quest", {}).get("giver_distance", 999) <= 6):
+            qid = ws.get("quest", {}).get("id")
+            ctx = {}
+            if qid:
+                ctx["questId"] = qid
+                ctx["quest"] = {"id": qid}
+            metadata["deterministic_action"] = (SKILL_TURN_IN, ctx, "plan_stack_turn_in")
+
+        # Tool priority: gather quest needs tool -> buy (with cooldown)
+        if metadata["deterministic_action"] is None:
+            _tool_need = ws.get("needs_tool")
+            if _tool_need:
+                has_tool = any(
+                    s.get("itemId") == _tool_need
+                    for s in (info.get("inventory") or [])
+                )
+                _buy_state = getattr(self, "_buy_state", None)
+                _step_idx = getattr(self, "step_idx", 0) or 0
+                if not has_tool and _buy_state is not None:
+                    if _step_idx >= _buy_state.get("cooldown_until_step", -1):
+                        ctx = {"buyItemId": _tool_need}
+                        _world_mem = getattr(self, "world_mem", None)
+                        if _world_mem is not None:
+                            vendor = _world_mem.vendor_pos("trader_wilkes")
+                            if vendor:
+                                ctx["vendorPos"] = vendor
+                        metadata["deterministic_action"] = ("buy", ctx, "tool_priority")
+
+        # Bag survival: bags almost full -> sell_junk (if vendor near)
+        if metadata["deterministic_action"] is None:
+            from arbitration import _vendor_nearby, _corpses_nearby, _giver_distance, _turn_ctx
+            inv = info.get("inventory") or []
+            bag_slots = len([s for s in inv if s])
+            bag_capacity = ws.get("bag_capacity", 16)
+            if bag_slots >= bag_capacity - 3:
+                if _vendor_nearby(info):
+                    keep = set(ws.get("quest_items_needed", set()))
+                    keep |= set(ws.get("craft_items_needed", set()))
+                    keep |= {"baked_bread", "spring_water", "conjured_bread", "conjured_water", "copper_mining_pick"}
+                    counts = {}
+                    for s in inv:
+                        if not s:
+                            continue
+                        iid = s.get("itemId") or (s.get("def") or {}).get("id")
+                        if not iid:
+                            continue
+                        counts[iid] = counts.get(iid, 0) + (s.get("count") or 1)
+                    for iid, cnt in counts.items():
+                        if iid in keep:
+                            continue
+                        if cnt - 3 >= 3:
+                            metadata["deterministic_action"] = (SKILL_SELL, {"keepIds": list(keep)}, "bag_survival")
+                            break
+
+        # Loot priority: corpses nearby -> loot
+        if metadata["deterministic_action"] is None:
+            from arbitration import _corpses_nearby
+            corpses = _corpses_nearby(info)
+            if corpses and SKILL_LOOT in cands:
+                metadata["deterministic_action"] = (SKILL_LOOT, {}, "loot_priority")
+
+        # Phase return: RETURN_TO_GIVER -> return_to_giver
+        if metadata["deterministic_action"] is None and goal_phase == "RETURN_TO_GIVER":
+            from arbitration import _turn_ctx
+            if ws.get("hp_frac", 1.0) >= 0.35 and SKILL_RETURN in cands:
+                metadata["deterministic_action"] = (SKILL_RETURN, _turn_ctx(info, SKILL_RETURN), "phase_return")
+
+        # Turn-in phase: TURN_IN -> turn_in or return
+        if metadata["deterministic_action"] is None and goal_phase == "TURN_IN":
+            from arbitration import _giver_distance, _turn_ctx
+            d = _giver_distance(ws)
+            if d is not None:
+                if d > QUEST_INTERACT_RANGE and SKILL_RETURN in cands:
+                    metadata["deterministic_action"] = (SKILL_RETURN, _turn_ctx(info, SKILL_RETURN), "turn_in_phase_return")
+                elif SKILL_TURN_IN in cands:
+                    metadata["deterministic_action"] = (SKILL_TURN_IN, _turn_ctx(info, SKILL_TURN_IN), "turn_in_phase_turn_in")
+
+        # Compute Q-values (always, even if deterministic_action is set)
         if not cands:
-            self._log_decision(ws, info, goal_phase, "fallback_no_cands", "farm", {}, "policy", {})
-            return SKILL_FARM, {}
+            # No candidates — return empty, arbitration handles fallback
+            return {}, [], metadata
+
         vals = self.mem.candidate_values(ws, cands)
-        # Доказанная стратегия (StrategyMemory) как мягкий prior над Q.
         vals = self._strategy_weighted(vals, info, ws)
-        # Предпочтения из выводов рефлексии (полные сумки -> продать,
-        # квест сдан -> взять следующий). Мягкий prior, не override.
         for _pref in self._preferred_from_hints():
             if _pref in vals:
                 vals[_pref] = vals[_pref] * 1.6 if vals[_pref] > 0 else vals[_pref] + 0.4
-        # Подавление залипших скиллов (spin:/death: хинты) — ЗДЕСЬ, в весах.
-        # Скилл остаётся кандидатом, но его вес множится на SPIN_WEIGHT_MULT.
         for bad in getattr(self, "_suppressed", ()) or ():
             if bad in vals:
                 v = vals[bad]
                 vals[bad] = v * SPIN_WEIGHT_MULT if v > 0 else v - 0.2
-        # J5: identity-aware episodic suppression — if the current target has
-        # a negative episodic record for farm (dead/gone/unkillable), suppress
-        # farm so the agent picks an alternative instead of re-engaging a
-        # meaningless target. This is the "don't farm mob#152 again" lesson.
+                metadata["suppressed"].add(bad)
         _cur_target = ws.get("target_mob_id") if isinstance(ws, dict) else None
         if _cur_target and SKILL_FARM in vals:
             _neg = self.mem.negative_targets("farm")
             if _cur_target in _neg:
                 v = vals[SKILL_FARM]
                 vals[SKILL_FARM] = v * SPIN_WEIGHT_MULT if v > 0 else v - 0.2
-                self._log_decision(ws, info, goal_phase, "episodic_target_suppress",
-                                   SKILL_FARM, vals, "episodic_memory",
-                                   {"target": _cur_target, "negative_targets": list(_neg)})
-        # STREAM J Phase 3: advisor context shapes candidate weights (soft, not force)
+                metadata["suppressed"].add(SKILL_FARM)
         if advisor:
             _adv_subgoal = advisor.get("subgoal")
             _adv_target = advisor.get("target_mob_id")
             if _adv_subgoal == "KILL" and SKILL_FARM in vals:
-                # Planner wants to kill a mob — slightly boost farm weight
                 v = vals[SKILL_FARM]
                 vals[SKILL_FARM] = v * 1.2 if v > 0 else v + 0.2
-                self._log_decision(ws, info, goal_phase, "advisor_kill_boost",
-                                   SKILL_FARM, vals, "advisor",
-                                   {"target_mob_id": _adv_target})
             elif _adv_subgoal == "GATHER" and SKILL_GATHER in vals:
                 v = vals[SKILL_GATHER]
                 vals[SKILL_GATHER] = v * 1.2 if v > 0 else v + 0.2
             elif _adv_subgoal == "FIND_MOB" and SKILL_EXPLORE in vals:
-                # Planner says FIND_MOB: soft-boost explore to find mobs
                 v = vals[SKILL_EXPLORE]
                 vals[SKILL_EXPLORE] = v * 1.15 if v > 0 else v + 0.15
             elif _adv_subgoal == "TURN_IN" and SKILL_TURN_IN in vals:
@@ -830,17 +891,39 @@ class GoalManager:
             elif _adv_subgoal == "RETURN_TO_GIVER" and SKILL_RETURN in vals:
                 v = vals[SKILL_RETURN]
                 vals[SKILL_RETURN] = v * 1.3 if v > 0 else v + 0.3
-        # ensure every candidate has an entry (unseen -> 0)
-        bucket = _bucket(ws)   # SAME key ExperienceStore uses, so the count-based
-                               # exploration bonus actually differentiates candidates
-        action = _softmax_sample(vals, self.temperature, counts=self.mem.counts,
-                                 bucket=bucket, exploration_weight=exploration_weight)
-        # TELEMETRY: store final vals/cands for DecisionTrace (read by agent._cycle)
+
+        # Store for telemetry
         self._trace_vals = dict(vals)
         self._trace_cands = list(cands)
-        # TELEMETRY: log policy decision (the actual Q-values + who decided)
-        self._log_decision(ws, info, goal_phase, "softmax_sample", action, vals, "policy", {"bucket": bucket})
-        # ctx: pass the active quest if relevant
+
+        return vals, list(cands), metadata
+
+    def _decide_legacy(self, info: dict, ws: dict = None, exploration_weight: float = 1.0,
+                phase: Optional[str] = None,
+                context: "DecisionContext" = None,
+                advisor: Optional[dict] = None,
+                allowed: Optional[List[str]] = None) -> Tuple[str, dict]:
+        """Legacy decide() — returns (action, ctx). Kept for backward compatibility with tests."""
+        vals, cands, metadata = self.decide(info, ws, exploration_weight, phase, context, advisor, allowed)
+
+        # If deterministic action is set, return it directly
+        if metadata.get("deterministic_action"):
+            return metadata["deterministic_action"][:2]
+
+        if not cands:
+            return SKILL_FARM, {}
+
+        # Sample from Q-values
+        bucket = _bucket(ws) if ws is not None else None
+        action = _softmax_sample(vals, self.temperature, counts=self.mem.counts,
+                                 bucket=bucket, exploration_weight=exploration_weight)
+
+        # Build ctx
+        ctx = self._build_action_ctx(action, info, ws)
+        return action, ctx
+
+    def _build_action_ctx(self, action: str, info: dict, ws: dict) -> dict:
+        """Build context dict for the chosen action."""
         ctx = {}
         if action == SKILL_CRAFT:
             craftable = ws.get("craftable_now") or []
@@ -849,25 +932,18 @@ class GoalManager:
         if action == SKILL_GATHER and getattr(self, "_gather_node_type", None):
             ctx["nodeType"] = self._gather_node_type
         if action == SKILL_SELL:
-            # Умная продажа: не продавать нужное для квестов и крафта
             keep = set(ws.get("quest_items_needed", set()))
             keep |= set(ws.get("craft_items_needed", set()))
             ctx["keepIds"] = list(keep)
         if action == SKILL_BUY:
-            # Покупка инструмента для gather-квеста (2026-08-25)
             need = ws.get("needs_tool")
             if need:
                 ctx["buyItemId"] = need
-                # Вендор из WorldMemory (Trader Wilkes и др.)
                 vendor = self.world_mem.vendor_pos("trader_wilkes") if getattr(self, "world_mem", None) else None
                 if vendor:
                     ctx["vendorPos"] = vendor
         if action == SKILL_FARM:
-            # Таргетинг (2026-08-25): первая неполная kill-цель активного квеста.
-            # Bridge фильтрует мобов по templateId — агент бьёт квестовых, а не
-            # ближайших чужих. Нет kill-цели -> ctx пуст -> fallback на nearest.
             for qq in ((info.get("quests") or {}).get("active") or []):
-                _done_q = True
                 _mob = None
                 for o in (qq.get("objectives") or []):
                     if o.get("type") == "kill" and o.get("targetMobId"):
@@ -875,7 +951,6 @@ class GoalManager:
                         req = o.get("required") or 0
                         if cur < req:
                             _mob = o["targetMobId"]
-                            _done_q = False
                             break
                 if _mob:
                     ctx["targetMobId"] = _mob
@@ -884,15 +959,9 @@ class GoalManager:
             quests = info.get("quests", {}) or {}
             active = quests.get("active") or []
             ready = quests.get("ready") or []
-            # turn_in needs a READY (objectives done) quest, not just any active
             if action == SKILL_TURN_IN and ready:
                 ctx["quest"] = ready[0]
             else:
-                # Prefer a quest that HAS a turnInNpc — return_to_giver navigates
-                # to it. A quest without turnInNpc cannot be returned to, so skip
-                # it when another quest with turnInNpc is available (mirrors
-                # QuestCapability.find_active_quest). This fixes return_to_giver
-                # FAILURE when quests.active[0] lacks turnInNpc.
                 preferred = None
                 for q in active:
                     if q.get("state") not in ("active", "ready", "complete"):
@@ -914,16 +983,11 @@ class GoalManager:
                         ctx["npcId"] = e.get("id")
                         qids = e.get("questIds") or e.get("questId") or []
                         qids_list = qids if isinstance(qids, (list, tuple)) else [qids]
-                        # Prefer an AVAILABLE quest for this NPC — avoids picking
-                        # a questId that isn't actually offered (turnInNpc=None
-                        # -> resolve_giver_pos fails -> dist=999 loop).
                         avail = (quests.get("available") or [])
                         chosen = None
                         for qid in qids_list:
                             if any((aq.get("id") == qid or aq.get("questId") == qid) for aq in avail):
                                 chosen = qid
-                                # also pass the full quest object so
-                                # resolve_giver_pos can use turnInNpc coords
                                 for aq in avail:
                                     if (aq.get("id") == qid or aq.get("questId") == qid):
                                         ctx["quest"] = aq
@@ -935,12 +999,10 @@ class GoalManager:
                             ctx["questId"] = chosen
                         break
             elif action == SKILL_TURN_IN:
-                # surface the ready quest's id so browser_env sends it
                 rq = ctx.get("quest") or {}
                 rid = rq.get("id") or rq.get("questId")
                 if rid:
                     ctx["questId"] = rid
-                # giver npc id from the ready quest's turnInNpc
                 tNpcPlace = rq.get("turnInNpc") or {}
                 if tNpcPlace.get("id") is not None:
                     ctx["npcId"] = str(tNpcPlace["id"])
@@ -954,7 +1016,7 @@ class GoalManager:
                         if rid:
                             ctx["questId"] = rid
                         break
-        return action, ctx
+        return ctx
 
     def learn(self, ws: dict, action: str, reward: float, next_state: dict = None, outcome_kind: str = "OK", candidates: Optional[List[str]] = None):
         """Feed an outcome back into memory. ws is the SAME world-state the
