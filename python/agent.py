@@ -87,7 +87,7 @@ def _world_state_dict(info: dict, world_mem=None) -> dict:
 
 
 class Agent:
-    def __init__(self, env, memory: ExperienceStore, seed=None,
+    def __init__(self, env=None, memory: ExperienceStore = None, seed=None,
                  world_mem: "WorldMemory" = None, fsm=None, replay=None,
                  strat_mem=None, reflection_hints: dict = None,
                  journal_dir: str = None):
@@ -103,7 +103,7 @@ class Agent:
         self._journal_dir = base_dir
         hints = dict(reflection_hints or {}) or \
             load_reflection_hints(base_dir)
-        self.policy = GoalManager(memory, temperature=1.2, seed=seed,
+        self.policy = GoalManager(memory or ExperienceStore(), temperature=1.2, seed=seed,
                                   reflection_hints=hints)
         # P0 №5 / P1 №11 fix: политика получает WorldMemory (vendor positions)
         # и счётчик шагов для stateful buy (cooldown после неудач).
@@ -132,15 +132,13 @@ class Agent:
         # on first accept_quest so we don't pay CDP connect cost when the agent
         # never needs quests.
         self._game_source = None
-        """Reload reflection hints from the journal into the live policy.
 
-        Called by the runner every SAVE_EVERY steps so conclusions drawn at
-        runtime (spin:<action>, death:<cell>) steer decisions within seconds,
-        not after the next restart.
-        """
+    def refresh_hints(self) -> dict:
+        """Reload reflection hints from the journal into the live policy."""
         from policy import load_reflection_hints
         self.policy.hints = load_reflection_hints(self._journal_dir)
-        return self.policy.hints
+        hints = self.policy.hints
+        return {"ok": True, "hints_loaded": len(hints)}
 
     def _remember_visible_world(self, info: dict):
         """Persist NPC facts observed by the live browser without steering policy."""

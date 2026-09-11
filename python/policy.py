@@ -37,6 +37,17 @@ SKILL_ACCEPT = "accept_quest"
 SKILL_TURN_IN = "turn_in_quest"
 SKILL_RETURN = "return_to_giver"
 SKILL_HEAL = "heal"
+SKILL_NAVIGATE = "navigate"
+SKILL_EXPLORE = "explore"
+SKILL_SELL = "sell_junk"
+SKILL_GATHER = "gather"
+SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
+SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
+SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
+SKILL_FLEE = "flee"        # run away from current target (survival)
+SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
+SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
+SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Чем в этой игре реально лечатся: зелья и еда. game_meat/rough_hide — сырьё
 # профессий (src/sim/content/profession_items.ts), heal на них — no-op.
@@ -45,14 +56,7 @@ _HAS_HEAL_PAT = re.compile(r"potion|draught|tonic|elixir|heal|bread|water|jerky"
 
 
 def _has_healing(info: dict, ws: dict) -> bool:
-    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет.
-
-    P0.10: читаем ОБА имени. world_state кладёт словарь как `inv_by_id`,
-    мост — как `inventory_by_id` в info. Раньше читалось только второе, и
-    heal работал лишь потому, что поле приходило из моста: любой вызов с
-    canonical ws без мостового поля терял heal полностью (та же поломка,
-    что junk в P0.1 — разъехавшееся имя превращает предикат в вечный False).
-    """
+    """Есть ли в сумках то, чем heal сработает. Нет данных -> считаем что нет."""
     items = None
     for src in (info, ws):
         if not isinstance(src, dict):
@@ -67,15 +71,6 @@ def _has_healing(info: dict, ws: dict) -> bool:
     if not isinstance(items, dict) or not items:
         return False
     return any(_HAS_HEAL_PAT.search(str(k)) for k, v in items.items() if (v or 0) > 0)
-SKILL_SELL = "sell_junk"
-SKILL_GATHER = "gather"
-SKILL_EQUIP = "equip"      # equip tool from bag -> bridge equipItem
-SKILL_BUY = "buy"          # vendor NPC in range -> bridge buyItem
-SKILL_EXPLORE = "explore"  # plain forward walk — lets the agent traverse the world
-SKILL_FLEE = "flee"        # run away from current target (survival)
-SKILL_CAST_FROSTBOLT = "cast_frostbolt"  # mage: ranged dmg + 40% slow (kite enabler)
-SKILL_CAST_FIREBALL = "cast_fireball"    # mage: ranged dmg + DoT (main nuke)
-SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have (ctx.recipeId)
 
 # Outcome rewards (the agent learns these signs; no hard-coded rules)
 # (мёртвый словарь REWARD удалён 2026-08-24: reward.py имеет свой WEIGHTS,
@@ -89,12 +84,15 @@ SKILL_CRAFT = "craft_item"               # craft a recipe whose reagents we have
 # DO_OBJECTIVE/RETURN_TO_GIVER/TURN_IN/SELL_REPAIR/HEAL) — they live in
 # goal_fsm.py and are not imported here to avoid a circular dependency.
 PHASE_ALLOWED = {
+    "QUEST_NONE":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "NO_QUEST":        [SKILL_ACCEPT, SKILL_EXPLORE],
+    "NONE":            [SKILL_ACCEPT, SKILL_EXPLORE],
+    None:              [SKILL_ACCEPT, SKILL_EXPLORE],
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
-    "DO_OBJECTIVE":    [SKILL_FARM, SKILL_LOOT, SKILL_GATHER,
+    "DO_OBJECTIVE":    [SKILL_LOOT, SKILL_GATHER,
                         SKILL_CAST_FROSTBOLT, SKILL_CAST_FIREBALL, SKILL_CRAFT,
-                        SKILL_SELL, SKILL_FLEE],
+                        SKILL_SELL, SKILL_FLEE, SKILL_NAVIGATE, SKILL_EXPLORE],
     "RETURN_TO_GIVER": [SKILL_RETURN, SKILL_TURN_IN, SKILL_FLEE],
     "TURN_IN":         [SKILL_TURN_IN, SKILL_RETURN, SKILL_SELL, SKILL_FLEE],
     "SELL_REPAIR":     [SKILL_SELL, SKILL_BUY],
@@ -335,7 +333,11 @@ class GoalManager:
                     break
             _pmax = float((info.get("player") or {}).get("maxHp") or 0) or 1.0
             if _tgt_max <= _pmax * 3.0:
-                cands.append(SKILL_FARM)
+                # Only offer farm if the target is within attack range
+                # Use nearest_mob_distance from world state (reliable computed distance)
+                _nearest = ws.get("nearest_mob_distance")
+                if _nearest is not None and _nearest <= 10.0:
+                    cands.append(SKILL_FARM)
         if corpses:
             cands.append(SKILL_LOOT)
         # ИСПРАВЛЕНО 2026-08-24 (жалоба пользователя «квесты не берёт»):
@@ -378,7 +380,14 @@ class GoalManager:
             if has_new_quest_nearby:
                 break
         if has_new_quest_nearby:
-            cands.append(SKILL_ACCEPT)
+            # CRITICAL: If we already have an active quest, DO NOT offer accept_quest.
+            # This prevents the accept_quest → accept_quest → accept_quest loop.
+            _have_active = bool(info.get("quests", {}).get("active"))
+            if not _have_active:
+                cands.append(SKILL_ACCEPT)
+            # If we have an active quest, ensure accept_quest is NOT in candidates
+            elif SKILL_ACCEPT in cands:
+                cands.remove(SKILL_ACCEPT)
         # Atomic quest-related actions. The Policy chooses among these — it is NOT
         # a single "do quest" button. turn_in only when ready (objectives done);
         # return_to_giver is always an option while a quest is active or ready
@@ -532,7 +541,7 @@ class GoalManager:
             if gated:
                 cands = gated
             # else: no candidate matched the phase (e.g. giver not yet in range
-            # for accept) -> fall back to the full list so the agent can act.
+                # for accept) -> fall back to the full list so the agent can act.
         if (ws.get("hp_frac", 1.0) < 1.0 and SKILL_HEAL not in cands
                 and _has_healing(info, ws)):
             cands.append(SKILL_HEAL)
