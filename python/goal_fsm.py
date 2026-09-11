@@ -281,6 +281,7 @@ class GoalFSM:
         self.quest_giver = None
         self.failure_reason = FailureReason.NONE
         self.current_objective_idx = 0
+        self.done_ids.clear()
         # NOTE: done_ids is NOT cleared — it persists across quests
 
     def record_quest_done(self, quest_id: str):

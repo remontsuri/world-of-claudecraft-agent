@@ -135,9 +135,9 @@ def build_world_state(info: Dict, world_mem=None) -> Dict:
     # uses to avoid suicidal farm choices — not a hard rule forbidding farm.
     STRONG_RATIO = 1.3
     # Attack range: mobs beyond this distance cannot be hit by melee attacks.
-    # has_mob should only be True when a mob is close enough to actually attack,
-    # otherwise the agent wastes farm actions on unreachable targets.
-    ATTACK_RANGE = 10.0
+    # Official Sim uses MELEE_RANGE = 5 yards. has_mob should only be True when
+    # a mob is close enough to actually attack.
+    ATTACK_RANGE = 5.0
     strong_mob_near = False
     weak_mob_near = False
     nearest_mob_distance = None

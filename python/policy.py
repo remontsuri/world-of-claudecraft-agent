@@ -506,13 +506,21 @@ class GoalManager:
         if any((i.get("def") or i.get("itemDef") or {}).get("equipSlot") for i in inv if i):
             cands.append(SKILL_EQUIP)
         # buy: a vendor NPC in range (bridge buyItem targets the nearest vendor).
-        # Only a candidate when a vendor is actually nearby.
+        # Only a candidate when a vendor is actually within INTERACT_RANGE (5 yards).
+        # Official Sim uses INTERACT_RANGE = 5 for all interactions.
         ppos = info.get("player_pos") or [0, 0]
+        VENDOR_INTERACT_RANGE = 5.0  # matches official Sim INTERACT_RANGE
         if any((e.get("kind") == "npc" or e.get("type") == "npc")
                and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
-               and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= 12
+               and ((e.get("x", 0) - ppos[0]) ** 2 + (e.get("z", 0) - ppos[1]) ** 2) ** 0.5 <= VENDOR_INTERACT_RANGE
                for e in near):
             cands.append(SKILL_BUY)
+        # If vendor is visible but not in interact range, offer navigate to approach
+        elif any((e.get("kind") == "npc" or e.get("type") == "npc")
+                 and (e.get("vendor") or e.get("vendorItems") or e.get("isVendor"))
+                 for e in near):
+            if "navigate" not in cands:
+                cands.append("navigate")
         # explore: plain forward walk. Genuine capability the policy may learn,
         # but NOT always-available: when a quest is active/ready the agent must
         # progress it (return_to_giver / turn_in / farm), not drift to fences.
@@ -728,6 +736,13 @@ class GoalManager:
             cands = [c for c in cands if c in allowed] or list(allowed)
         if goal_phase == "DO_OBJECTIVE" and ws.get("quest", {}).get("id"):
             if "navigate" not in cands:
+                cands.append("navigate")
+        # If no mob in attack range but there's a mob nearby, offer navigate
+        # to approach it. Prevents farm/heal looping at long range.
+        # PLAYER_INTEREST_RADIUS in official Sim is 90 yards.
+        if not ws.get("has_mob") and "navigate" not in cands:
+            _nearest = ws.get("nearest_mob_distance")
+            if _nearest is not None and _nearest <= 100.0:
                 cands.append("navigate")
         if context is not None:
             _masked = list(context.allowed_skills)

@@ -783,7 +783,10 @@ def main():
         qp = rec.get("qprog")
         qps = f" qprog={qp}" if qp is not None else ""
         v = rec.get("verdict")
-        print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={ws.get('distance_to_giver')} hp={ws.get('hp_frac'):.2f} kills={m['kills']}", flush=True)
+        try:
+            print(f"[step {i}] {a} -> {v} | qs={qstat}{qps} | dist={ws.get('distance_to_giver')} hp={ws.get('hp_frac'):.2f} kills={m['kills']}", flush=True)
+        except (OSError, UnicodeEncodeError):
+            pass
         # quests
         active = info.get("quests", {}).get("active") or []
         ready = info.get("quests", {}).get("ready") or []
