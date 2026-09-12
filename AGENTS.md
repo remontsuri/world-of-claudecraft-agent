@@ -179,7 +179,7 @@ VoyagerAgent → ArbitrationLayer.decide(worldState) → skill
 QUEST_NONE → FIND_GIVER → ACCEPT → DO_OBJECTIVE → RETURN_TO_GIVER → TURN_IN → QUEST_COMPLETE
 ```
 
-### Skill Library (14 skills)
+### Skill Library ()
 farm, navigate, return_to_giver, turn_in, accept_quest, heal, flee, explore, loot, gather, sell, buy, craft, cast_frostbolt, cast_fireball
 
 ### MCP Server (:8792)
