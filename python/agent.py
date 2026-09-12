@@ -438,11 +438,11 @@ class Agent:
                     return info_before, "FAILURE", "OK"
                 before = info_before
                 if action == "accept_quest":
-                    _sys.stderr.write("[AGENT accept_quest] payload to bridge: idx=%d ctx=%r\n" % (idx, {k: ctx.get(k) for k in ["npcId", "questId", "quest", "npc"]}))
+                    sys.stderr.write("[AGENT accept_quest] payload to bridge: idx=%d ctx=%r\n" % (idx, {k: ctx.get(k) for k in ["npcId", "questId", "quest", "npc"]}))
                 self.env.step(idx, ctx)
                 after = self.env._last_info
                 if action == "accept_quest":
-                    _sys.stderr.write("[AGENT accept_quest] bridge returned: giver=%r\n" % (getattr(self.env, "last_giver", None)))
+                    sys.stderr.write("[AGENT accept_quest] bridge returned: giver=%r\n" % (getattr(self.env, "last_giver", None)))
                 # Persist the turn-in NPC in WorldMemory when we just accepted a quest.
                 # The live game does NOT return giverId in sim.questLog, so this is
                 # the ONLY place the agent acquires "quest X -> NPC Y at (x,z)".
