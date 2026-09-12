@@ -105,8 +105,6 @@ class Agent:
         self._journal_dir = base_dir
         hints = dict(reflection_hints or {}) or \
             load_reflection_hints(base_dir)
-        self.policy = GoalManager(memory or ExperienceStore(), temperature=1.2, seed=seed,
-        hints = dict(reflection_hints or {}) or load_reflection_hints(base_dir)
         self.policy = GoalManager(memory, temperature=1.2, seed=seed,
                                   reflection_hints=hints)
         # P0 №5 / P1 №11 fix: политика получает WorldMemory (vendor positions)
@@ -139,9 +137,6 @@ class Agent:
 
     def refresh_hints(self) -> dict:
         """Reload reflection hints from the journal into the live policy.
-
-    def refresh_hints(self) -> dict:
-        """Reload reflection hints from the journal into the live policy."""
         from policy import load_reflection_hints
         Called by the runner every SAVE_EVERY steps so conclusions drawn at
         runtime (spin:<action>, death:<cell>) steer decisions within seconds,
