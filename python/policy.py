@@ -415,16 +415,19 @@ class GoalManager:
         # steps while actions were farm/loot/cast). The skills handle distance
         # honestly themselves (PARTIAL when far).
         goal_phase = phase  # passed directly from arbitration layer
-        # Survival gate: at hp < 0.35 suppress ALL walking skills — turn-in/return
-        # would cross mob territory = death loop (measured: run 20132 hp=0.2 +
-        # turn_in spam). Only heal/food can fill HP in SAFE ticks.
-        safe_to_walk = ws["hp_frac"] >= 0.35
+        # Survival gate: at hp < 0.35 suppress walking skills that cross mob
+        # territory (turn_in/return) — death loop (measured: run 20132 hp=0.2 +
+        # turn_in spam). EXCEPTION: when in danger (combat), escape skills
+        # (flee, return_to_giver) MUST remain available — otherwise the agent
+        # is locked in place and dies. Heal/food can fill HP in SAFE ticks.
+        in_danger = bool(ws.get("danger") or ws.get("in_combat"))
+        safe_to_walk = ws["hp_frac"] >= 0.35 or in_danger
         if goal_phase in ("RETURN_TO_GIVER", "TURN_IN") and safe_to_walk:
             if SKILL_RETURN not in cands:
                 cands.append(SKILL_RETURN)
-            if SKILL_TURN_IN not in cands:
+            if SKILL_TURN_IN not in cands and ws["hp_frac"] >= 0.35:
                 cands.append(SKILL_TURN_IN)
-        if safe_to_walk and quest_ready:
+        if ws["hp_frac"] >= 0.35 and quest_ready:
             cands.append(SKILL_TURN_IN)        # transactional: navigate + turn_in
             cands.append(SKILL_RETURN)         # navigation-only recovery leg
         # 2026-08-23: collect-квесты требуют предметы; если квестовый предмет уже
