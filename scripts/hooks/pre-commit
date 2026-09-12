@@ -1,0 +1,61 @@
+#!/bin/bash
+# Pre-commit hook: auto-update AGENTS.md when agent code changes
+# Triggers on: python/*.py, woof-agent/**, AGENTS.md itself
+
+set -e
+
+# Get list of staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+# Check if agent code changed
+AGENT_CODE_CHANGED=false
+WOOF_CODE_CHANGED=false
+
+for f in $STAGED; do
+  case "$f" in
+    python/*.py|python/*/*.py)
+      AGENT_CODE_CHANGED=true
+      ;;
+    woof-agent/**)
+      WOOF_CODE_CHANGED=true
+      ;;
+  esac
+done
+
+# Update AGENTS.md if agent code changed
+if [ "$AGENT_CODE_CHANGED" = true ] || [ "$WOOF_CODE_CHANGED" = true ]; then
+  echo "[hook] Agent code changed, updating AGENTS.md..."
+  
+  # Extract current skill list from Python
+  PYTHON_SKILLS=$(grep -oE "^    \"[a-z_]+\":" python/policy.py 2>/dev/null | head -20 | tr -d ' ":' | sort -u | tr '\n' ',' | sed 's/,$//')
+  
+  # Extract current Java classes
+  JAVA_CLASSES=$(find woof-agent/src -name "*.java" 2>/dev/null | wc -l)
+  
+  # Update AGENTS.md WoOF section
+  if [ -f AGENTS.md ]; then
+    # Update timestamp
+    sed -i "s/Last updated: .*/Last updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)/" AGENTS.md 2>/dev/null || true
+    
+    # Update skill count if section exists
+    if grep -q "## Skill Library" AGENTS.md; then
+      sed -i "s/Skill Library (.* skills)/Skill Library ($PYTHON_SKILLS)/" AGENTS.md 2>/dev/null || true
+    fi
+    
+    git add AGENTS.md 2>/dev/null || true
+  fi
+fi
+
+# Run graphify if graphify-out exists and code changed
+if [ "$AGENT_CODE_CHANGED" = true ] && command -v graphify &> /dev/null; then
+  echo "[hook] Rebuilding graph..."
+  graphify extract . --code-only 2>/dev/null || true
+  graphify cluster-only . 2>/dev/null || true
+  git add graphify-out/ 2>/dev/null || true
+fi
+
+exit 0
