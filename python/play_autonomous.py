@@ -174,8 +174,19 @@ def main():
     from replay_buffer import ReplayBuffer
     from strategy_memory import StrategyMemory
 
-    mem = ExperienceStore(path=EXP_PATH)
+    # --- АВТОНОМНЫЙ КОНТУР (Task 11) ---
+    # Fail-closed (P0.4): при WOC_AUTONOMY!=0 провал контракта ОСТАНАВЛИВАЕТ
+    # процесс. Раньше здесь стоял `autonomy = None` — агент продолжал работу
+    # БЕЗ автономного контура, лог говорил "agent running", а замер измерял
+    # совсем не то, что собирались измерять. Единственный законный путь к
+    # legacy-режиму — явный WOC_AUTONOMY=0.
+    autonomy = None
+    # StrategyMemory: which strategies worked (per quest/goal keys).
+    # Declared here because AutonomyLoop constructor uses it below (line ~194).
+    from strategy_memory import StrategyMemory
     strat_mem = StrategyMemory()
+    # ExperienceStore: declared here because AutonomyLoop uses it below
+    mem = ExperienceStore(path=EXP_PATH)
     _autonomy_requested = os.environ.get("WOC_AUTONOMY", "1") != "0"
     if _autonomy_requested:
         try:
@@ -243,11 +254,7 @@ def main():
         "WOC_TRACE_OUT",
         os.path.join(os.path.dirname(os.path.abspath(__file__)),
                      "step_trace.json"))
-    if os.path.exists(EXP_PATH):
-        # resume: keep learned memory across runs
-        print(f"[autonomous] resuming from {EXP_PATH}")
-    mem = ExperienceStore(path=EXP_PATH)
-    strat_mem = StrategyMemory()
+    # mem already declared earlier (line ~189) for AutonomyLoop constructor
     try:
         env = BrowserEnv(player_class="warrior", max_steps=100000, seed=SEED)
         env.reset(seed=SEED)
@@ -269,8 +276,7 @@ def main():
     goal_fsm = GoalFSM()
     # ReplayBuffer: store transitions with rare-event priority (10k-50k).
     replay = ReplayBuffer(cap=20000)
-    # StrategyMemory: which strategies worked (per quest/goal keys).
-    strat_mem = StrategyMemory()
+    # StrategyMemory: declared earlier (line ~187) because AutonomyLoop uses it
     # ШАГ 4: раньше StrategyMemory была write-only (preference() читался
     # только в смоук-тесте). Передаём её политике, чтобы доказанные
     # стратегии реально влияли на выбор действия.

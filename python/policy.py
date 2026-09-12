@@ -84,10 +84,7 @@ def _has_healing(info: dict, ws: dict) -> bool:
 # DO_OBJECTIVE/RETURN_TO_GIVER/TURN_IN/SELL_REPAIR/HEAL) — they live in
 # goal_fsm.py and are not imported here to avoid a circular dependency.
 PHASE_ALLOWED = {
-    "QUEST_NONE":      [SKILL_ACCEPT, SKILL_EXPLORE],
-    "NO_QUEST":        [SKILL_ACCEPT, SKILL_EXPLORE],
-    "NONE":            [SKILL_ACCEPT, SKILL_EXPLORE],
-    None:              [SKILL_ACCEPT, SKILL_EXPLORE],
+    "NO_QUEST":        [SKILL_ACCEPT, SKILL_FARM, SKILL_EXPLORE],
     "FIND_GIVER":      [SKILL_ACCEPT, SKILL_EXPLORE],
     "ACCEPT":          [SKILL_ACCEPT],
     "DO_OBJECTIVE":    [SKILL_LOOT, SKILL_GATHER,
@@ -298,7 +295,14 @@ class GoalManager:
             _no_quest = not ws.get("quest", {}).get("active")
             _world = ws.get("world") or {}
             _has_giver = len(_world.get("quest_givers") or []) > 0
-            if _no_quest and _has_giver:
+            _near = info.get("nearby") or []
+            _mob_in_melee = any(
+                ((e.get("kind") == "mob" or e.get("type") == "mob")
+                 and not e.get("lootable")
+                 and (e.get("dist") is None or (e.get("dist") or 0) <= 5.0))
+                for e in _near
+            )
+            if _no_quest and _has_giver and not _mob_in_melee:
                 pass  # skip farm, prioritize quest taking
             else:
                 cands.append(SKILL_FARM)
