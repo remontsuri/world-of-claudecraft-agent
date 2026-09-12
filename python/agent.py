@@ -138,6 +138,9 @@ class Agent:
         self._game_source = None
 
     def refresh_hints(self) -> dict:
+        """Reload reflection hints from the journal into the live policy.
+
+    def refresh_hints(self) -> dict:
         """Reload reflection hints from the journal into the live policy."""
         from policy import load_reflection_hints
         Called by the runner every SAVE_EVERY steps so conclusions drawn at
