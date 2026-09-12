@@ -155,10 +155,39 @@ class ArbitrationLayer:
             fsm.state = QuestState.ERROR
             return ACTION_EXPLORE, {"reason": "quest_not_active"}
         has_mob = ws.get("has_mob", False)
-        objectives = ws.get("quest_struct", {}).get("objectives") or []
+
+        # WorldState canonical schema is ws["quest"], not ws["quest_struct"].
+        # The old consumer read a field that build_world_state() never emitted,
+        # so objectives was always [] and DO_OBJECTIVE fell through to explore
+        # even when the player was standing on the quest target.
+        quest = ws.get("quest") or {}
+        objectives = quest.get("objectives") or []
         quest_ready = ws.get("quest_system_ready", True)
-        if has_mob and quest_ready and len(objectives) > 0:
-            return ACTION_FARM, {"reason": "objective_mob"}
+
+        # Select the first incomplete objective from the canonical game-derived
+        # quest view and carry its target identity into the skill execution.
+        # Arbitration owns the decision; it does not invent targets.
+        target_mob_id = None
+        for objective in objectives:
+            if not isinstance(objective, dict):
+                continue
+            current = int(objective.get("current") or 0)
+            required = int(objective.get("required") or 0)
+            if current >= required:
+                continue
+            target_mob_id = (
+                objective.get("targetMobId")
+                or objective.get("mobId")
+                or objective.get("targetId")
+            )
+            if target_mob_id is not None:
+                break
+
+        if has_mob and quest_ready and objectives:
+            ctx = {"reason": "objective_mob"}
+            if target_mob_id is not None:
+                ctx["targetMobId"] = str(target_mob_id)
+            return ACTION_FARM, ctx
         if not quest_ready:
             return ACTION_EXPLORE, {"reason": "quest_system_broken"}
         return ACTION_EXPLORE, {"reason": "no_objective_target"}
