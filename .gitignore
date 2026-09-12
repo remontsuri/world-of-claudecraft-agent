@@ -125,3 +125,4 @@ python/replay_buffer.json
 python/self_reflection.json
 python/strategy_memory.json
 python/world_memory.json
+woc-llm/
