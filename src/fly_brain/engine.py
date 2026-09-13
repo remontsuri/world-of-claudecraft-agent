@@ -1,7 +1,6 @@
-"""engine.py — LIF neural simulation engine adapted from fly-brain.
+"""engine.py — LIF neural simulation engine for FAFB 138K (sparse).
 
-Runs the full FlyWire v783 connectome (138K neurons, 15M synapses) 
-on PyTorch with sparse matrix operations.
+Optimized for ROCm/CUDA. Uses sparse matrix multiplication for recurrent connections.
 """
 import torch
 import torch.nn as nn
@@ -10,74 +9,96 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src.fly_brain.connectome import load_connectome, build_sparse_weights
-
 
 # LIF Model Parameters (from Shiu et al. / fly-brain)
 MODEL_PARAMS = {
     'tauSyn': 5.0,        # ms
     'tDelay': 1.8,        # ms
-    'v0': -52.0,          # mV
-    'vReset': -52.0,      # mV
-    'vRest': -52.0,       # mV
-    'vThreshold': -45.0,  # mV
-    'tauMem': 20.0,       # ms
-    'tRefrac': 2.2,       # ms
-    'scalePoisson': 250,
-    'wScale': 0.275,
+    'v0': -65.0,          # mV
+    'vReset': -65.0,      # mV
+    'vRest': -65.0,       # mV
+    'vThreshold': -50.0,  # mV
+    'tauMem': 10.0,       # ms
+    'tRefrac': 2.0,       # ms
+    'scalePoisson': 100,
+    'wScale': 0.1,
 }
 
-DT = 0.1  # Simulation timestep in ms
+DT = 0.2  # Simulation timestep in ms
+
+def get_device():
+    """Get best available device."""
+    if torch.cuda.is_available():
+        print(f"[engine] Using GPU: {torch.cuda.get_device_name(0)}")
+        return 'cuda'
+    try:
+        import torch_directml
+        if torch_directml.is_available():
+            return torch_directml.device()
+    except ImportError:
+        pass
+    print("[engine] Using CPU")
+    return 'cpu'
+
+
+def load_sparse_from_parquet(parquet_path='D:/fly-brain/data/2025_Connectivity_783.parquet'):
+    """Load FlyWire FAFB v783 connectivity and build sparse tensor."""
+    import pandas as pd
+    
+    df = pd.read_parquet(parquet_path)
+    
+    all_ids = pd.concat([df["Presynaptic_ID"], df["Postsynaptic_ID"]]).unique()
+    all_ids.sort()
+    
+    flyid2i = {fid: i for i, fid in enumerate(all_ids)}
+    n_neurons = len(all_ids)
+    
+    pre_idx = df["Presynaptic_ID"].map(flyid2i).values.astype(np.int64)
+    post_idx = df["Postsynaptic_ID"].map(flyid2i).values.astype(np.int64)
+    weights = df["Connectivity"].values.astype(np.float32) * MODEL_PARAMS['wScale']
+    
+    # W[post, pre] = weight
+    indices = torch.tensor(np.stack([post_idx, pre_idx]), dtype=torch.long)
+    values = torch.tensor(weights, dtype=torch.float32)
+    
+    W = torch.sparse_coo_tensor(indices, values, (n_neurons, n_neurons)).coalesce()
+    
+    print(f"[connectome] FAFB: {n_neurons} neurons, {len(weights)} synapses")
+    return W, n_neurons
 
 
 class PoissonSpikeGenerator(nn.Module):
-    """Generates Poisson-distributed spikes from firing rates."""
-    
-    def __init__(self, dt=DT, scale=250, device='cpu'):
+    def __init__(self, dt=DT, scale=100):
         super().__init__()
         self.prob_scale = dt / 1000.0
         self.scale = scale
-        self.device = device
     
     def forward(self, rates):
         return torch.bernoulli(rates * self.prob_scale) * self.scale
 
 
 class AlphaSynapse(nn.Module):
-    """Alpha-function synapse dynamics with configurable delay."""
-    
-    def __init__(self, batch, size, dt=DT, params=MODEL_PARAMS, device='cpu'):
+    def __init__(self, n_neurons, dt=DT, params=MODEL_PARAMS):
         super().__init__()
         self.time_factor = dt / params['tauSyn']
-        self.steps_delay = int(params['tDelay'] / dt)
-        self.size = size
-        self.device = device
-        self.batch = batch
+        self.steps_delay = int(params['tDelay'] / dt) + 1
+        self.n_neurons = n_neurons
     
-    def state_init(self):
-        conductance = torch.zeros(self.batch, self.size, device=self.device)
-        delay_buffer = torch.zeros(
-            self.batch, self.steps_delay + 1, self.size, device=self.device
-        )
+    def state_init(self, batch, device):
+        conductance = torch.zeros(batch, self.n_neurons, device=device)
+        delay_buffer = torch.zeros(batch, self.steps_delay, self.n_neurons, device=device)
         return conductance, delay_buffer
     
     def forward(self, input_, conductance, delay_buffer, refrac):
-        conductance_new = (
-            conductance * (1 - self.time_factor) + delay_buffer[:, 0, :] * refrac
-        )
-        delay_buffer = torch.roll(delay_buffer, shifts=-1, dims=1)
-        delay_buffer[:, -1, :] = input_
+        conductance_new = conductance * (1 - self.time_factor) + delay_buffer[:, 0, :] * refrac
+        delay_buffer = torch.cat([delay_buffer[:, 1:, :], input_.unsqueeze(1)], dim=1)
         return conductance_new, delay_buffer
 
 
 class LIFNeuron(nn.Module):
-    """Leaky Integrate-and-Fire neuron with surrogate gradient."""
-    
-    def __init__(self, batch, size, dt=DT, params=MODEL_PARAMS, device='cpu'):
+    def __init__(self, n_neurons, dt=DT, params=MODEL_PARAMS):
         super().__init__()
-        self.size = size
-        self.device = device
-        self.batch = batch
+        self.n_neurons = n_neurons
         self.dt = dt
         self.tau_mem = params['tauMem']
         self.v_rest = params['vRest']
@@ -85,196 +106,123 @@ class LIFNeuron(nn.Module):
         self.v_reset = params['vReset']
         self.tau_refrac = params['tRefrac']
         self.dt_over_tau = dt / self.tau_mem
-        self.refrac_steps = int(self.tau_refrac / dt)
     
-    def state_init(self):
-        v = torch.full((self.batch, self.size), self.v_rest, device=self.device)
-        refrac = torch.ones((self.batch, self.size), device=self.device)
+    def state_init(self, batch, device):
+        v = torch.full((batch, self.n_neurons), self.v_rest, device=device)
+        refrac = torch.ones(batch, self.n_neurons, device=device)
         return v, refrac
     
     def forward(self, synaptic_current, v, refrac):
-        # Update refractory counter: increment toward 1.0 (ready to fire)
-        # refrac=1.0 means ready, refrac=0.0 means just spiked (in refractory)
         refrac = torch.clamp(refrac + self.dt / self.tau_refrac, 0, 1)
-        
-        # Leaky integration (always active, refractory only blocks spikes)
         v = v + self.dt_over_tau * ((self.v_rest - v) + synaptic_current)
-        
-        # Spike when threshold crossed AND not in refractory
         can_fire = (refrac >= 1.0).float()
         spike = (v >= self.v_threshold).float() * can_fire
-        
-        # Reset spiking neurons
-        v = torch.where(spike > 0, torch.tensor(self.v_reset, device=self.device), v)
-        
-        # Set refractory to 0 for spiking neurons (they must wait tau_refrac before next spike)
+        v = torch.where(spike > 0, torch.full_like(v, self.v_reset), v)
         refrac = torch.where(spike > 0, torch.zeros_like(refrac), refrac)
-        
         return v, spike, refrac
 
 
-class AlphaLIF(nn.Module):
-    """Combined AlphaSynapse + LIFNeuron."""
+class SparseLIFModel(nn.Module):
+    """Full brain model: Poisson → sparse recurrent weights → LIF."""
     
-    def __init__(self, batch, size, dt=DT, params=MODEL_PARAMS, device='cpu'):
-        super().__init__()
-        self.synapse = AlphaSynapse(batch, size, dt, params, device)
-        self.neuron = LIFNeuron(batch, size, dt, params, device)
-        self.size = size
-        self.device = device
-        self.batch = batch
-    
-    def state_init(self):
-        conductance, delay_buffer = self.synapse.state_init()
-        v, refrac = self.neuron.state_init()
-        spikes = torch.zeros(self.batch, self.size, device=self.device)
-        return conductance, delay_buffer, spikes, v, refrac
-    
-    def forward(self, input_, conductance, delay_buffer, spikes, v, refrac):
-        conductance, delay_buffer = self.synapse(input_, conductance, delay_buffer, refrac)
-        v, spike, refrac = self.neuron(conductance, v, refrac)
-        return conductance, delay_buffer, spike, v, refrac
-
-
-class TorchModel(nn.Module):
-    """Full brain model: Poisson → recurrent weights → AlphaLIF."""
-    
-    def __init__(self, batch, n_neurons, dt=DT, params=MODEL_PARAMS, 
-                 weights=None, device='cpu'):
+    def __init__(self, n_neurons, dt=DT, params=MODEL_PARAMS, weights=None):
         super().__init__()
         self.n_neurons = n_neurons
-        self.device = device
-        self.batch = batch
-        self.poisson = PoissonSpikeGenerator(dt, params['scalePoisson'], device)
-        self.alpha_lif = AlphaLIF(batch, n_neurons, dt, params, device)
-        self.weights = weights  # sparse CSR [n, n]
+        self.dt = dt
+        self.poisson = PoissonSpikeGenerator(dt, params['scalePoisson'])
+        self.synapse = AlphaSynapse(n_neurons, dt, params)
+        self.neuron = LIFNeuron(n_neurons, dt, params)
+        self.weights = weights  # sparse [n, n]
     
-    def state_init(self):
-        return self.alpha_lif.state_init()
+    def state_init(self, batch, device):
+        conductance, delay_buffer = self.synapse.state_init(batch, device)
+        v, refrac = self.neuron.state_init(batch, device)
+        return conductance, delay_buffer, v, refrac
     
-    def forward(self, rates, conductance, delay_buffer, spikes, v, refrac):
-        # External input spikes from rates
+    def forward(self, rates, conductance, delay_buffer, v, refrac):
         input_spikes = self.poisson(rates)
         
-        # Recurrent input: previous spikes @ W^T
-        recurrent_input = torch.sparse.mm(self.weights.t(), spikes.t().float()).t()
+        # Recurrent input: W @ input_spikes (sparse)
+        recurrent_input = torch.sparse.mm(self.weights, input_spikes.t()).t()
         
-        # Normalize: weights sum can be large, scale to reasonable current range
-        # Typical input per neuron: 500 synapses * 10 Hz * 0.1ms * weight ~ 500*10*0.001*10 = 50
-        # Scale factor: 1/1000 to get into mV range
-        recurrent_input = recurrent_input / 1000.0
+        # Update LIF
+        conductance, delay_buffer = self.synapse(input_spikes, conductance, delay_buffer, refrac)
+        v, spike, refrac = self.neuron(conductance, v, refrac)
         
-        # Total synaptic input = external + recurrent
-        total_input = input_spikes + recurrent_input
-        
-        # Update LIF with total input
-        conductance, delay_buffer, spikes, v, refrac = self.alpha_lif(
-            total_input, conductance, delay_buffer, spikes, v, refrac
-        )
-        
-        # DEBUG
-        if torch.rand(1).item() < 0.01:
-            print(f"[DEBUG] in_max={input_spikes.max().item():.1f} rec_max={recurrent_input.max().item():.1f} v_max={v.max().item():.1f} spikes={spikes.sum().item():.0f}")
-        
-        return conductance, delay_buffer, spikes, v, refrac
-    
-    def get_firing_rates(self, spikes_history, window=100):
-        """Compute firing rates from spike history."""
-        if len(spikes_history) == 0:
-            return torch.zeros(self.batch, self.n_neurons, device=self.device)
-        recent = torch.stack(spikes_history[-window:])
-        return recent.sum(dim=0) / (window * DT / 1000.0)
+        return conductance, delay_buffer, v, refrac, spike
 
 
 class BrainEngine:
-    """High-level interface for running the brain simulation."""
-    
-    def __init__(self, device='cpu', batch=1):
-        self.device = device
+    def __init__(self, device=None, batch=1):
+        self.device = device or get_device()
         self.batch = batch
         self.model = None
         self.state = None
         self.spike_history = []
-        self.rate_history = []
     
-    def initialize(self):
-        """Load connectome and initialize the model."""
+    def initialize(self, W_sparse=None, n_neurons=None):
         print("[engine] Loading connectome...")
-        df, flyid2i, i2flyid, n_neurons = load_connectome()
-        self.flyid2i = flyid2i
-        self.i2flyid = i2flyid
+        
+        if W_sparse is None:
+            W_sparse, n_neurons = load_sparse_from_parquet()
+        
         self.n_neurons = n_neurons
+        self.W_sparse = W_sparse.to(self.device)
         
-        print(f"[engine] Building sparse weights ({n_neurons}x{n_neurons})...")
-        self.weights = build_sparse_weights(df, flyid2i, n_neurons, device=self.device)
-        
-        print(f"[engine] Creating TorchModel (batch={self.batch})...")
-        self.model = TorchModel(
-            self.batch, n_neurons, weights=self.weights, device=self.device
-        )
-        self.state = self.model.state_init()
+        print(f"[engine] Creating SparseLIFModel ({n_neurons} neurons, device={self.device})...")
+        self.model = SparseLIFModel(n_neurons, weights=self.W_sparse)
+        self.state = self.model.state_init(self.batch, self.device)
         
         print(f"[engine] Ready. {n_neurons} neurons on {self.device}")
     
+    def step(self, rates=None, n_steps=1):
+        if rates is None:
+            rates = torch.zeros(self.batch, self.n_neurons, device=self.device)
+        
+        conductance, delay_buffer, v, refrac = self.state
+        
+        total_spikes = torch.zeros(self.batch, self.n_neurons, device=self.device)
+        
+        for _ in range(n_steps):
+            conductance, delay_buffer, v, refrac, spike = self.model(
+                rates, conductance, delay_buffer, v, refrac
+            )
+            total_spikes += spike
+        
+        self.state = (conductance, delay_buffer, v, refrac)
+        self.spike_history.append(total_spikes.detach())
+        
+        if len(self.spike_history) > 1000:
+            self.spike_history = self.spike_history[-500:]
+        
+        return total_spikes
+    
     def stimulate_neurons(self, neuron_indices, rate=100.0):
-        """Set firing rates for specific neurons."""
         rates = torch.zeros(self.batch, self.n_neurons, device=self.device)
         if isinstance(neuron_indices, (list, np.ndarray)):
             idx = torch.tensor(neuron_indices, dtype=torch.long, device=self.device)
             rates[0, idx] = rate
         return rates
     
-    def step(self, rates=None, n_steps=1):
-        """Advance simulation by n_steps timesteps."""
-        if rates is None:
-            rates = torch.zeros(self.batch, self.n_neurons, device=self.device)
-        
-        conductance, delay_buffer, spikes, v, refrac = self.state
-        
-        total_spikes = torch.zeros(self.batch, self.n_neurons, device=self.device)
-        
-        for _ in range(n_steps):
-            conductance, delay_buffer, spikes, v, refrac = self.model(
-                rates, conductance, delay_buffer, spikes, v, refrac
-            )
-            total_spikes += spikes
-        
-        self.state = (conductance, delay_buffer, spikes, v, refrac)
-        self.spike_history.append(total_spikes.detach())
-        
-        # Keep history bounded
-        if len(self.spike_history) > 1000:
-            self.spike_history = self.spike_history[-500:]
-        
-        return total_spikes
-    
     def get_firing_rates(self, window=100):
-        """Get recent firing rates."""
         if len(self.spike_history) == 0:
             return torch.zeros(self.batch, self.n_neurons, device=self.device)
         recent = torch.stack(self.spike_history[-window:])
         return recent.sum(dim=0) / (window * DT / 1000.0)
-    
-    def stimulate_and_step(self, neuron_indices, rate=100.0, n_steps=10):
-        """Convenience: stimulate neurons and step."""
-        rates = self.stimulate_neurons(neuron_indices, rate)
-        spikes = self.step(rates, n_steps)
-        return spikes
 
 
 if __name__ == "__main__":
-    engine = BrainEngine(device='cpu', batch=1)
+    engine = BrainEngine()
     engine.initialize()
     
-    # Test: stimulate random neurons and run 500+ steps (delay is 1.8ms = 18 steps)
-    print("\n[engine] Running test simulation (500 steps)...")
+    print(f"\n[engine] Running test simulation (100 steps)...")
     random_neurons = np.random.choice(engine.n_neurons, size=500, replace=False).tolist()
     
-    for i in range(50):
-        rates = engine.stimulate_neurons(random_neurons, rate=500.0)
+    for i in range(10):
+        rates = engine.stimulate_neurons(random_neurons, rate=150.0)
         spikes = engine.step(rates, n_steps=10)
-        if (i+1) % 10 == 0:
-            v = engine.state[3].max().item() if engine.state[3].numel() > 0 else 0
+        if (i+1) % 5 == 0:
+            v = engine.state[2].max().item()
             total = spikes.sum().item()
             print(f"  Step {i+1}: {total:.0f} spikes, v_max={v:.1f}")
     

@@ -9,6 +9,30 @@ PARQUET_PATH = DATA_DIR / "2025_Connectivity_783.parquet"
 COMPLETENESS_PATH = DATA_DIR / "2025_Completeness_783.csv"
 
 
+def load_hemibrain(data_dir='D:/world-of-claudecraft/data/connectome/exported-traced-adjacencies-v1.2'):
+    """Load Hemibrain 21K dense connectivity matrix.
+    
+    Source: Janelia Research Campus (Shiu et al. 2023).
+    Trusted scientific dataset — weights_only=False is safe here.
+    """
+    path = Path(data_dir) / 'W_cached.pt'
+    # nosemgrep: torch_unsafe_load — trusted Janelia scientific dataset
+    W_dict = torch.load(path, weights_only=False)
+    
+    n = W_dict['W_size'][0]
+    idx = W_dict['W_indices']
+    val = W_dict['W_values']
+    
+    # Dense conversion
+    W_dense = torch.zeros(n, n)
+    W_dense[idx[0], idx[1]] = val
+    
+    print(f'[connectome] Hemibrain: {n} neurons, {len(val)} synapses')
+    print(f'[connectome] Dense: {W_dense.numel() * 4 / 1e9:.2f} GB')
+    
+    return W_dense, n
+
+
 def load_connectome(parquet_path=PARQUET_PATH, completeness_path=COMPLETENESS_PATH):
     """Load connectivity table and build flywire_id -> contiguous index mapping.
     
