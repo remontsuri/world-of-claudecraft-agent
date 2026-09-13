@@ -89,9 +89,11 @@ class AlphaSynapse(nn.Module):
         delay_buffer = torch.zeros(batch, self.steps_delay, self.n_neurons, device=device)
         return conductance, delay_buffer
     
-    def forward(self, input_, conductance, delay_buffer, refrac):
+    def forward(self, input_spikes, recurrent_input, conductance, delay_buffer, refrac):
+        # Total input = feedforward (photoreceptors) + recurrent (brain connectivity)
+        total_input = input_spikes + recurrent_input
         conductance_new = conductance * (1 - self.time_factor) + delay_buffer[:, 0, :] * refrac
-        delay_buffer = torch.cat([delay_buffer[:, 1:, :], input_.unsqueeze(1)], dim=1)
+        delay_buffer = torch.cat([delay_buffer[:, 1:, :], total_input.unsqueeze(1)], dim=1)
         return conductance_new, delay_buffer
 
 
@@ -145,8 +147,8 @@ class SparseLIFModel(nn.Module):
         # Recurrent input: W @ input_spikes (sparse)
         recurrent_input = torch.sparse.mm(self.weights, input_spikes.t()).t()
         
-        # Update LIF
-        conductance, delay_buffer = self.synapse(input_spikes, conductance, delay_buffer, refrac)
+        # Update LIF with both feedforward and recurrent input
+        conductance, delay_buffer = self.synapse(input_spikes, recurrent_input, conductance, delay_buffer, refrac)
         v, spike, refrac = self.neuron(conductance, v, refrac)
         
         return conductance, delay_buffer, v, refrac, spike

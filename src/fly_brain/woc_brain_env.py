@@ -136,6 +136,7 @@ class WoCFlyBrainEnv(gym.Env):
         if player.get('hp', 0) <= 0 or player.get('dead', False):
             self.game.respawn()
             info = self.game.snapshot()
+            player = info.get('player', {})
         
         obs = self._encode_obs(info)
         
