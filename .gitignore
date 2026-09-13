@@ -144,3 +144,5 @@ nul
 bridge_err.log
 bridge_out.log
 bridge_run.log
+*.tar.gz
+data/ppo_*.zip
