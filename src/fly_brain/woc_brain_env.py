@@ -24,7 +24,7 @@ class WoCFlyBrainEnv(gym.Env):
     metadata = {"render_modes": ["console"]}
     
     def __init__(self, action_dim=7, max_steps=500, bridge_host='127.0.0.1', 
-                 bridge_port=8791, device='cpu', use_brain=True):
+                 bridge_port=8791, device=None, use_brain=True):
         super().__init__()
         
         self.action_dim = action_dim
@@ -54,6 +54,8 @@ class WoCFlyBrainEnv(gym.Env):
     def _init_brain(self):
         """Initialize brain components."""
         if self.brain is None:
+            from src.fly_brain.engine import get_device
+            self.device = get_device() if self.device is None else self.device
             self.brain = BrainEngine(device=self.device, batch=1)
             self.brain.initialize()
             
@@ -61,7 +63,7 @@ class WoCFlyBrainEnv(gym.Env):
             self.motor = MotorDecoder(self.brain.n_neurons)
             self.stdp = DopamineModulatedSTDP(device=self.device)
             
-            print(f"[env] Brain initialized: {self.brain.n_neurons} neurons")
+            print(f"[env] Brain initialized: {self.brain.n_neurons} neurons on {self.device}")
     
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -193,6 +195,7 @@ class WoCFlyBrainEnv(gym.Env):
     
     def _execute(self, action, info):
         """Execute action in game."""
+        print(f"[env] Executing action={action}")
         nearby = info.get('nearby', [])
         
         if action == 0:  # move forward (explore)
