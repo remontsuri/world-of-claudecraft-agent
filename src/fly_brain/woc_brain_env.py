@@ -13,8 +13,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.fly_brain.engine import BrainEngine
+from src.fly_brain.motor_decoder import FixedThresholdDecoder, MotorDecoder
 from src.fly_brain.sensor_adapter import SensorAdapter
-from src.fly_brain.motor_decoder import MotorDecoder
 from src.fly_brain.da_stdp import DopamineModulatedSTDP
 
 
@@ -60,7 +60,7 @@ class WoCFlyBrainEnv(gym.Env):
             self.brain.initialize()
             
             self.sensor = SensorAdapter()
-            self.motor = MotorDecoder(self.brain.n_neurons)
+            self.motor = FixedThresholdDecoder(threshold=0.1, cooldown=3)
             self.stdp = DopamineModulatedSTDP(device=self.device)
             
             print(f"[env] Brain initialized: {self.brain.n_neurons} neurons on {self.device}")
@@ -184,6 +184,9 @@ class WoCFlyBrainEnv(gym.Env):
         obs = self._encode_obs(new_info)
         
         extra = {
+            'player': new_info.get('player'),
+            'player_pos': new_info.get('player_pos'),
+            'nearby_count': len(new_info.get('nearby', [])),
             'kills': new_info.get('kills', 0),
             'copper': new_info.get('copper', 0),
             'quests_done': new_info.get('quests_done', 0),
@@ -199,27 +202,30 @@ class WoCFlyBrainEnv(gym.Env):
         print(f"[env] Executing action={action}")
         nearby = info.get('nearby', [])
         
-        if action == 0:  # move forward (explore)
-            return self.game.step(0)
+        if action == 0:  # MOVE_FORWARD
+            # Move forward using raw movement
+            self.game.raw_move('forward')
+            return self.game.snapshot()
         elif action == 1:  # turn left
             self.game.raw_move('turnLeft')
             return self.game.snapshot()
         elif action == 2:  # turn right
             self.game.raw_move('turnRight')
             return self.game.snapshot()
-        elif action == 3:  # attack/farm
+        elif action == 3:  # ATTACK — find nearest mob and step toward
             mobs = [e for e in nearby if e.get('kind') == 'mob' and e.get('hostile', False) and not e.get('dead', False)]
             if mobs:
                 nearest = min(mobs, key=lambda e: e.get('dist', 999))
                 if nearest.get('dist', 999) < 7:
                     return self.game.step(0)
             return self.game.step(0)
-        elif action == 4:  # target nearest
+        elif action == 4:  # TARGET_NEAREST
             return self.game.step(0)
-        elif action == 5:  # loot/quest
+        elif action == 5:  # LOOT_QUEST
             return self.game.step(1)
-        elif action == 6:  # rest
-            return info
+        elif action == 6:  # REST — but still move forward for exploration
+            self.game.raw_move('forward')
+            return self.game.snapshot()
         else:
             return info
     
