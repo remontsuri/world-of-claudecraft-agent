@@ -1,0 +1,28 @@
+# Logs
+*.log
+
+# Temp/cache files
+nul
+bridge_err.log
+bridge_out.log
+bridge_run.log
+
+# VFB large binaries
+VFB Files.zip
+data/vfb_files/
+data/connectome/exported-traced-adjacencies-v1.2/*.csv
+data/connectome/exported-traced-adjacencies-v1.2/*.pkl
+data/connectome/exported-traced-adjacencies-v1.2/*.tar.gz
+data/connectome/exported-traced-adjacencies-v1.2/W_cached.pt
+data/connectome/exported-traced-adjacencies-v1.2/W_sparse.pt
+
+# WoC archive (keep source, not binaries)
+woc_archive/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS
+Thumbs.db
