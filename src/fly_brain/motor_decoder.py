@@ -1,64 +1,25 @@
 """motor_decoder.py — decode descending neuron spikes to WoC actions via WTA.
 
-Maps specific descending neuron groups to discrete game actions:
-- DNg13 (symmetric L+R) → MOVE_FORWARD (0)
-- DNg13 (asymmetry R>L) → TURN_LEFT (1)
-- DNg13 (asymmetry L>R) → TURN_RIGHT (2)
-- Giant Fiber (GF) → ATTACK (3)
-- Central Complex (Eb/Pb) → TARGET_NEAREST (4)
-- VNC_Mechanosensory → LOOT/QUEST (5)
-- Quiescent/PAM → REST (6)
+Hard-coded readout channels (from baseline noise test, FAFB v783):
+- Neuron 105779 (5.0 Hz) → DNg13_LEFT  → TURN_LEFT  (2)
+- Neuron 79732  (5.0 Hz) → DNg13_RIGHT → TURN_RIGHT (1)
+- Neuron 123853 (5.0 Hz) → GiantFiber   → ATTACK     (3)
+- Neuron 37567  (5.0 Hz) → CentralComplex → TARGET  (4)
+- Neuron 130107 (5.0 Hz) → VNC_Mech   → LOOT_QUEST (5)
+- Both DNg13 active simultaneously → MOVE_FORWARD (0)
+- No activity → REST (6)
 """
 import numpy as np
 import torch
-from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-class WinnerTakeAll:
-    """Lateral inhibition WTA circuit."""
+class FixedThresholdDecoder:
+    """Decode spikes using fixed threshold on specific readout neurons.
     
-    def __init__(self, n_groups, inhibition_strength=0.8):
-        self.n_groups = n_groups
-        self.inhibition_strength = inhibition_strength
-    
-    def select(self, rates):
-        """Select winning group via lateral inhibition.
-        
-        rates: array of shape (n_groups,) firing rates
-        
-        Returns: selected group index
-        """
-        if len(rates) == 0:
-            return 0
-        
-        rates = np.asarray(rates, dtype=np.float32)
-        
-        # Add small noise to break ties
-        rates = rates + np.random.uniform(0, 0.01, len(rates))
-        
-        # Winner-take-all: highest rate wins
-        winner = np.argmax(rates)
-        
-        # Apply inhibition (for analysis/debugging)
-        inhibited = rates.copy()
-        for i in range(len(rates)):
-            if i != winner:
-                inhibited[i] *= (1 - self.inhibition_strength)
-        
-        return winner
-
-
-class MotorDecoder:
-    """Decode DN spikes to discrete WoC actions.
-    
-    Reads firing rates from predefined descending neuron groups
-    and applies WTA to select the action.
+    Threshold = S_base + 20% (from baseline noise measurement).
+    Baseline = 0 Hz, so threshold ≈ 0.1 Hz (any spike = action).
     """
     
-    # Action mapping
     ACTION_NAMES = {
         0: 'MOVE_FORWARD',
         1: 'TURN_LEFT',
@@ -69,122 +30,131 @@ class MotorDecoder:
         6: 'REST',
     }
     
-    def __init__(self, n_neurons, groups=None, window=50, dt=0.1):
+    # Readout neuron indices (from baseline noise test)
+    READOUT = {
+        'DNg13_LEFT': 105779,
+        'DNg13_RIGHT': 79732,
+        'GF': 123853,
+        'CC': 37567,
+        'VNC': 130107,
+    }
+    
+    def __init__(self, threshold=0.1, cooldown=5):
         """
-        n_neurons: total neurons in brain
-        groups: dict mapping action_id -> list of neuron indices
-        window: spike history window for rate computation
-        dt: timestep in ms
+        threshold: Hz, minimum firing rate to trigger action
+        cooldown: minimum steps between actions
         """
-        self.n_neurons = n_neurons
-        self.window = window
-        self.dt = dt
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self.steps_since_action = cooldown  # ready immediately
+        self.last_action = 6  # REST
+        self.group_rates = {k: 0.0 for k in self.READOUT}
         
-        # Default DN groups (anatomically inspired)
-        if groups is None:
-            groups = self._default_groups(n_neurons)
-        self.groups = groups
-        
-        self.wta = WinnerTakeAll(len(groups))
-        self.spike_history = []
-        
-        # Baseline rates for each group
-        self.baselines = {aid: 0.0 for aid in self.groups}
+    def update_rates(self, spike_counts, window_steps, dt_ms=0.1):
+        """Update group rates from spike counts."""
+        duration_s = window_steps * dt_ms / 1000.0
+        for name, idx in self.READOUT.items():
+            self.group_rates[name] = spike_counts[idx] / duration_s if duration_s > 0 else 0.0
+        self.steps_since_action += 1
     
-    def _default_groups(self, n_neurons):
-        """Create default descending neuron groups."""
-        rng = np.random.RandomState(42)
-        
-        # Distribute DNs across the neuron population (VNC neurons tend to be posterior)
-        # For now, use random assignment in posterior third of neurons
-        vnc_start = int(n_neurons * 0.7)
-        vnc_neurons = np.arange(vnc_start, n_neurons)
-        
-        groups = {}
-        n_per_group = len(vnc_neurons) // 7
-        
-        for aid in range(7):
-            start = aid * n_per_group
-            end = start + n_per_group if aid < 6 else len(vnc_neurons)
-            groups[aid] = vnc_neurons[start:end].tolist()
-        
-        return groups
-    
-    def add_spikes(self, spikes):
-        """Add spike observation to history."""
-        if isinstance(spikes, torch.Tensor):
-            spikes = spikes.detach().cpu().numpy()
-        self.spike_history.append(spikes.reshape(-1))
-        
-        # Keep bounded
-        if len(self.spike_history) > 1000:
-            self.spike_history = self.spike_history[-500:]
-    
-    def get_group_rates(self):
-        """Compute firing rates for each DN group."""
-        if len(self.spike_history) == 0:
-            return {aid: 0.0 for aid in self.groups}
-        
-        # Use recent window
-        recent = np.stack(self.spike_history[-self.window:])
-        # Sum over time, divide by window duration in seconds
-        spike_counts = recent.sum(axis=0)
-        duration_s = self.window * self.dt / 1000.0
-        rates = spike_counts / duration_s  # Hz
-        
-        # Compute mean rate per group
-        group_rates = {}
-        for aid, indices in self.groups.items():
-            group_rates[aid] = float(np.mean(rates[indices]))
-        
-        return group_rates
-    
-    def decode(self, spikes=None):
-        """Decode spikes to action.
+    def decode(self, spikes=None, n_steps=1, dt_ms=0.1):
+        """Decode spikes to action with fixed threshold and cooldown.
         
         Returns: action_id (0-6)
         """
         if spikes is not None:
-            self.add_spikes(spikes)
+            if isinstance(spikes, torch.Tensor):
+                spikes = spikes.detach().cpu().numpy().reshape(-1)
+            spike_counts = spikes
+            self.update_rates(spike_counts, n_steps, dt_ms)
         
-        group_rates = self.get_group_rates()
+        # Cooldown check
+        if self.steps_since_action < self.cooldown:
+            return self.last_action
         
-        # Apply WTA
-        rates_array = np.array([group_rates[aid] for aid in range(7)])
-        action = self.wta.select(rates_array)
+        # Check thresholds
+        l = self.group_rates['DNg13_LEFT']
+        r = self.group_rates['DNg13_RIGHT']
+        gf = self.group_rates['GF']
+        cc = self.group_rates['CC']
+        vnc = self.group_rates['VNC']
         
-        return int(action)
+        action = 6  # REST by default
+        
+        # Both DNg13 active → MOVE_FORWARD
+        if l > self.threshold and r > self.threshold:
+            action = 0
+        # Left only → TURN_LEFT
+        elif l > self.threshold and l > r:
+            action = 2
+        # Right only → TURN_RIGHT
+        elif r > self.threshold and r > l:
+            action = 1
+        # Giant Fiber → ATTACK
+        elif gf > self.threshold:
+            action = 3
+        # Central Complex → TARGET
+        elif cc > self.threshold:
+            action = 4
+        # VNC Mechanosensory → LOOT_QUEST
+        elif vnc > self.threshold:
+            action = 5
+        
+        self.last_action = action
+        if action != 6:
+            self.steps_since_action = 0
+        
+        return action
     
-    def decode_batch(self, spikes_batch):
-        """Decode batch of spike observations."""
-        actions = []
-        for spikes in spikes_batch:
-            actions.append(self.decode(spikes))
-        return actions
+    def get_action_name(self, action_id):
+        return self.ACTION_NAMES.get(action_id, 'UNKNOWN')
+
+
+class WinnerTakeAll:
+    """Lateral inhibition WTA circuit (kept for reference/compat)."""
     
-    def get_action_confidence(self):
-        """Get confidence of current action selection."""
-        group_rates = self.get_group_rates()
-        rates = np.array([group_rates[aid] for aid in range(7)])
-        if rates.sum() == 0:
-            return 0.0
-        return float(rates.max() / rates.sum())
+    def __init__(self, n_groups, inhibition_strength=0.8):
+        self.n_groups = n_groups
+        self.inhibition_strength = inhibition_strength
+    
+    def select(self, rates):
+        if len(rates) == 0:
+            return 0
+        rates = np.asarray(rates, dtype=np.float32)
+        rates = rates + np.random.uniform(0, 0.01, len(rates))
+        winner = np.argmax(rates)
+        return int(winner)
+
+
+# Backwards compat
+MotorDecoder = FixedThresholdDecoder
 
 
 if __name__ == "__main__":
-    # Test
-    n_neurons = 138639
-    decoder = MotorDecoder(n_neurons)
+    decoder = FixedThresholdDecoder(threshold=0.1, cooldown=3)
     
-    # Simulate random spikes
-    rng = np.random.RandomState(42)
+    # Test with baseline (no spikes)
+    spikes_zero = np.zeros(138639)
+    action = decoder.decode(spikes_zero, n_steps=10)
+    print(f'Baseline: action={action} ({decoder.get_action_name(action)})')
     
-    for step in range(100):
-        spikes = rng.poisson(0.1, n_neurons).astype(np.float32)
-        action = decoder.decode(spikes)
-        if step % 20 == 0:
-            rates = decoder.get_group_rates()
-            print(f"  Step {step}: action={action} ({decoder.ACTION_NAMES[action]}), "
-                  f"rates={[f'{rates[a]:.1f}' for a in range(3)]}")
+    # Test with DNg13_LEFT active
+    spikes_left = np.zeros(138639)
+    spikes_left[105779] = 5  # 5 spikes in 10 steps = 50 Hz
+    action = decoder.decode(spikes_left, n_steps=10)
+    print(f'DNg13_LEFT active: action={action} ({decoder.get_action_name(action)})')
     
-    print(f"\n[motor_decoder] Confidence: {decoder.get_action_confidence():.3f}")
+    # Test with GF active
+    spikes_gf = np.zeros(138639)
+    spikes_gf[123853] = 10
+    action = decoder.decode(spikes_gf, n_steps=10)
+    print(f'GF active: action={action} ({decoder.get_action_name(action)})')
+    
+    # Test with both DNg13
+    spikes_both = np.zeros(138639)
+    spikes_both[105779] = 5
+    spikes_both[79732] = 5
+    action = decoder.decode(spikes_both, n_steps=10)
+    print(f'Both DNg13: action={action} ({decoder.get_action_name(action)})')
+    
+    print('[motor_decoder] FixedThresholdDecoder OK')
