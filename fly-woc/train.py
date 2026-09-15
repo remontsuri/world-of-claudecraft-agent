@@ -158,9 +158,17 @@ class Runner:
         self.args = args
         self.device = device
         self.brain = FlyBrain(device=device) if args.policy == "fly" else None
+        self.oracle_table = None
+        if getattr(args, "oracle_obs", False) and args.policy == "fly":
+            from quest_oracle import load_table, guidance_from_obs, oracle_vector  # noqa: F401
+            global oracle_vector
+            self.oracle_table = load_table()
+            print(f"[oracle] side channel into the readout: +5 inputs "
+                  f"({len(self.oracle_table['quests'])} quests)", flush=True)
         if args.policy == "fly":
             torch.manual_seed(args.seed)
-            self.net = FlyBrainReadout(self.brain.n_dn, n_actions).to(device)
+            extra = 5 if self.oracle_table is not None else 0
+            self.net = FlyBrainReadout(self.brain.n_dn + extra, n_actions).to(device)
         else:
             torch.manual_seed(args.seed)
             self.net = MLPControl(obs_dim, n_actions).to(device)
@@ -173,10 +181,25 @@ class Runner:
         self.mask_abilities = getattr(args, "mask_abilities", False)
         self.ability_idx = getattr(args, "ability_idx", None)
 
+    def oracle_extra(self, obs: np.ndarray) -> torch.Tensor | None:
+        """Боковой канал: 5 чисел «где следующая цель квеста» (quest_oracle.py).
+
+        Зачем именно так: obs показывает цель только в 60 юнитах, а первый NPC
+        стоит в ~750 — без этого входа политика учится навигации вслепую
+        (шейпинг награды даёт градиент, но не признак направления). Схема при
+        этом не переобучается: вектор подаётся прямо в readout, а не в цепь.
+        """
+        if self.oracle_table is None:
+            return None
+        rows = [oracle_vector(o, table=self.oracle_table) for o in obs]
+        return torch.as_tensor(np.stack(rows), device=self.device)
+
     def feats(self, obs: np.ndarray, silenced: bool = False) -> torch.Tensor:
         if self.brain is not None:
             f = np.stack([extract_features(o) for o in obs])
-            return self.brain.step(torch.as_tensor(f, device=self.device), silenced=silenced)
+            base = self.brain.step(torch.as_tensor(f, device=self.device), silenced=silenced)
+            extra = self.oracle_extra(obs)
+            return base if extra is None else torch.cat([base, extra], dim=1)
         return torch.as_tensor(obs, device=self.device)
 
     def episode_reset(self, batch: int):
@@ -348,6 +371,10 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     global _ACTION_NAMES
     rewards = json.loads(args.rewards) if args.rewards else None
     env = _EnvClass(player_class=args.player_class, max_steps=args.max_steps, rewards=rewards)
+    oracle_tbl, net_extra = None, False
+    if getattr(args, "oracle_obs", False) and args.policy == "fly":
+        from quest_oracle import load_table, oracle_vector
+        oracle_tbl, net_extra = load_table(), True
     _ACTION_NAMES = env.action_names
     if getattr(args, "mask_abilities", False):
         args.ability_idx = [i for i, name in enumerate(env.action_names) if name.startswith("ability_")]
@@ -388,6 +415,9 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
                     if brain is not None:
                         f = brain.step(torch.as_tensor(extract_features(obs)[None]),
                                        silenced=(base == "fly-silenced"))
+                        if net_extra:
+                            f = torch.cat([f, torch.as_tensor(
+                                oracle_vector(obs, table=oracle_tbl)[None])], dim=1)
                     else:
                         f = torch.as_tensor(obs[None])
                     logits = net(f)[0]
@@ -506,6 +536,9 @@ if __name__ == "__main__":
     p.add_argument("--tag", default="", help="suffix for params/log/benchmark filenames")
     p.add_argument("--conditions", default=None, help="comma-separated subset of conditions to evaluate (merged into existing benchmark)")
     p.add_argument("--eval-seed", type=int, default=900001, dest="eval_seed")
+    p.add_argument("--oracle-obs", action="store_true", dest="oracle_obs",
+                   help="feed quest-oracle guidance (5 dims) into the readout as a side "
+                        "channel; the connectome itself stays frozen");
     p.add_argument("--oracle-shaping", type=float, default=0.0, dest="oracle_shaping",
                    help="reward weight for closing distance to the next quest objective "
                         "(quest_oracle.py); 0 = off")

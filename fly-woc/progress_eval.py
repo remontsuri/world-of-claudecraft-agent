@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from wow_env import WoWClassicEnv  # noqa: E402
 from fly_brain import FlyBrain, extract_features, FEATURE_VERSION  # noqa: E402
+from quest_oracle import load_table, oracle_vector  # noqa: E402
 from agent import FlyBrainReadout, MLPControl  # noqa: E402
 
 # xp-таблица игры (src/sim/types.ts, XP_TABLE): xp внутри уровня -> суммарно
@@ -63,7 +64,8 @@ def ability_mask(obs: np.ndarray, ability_idx, n_actions: int, gcd_threshold: fl
     return torch.as_tensor(allowed)
 
 
-def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability_idx=None):
+def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability_idx=None,
+                oracle_tbl=None):
     obs, info = env.reset(seed=seed)
     if brain is not None:
         brain.reset(1)
@@ -83,6 +85,9 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability
                 if brain is not None:
                     f = brain.step(torch.as_tensor(extract_features(obs)[None]),
                                    silenced=(policy == "fly-silenced"))
+                    if oracle_tbl is not None:
+                        f = torch.cat([f, torch.as_tensor(
+                            oracle_vector(obs, table=oracle_tbl)[None])], dim=1)
                 else:
                     f = torch.as_tensor(obs[None])
                 logits = net(f)[0]
@@ -125,13 +130,14 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability
     return out
 
 
-def build(policy: str, checkpoint: Path | None, seed: int, obs_dim: int, n_actions: int):
+def build(policy: str, checkpoint: Path | None, seed: int, obs_dim: int, n_actions: int,
+          oracle_extra: int = 0):
     base = policy[:-len("-sampled")] if policy.endswith("-sampled") else policy
     brain = FlyBrain() if base.startswith("fly") else None
     net = None
     if base.startswith("fly"):
         torch.manual_seed(seed)
-        net = FlyBrainReadout(brain.n_dn, n_actions)
+        net = FlyBrainReadout(brain.n_dn + oracle_extra, n_actions)
         if checkpoint is not None and base != "fly-untrained":
             net.load_state_dict(torch.load(checkpoint, weights_only=False)["state"])
         net.eval()
@@ -156,6 +162,8 @@ def main() -> int:
                     help="сид сэмплинга действий; должен совпадать с train.py --seed, иначе эпизод другой")
     ap.add_argument("--rewards", default='{"xp": 0.02, "kill": 1.0, "timePenalty": 0.001, "questProgress": 1.0, "questDone": 10, "levelUp": 5}')
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--oracle-obs", action="store_true", dest="oracle_obs",
+                    help="policy was trained with the quest-oracle side channel (+5 inputs)")
     ap.add_argument("--mask-abilities", action="store_true", dest="mask_abilities",
                     help="mask ability_* actions while the GCD ticks (must match training)")
     args = ap.parse_args()
@@ -163,11 +171,14 @@ def main() -> int:
     rewards = json.loads(args.rewards) if args.rewards else None
     env = WoWClassicEnv(player_class="warrior", max_steps=args.max_steps, rewards=rewards)
     ckpt = args.checkpoint if args.checkpoint and Path(args.checkpoint).exists() else None
-    brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0], env.action_space.n)
+    oracle_tbl = load_table() if (args.oracle_obs and args.policy == "fly") else None
+    brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0],
+                       env.action_space.n, oracle_extra=5 if oracle_tbl is not None else 0)
 
     print(f"policy={args.policy} encoder={FEATURE_VERSION} "
           f"checkpoint={ckpt if ckpt else '(none)'} max_steps={args.max_steps}"
-          f"{' mask=GCD' if args.mask_abilities else ''}")
+          f"{' mask=GCD' if args.mask_abilities else ''}"
+          f"{' oracle=side-channel' if oracle_tbl is not None else ''}")
     print(f"{'seed':>8} {'steps':>6} {'reward':>9} {'lvl':>4} {'xp':>6} {'to_next':>8} "
           f"{'kills':>6} {'deaths':>7} {'quests':>7} {'1st_q':>6} {'travel':>8} {'acts':>5}")
     ability_idx = ([i for i, name in enumerate(env.action_names) if name.startswith("ability_")]
@@ -175,7 +186,7 @@ def main() -> int:
     rows = []
     for k in range(args.episodes):
         r = run_episode(env, brain, net, args.policy, args.seed0 + k, args.max_steps,
-                        ability_idx=ability_idx)
+                        ability_idx=ability_idx, oracle_tbl=oracle_tbl)
         rows.append(r)
         print(f"{r['seed']:>8} {r['steps']:>6} {r['reward']:>9} {r['level']:>4} {r['xp']:>6} "
               f"{r['xp_to_next']:>8} {r['kills']:>6} {r['deaths']:>7} {r['quests_done']:>7} "

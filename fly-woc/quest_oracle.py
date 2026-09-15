@@ -111,12 +111,24 @@ def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | N
     return {"quest": None, "name": None, "target_kind": "all_done"}
 
 
-def oracle_vector(obs: np.ndarray, x: float, z: float, facing: float,
-                  table: dict | None = None) -> np.ndarray:
-    """5 чисел для входного канала: [dist_norm, sin, cos, active?, ready?]."""
-    g = guidance(obs, x, z, facing, table)
+def guidance_from_obs(obs: np.ndarray, table: dict | None = None) -> dict:
+    """Самодостаточно: x, z и facing берём из obs (4, 5, 6/7 — obs.ts)."""
+    o = np.asarray(obs, dtype=np.float32).reshape(-1)
+    facing = float(np.arctan2(o[6], o[7]))
+    return guidance(o, float(o[4]) * WORLD_MAX_X, float(o[5]) * WORLD_MAX_X, facing, table)
+
+
+def oracle_vector(obs: np.ndarray, x: float | None = None, z: float | None = None,
+                  facing: float | None = None, table: dict | None = None) -> np.ndarray:
+    """5 чисел для бокового канала политики: [dist_norm, sin, cos, active?, ready?].
+
+    Если координаты не переданы, берём их из самой obs. Когда незакрытых квестов
+    нет — dist_norm = 1.5 (максимум), чтобы «нечего делать» не читалось как
+    «стоим на цели».
+    """
+    g = (guidance_from_obs(obs, table) if x is None else guidance(obs, x, z, facing or 0.0, table))
     if g.get("quest") is None:
-        return np.zeros(5, dtype=np.float32)
+        return np.asarray([DIST_CLAMP, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
     state = g["quest_state"]
     return np.asarray([g["dist_norm"], g["sin"], g["cos"],
                        1.0 if state == "active" else 0.0,
