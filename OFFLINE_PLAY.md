@@ -122,7 +122,7 @@ FLY_FEATURES=v2 WOC_PYTHON_PATH="D:/woc-game/python" python train.py \
   --rewards '{"xp": 0.02, "kill": 1.0, "damageDealt": 0.002, "timePenalty": 0.001, "questProgress": 1.0, "questDone": 10, "levelUp": 5}'
 # замер прогресса (обязательно с тем же энкодером и маской)
 FLY_FEATURES=v2 WOC_PYTHON_PATH="D:/woc-game/python" python progress_eval.py \
-  --policy fly-sampled --episodes 3 --max-steps 8000
+  --policy fly-sampled --episodes 3 --max-steps 8000 --mask-abilities
 ```
 
 ---

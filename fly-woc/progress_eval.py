@@ -49,7 +49,21 @@ ACCEPTANCE = {
 }
 
 
-def run_episode(env, brain, net, policy: str, seed: int, max_steps: int):
+def ability_mask(obs: np.ndarray, ability_idx, n_actions: int, gcd_threshold: float = 1e-3):
+    """True = action allowed. obs[8] = gcdRemaining / GCD (src/sim/obs.ts), so a value
+    above the threshold means abilities are on cooldown and a cast would only queue.
+    Same rule as train.py: a policy trained with the mask must be measured with it."""
+    o = np.asarray(obs, dtype=np.float32)
+    allowed = np.ones((o.shape[0], n_actions), dtype=bool)
+    if ability_idx is None or not len(ability_idx):
+        return torch.as_tensor(allowed)
+    ticking = np.nonzero(o[:, 8] > gcd_threshold)[0]
+    if len(ticking):
+        allowed[np.ix_(ticking, np.asarray(ability_idx))] = False
+    return torch.as_tensor(allowed)
+
+
+def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability_idx=None):
     obs, info = env.reset(seed=seed)
     if brain is not None:
         brain.reset(1)
@@ -72,6 +86,9 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int):
                 else:
                     f = torch.as_tensor(obs[None])
                 logits = net(f)[0]
+                if ability_idx:
+                    m = ability_mask(np.asarray(obs)[None], ability_idx, logits.shape[-1])
+                    logits = logits.masked_fill(~m[0], -1e9)
                 a = (int(torch.distributions.Categorical(logits=logits).sample())
                      if policy.endswith("-sampled") else int(logits.argmax(-1)))
         obs, r, term, trunc, info = env.step(a)
@@ -139,6 +156,8 @@ def main() -> int:
                     help="сид сэмплинга действий; должен совпадать с train.py --seed, иначе эпизод другой")
     ap.add_argument("--rewards", default='{"xp": 0.02, "kill": 1.0, "timePenalty": 0.001, "questProgress": 1.0, "questDone": 10, "levelUp": 5}')
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--mask-abilities", action="store_true", dest="mask_abilities",
+                    help="mask ability_* actions while the GCD ticks (must match training)")
     args = ap.parse_args()
 
     rewards = json.loads(args.rewards) if args.rewards else None
@@ -147,12 +166,16 @@ def main() -> int:
     brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0], env.action_space.n)
 
     print(f"policy={args.policy} encoder={FEATURE_VERSION} "
-          f"checkpoint={ckpt if ckpt else '(none)'} max_steps={args.max_steps}")
+          f"checkpoint={ckpt if ckpt else '(none)'} max_steps={args.max_steps}"
+          f"{' mask=GCD' if args.mask_abilities else ''}")
     print(f"{'seed':>8} {'steps':>6} {'reward':>9} {'lvl':>4} {'xp':>6} {'to_next':>8} "
           f"{'kills':>6} {'deaths':>7} {'quests':>7} {'1st_q':>6} {'travel':>8} {'acts':>5}")
+    ability_idx = ([i for i, name in enumerate(env.action_names) if name.startswith("ability_")]
+                   if args.mask_abilities else None)
     rows = []
     for k in range(args.episodes):
-        r = run_episode(env, brain, net, args.policy, args.seed0 + k, args.max_steps)
+        r = run_episode(env, brain, net, args.policy, args.seed0 + k, args.max_steps,
+                        ability_idx=ability_idx)
         rows.append(r)
         print(f"{r['seed']:>8} {r['steps']:>6} {r['reward']:>9} {r['level']:>4} {r['xp']:>6} "
               f"{r['xp_to_next']:>8} {r['kills']:>6} {r['deaths']:>7} {r['quests_done']:>7} "
