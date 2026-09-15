@@ -1,0 +1,7 @@
+[fly-sampled]
+  fly-sampled     seed 900001: steps  8000 reward    39.466 lvl 1 xp 60 kills 0 deaths 0 quests 1
+  fly-sampled     seed 900002: steps  8000 reward    38.760 lvl 1 xp 60 kills 0 deaths 0 quests 1
+  fly-sampled     seed 900003: steps  8000 reward    39.320 lvl 1 xp 60 kills 0 deaths 0 quests 1
+[fly]
+  fly             seed 900001: steps  8000 reward     8.000 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly             seed 900002: steps  8000 reward     8.000 lvl 1 xp 0 kills 0 deaths 0 quests 0

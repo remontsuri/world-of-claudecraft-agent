@@ -14,6 +14,7 @@ normalization and drive mapping are fixed.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -28,12 +29,97 @@ DYNAMICS = {"iterations": 3, "leak": 0.7, "gain": 1.4, "outputGain": 4.0}  # Fly
 #   paladin tail 604..606
 # 13 engineered features; the assignment to cell types is a fixed engineering
 # encoder with no claimed biological interpretation (Fly Dino v2 wording).
+# v2 channel names (same 13 slots, different semantics from index 8 on).
+FEATURE_NAMES_V2 = ["hp", "resource", "in_combat", "gcd_ready", "target_exists",
+                    "target_dist", "target_sin", "target_cos", "mob0_dist",
+                    "mob0_sin", "mob0_cos", "interact_prox", "quest_signal"]
 FEATURE_NAMES = ["hp", "resource", "in_combat", "gcd_ready", "target_exists",
                  "target_dist", "target_hp", "target_sin", "target_cos",
                  "nearest_mob_dist", "mob_pressure", "ability_ready", "quest_progress"]
 
 
-def extract_features(obs: np.ndarray) -> np.ndarray:
+def extract_features_v2(obs: np.ndarray) -> np.ndarray:
+    """Navigation-aware encoder: same 13 channels, richer semantics.
+
+    v1 collapsed the observation to 13 scalars that carry NO direction and NO
+    position (it averaged quest progress and mob aggro). That is enough to fight
+    whatever happens to be in front of you and to finish a quest by accident, but
+    it cannot express "walk to that corpse" or "go to the quest giver", which is
+    what every milestone past the starter quest needs.
+
+    v2 keeps the SAME 13 channel slots, so the existing circuit.json (13 channels
+    x 4 cells = 52 input cells) is reused unchanged and only the readout is
+    retrained:
+
+        0 hp                       [v1: same]
+        1 resource                 [v1: same]
+        2 in_combat                [v1: same]
+        3 gcd_ready                [v1: same]
+        4 target_exists            [v1: same, now hostile-aware]
+        5 target_dist              [v1: same, d/40 clamped to the obs ceiling]
+        6 target_sin               [v1: same]
+        7 target_cos               [v1: same]
+        8 mob0_dist                [v1: "nearest mob dist" - identical index]
+        9 mob0_sin                 [v1: mob aggro fraction -> replaced by bearing]
+       10 mob0_cos                 [same slot, other bearing component]
+       11 interact_proximity       [v1: mean ability readiness -> replaced: how
+                                    close the nearest interactable is, 1 = in
+                                    range, which is exactly the signal that
+                                    gates interact/loot/quest-NPC actions]
+       12 quest_signal             [v1: mean quest progress -> now progress of the
+                                    most advanced open quest (falls back to mean)]
+
+    Observation indices are from the game's own encoder,
+    src/sim/obs.ts encodeObs(): mobs 121..150 are 5 x [dist, sin, cos, hp, level,
+    aggro], the interactable block is 151..155, quests are 156..603 as 224 pairs
+    [progress, state] with state 'done' -> progress 1.
+    """
+    o = np.asarray(obs, dtype=np.float32).reshape(-1)
+    n = o.shape[0]
+    if n < 156:                      # truncated obs (tests): fall back to v1
+        return extract_features_v1(obs)
+
+    # Distances in the obs are ALREADY d/40 clamped to 1.5 (the 60-unit obs
+    # radius), so they only need rescaling into 0..1 - never another /40.
+    def unit(i: int) -> float:
+        return float(np.clip(o[i] / 1.5, 0.0, 1.0))
+
+    # Interactable block 151..155 = [exists, d/40, sin, cos, type]
+    interact_exists = float(o[151]) if n > 151 else 0.0
+    interact_prox = interact_exists * (1.0 - unit(152))
+
+    # Quest block 156..603 = 224 x [state, progress], states:
+    # 0 not taken, 0.33 active, 0.66 ready to turn in, 1 done.
+    quests = o[156:604].reshape(-1, 2) if n >= 604 else np.zeros((0, 2), np.float32)
+    if quests.size:
+        state, progress = quests[:, 0], quests[:, 1]
+        ready = bool(((state > 0.5) & (state < 1.0)).any())   # 0.66: hand it in
+        active = state == 0.33
+        # Prefer "something is ready to turn in" (that is the productive action),
+        # else the most advanced active quest.
+        quest_signal = 1.0 if ready else (float(progress[active].max()) if active.any() else 0.0)
+    else:
+        quest_signal = 0.0
+
+    return np.array([
+        o[0],                                        # hp ratio
+        o[1],                                        # resource ratio
+        o[11],                                       # in combat flag
+        1.0 - o[8],                                  # gcd ready
+        o[112],                                      # target exists
+        unit(115),                                   # target distance
+        0.5 * (float(o[116]) + 1.0),                 # target bearing sin -> 0..1
+        0.5 * (float(o[117]) + 1.0),                 # target bearing cos -> 0..1
+        unit(121),                                   # nearest hostile mob distance
+        0.5 * (float(o[122]) + 1.0),                 # nearest mob bearing sin
+        0.5 * (float(o[123]) + 1.0),                 # nearest mob bearing cos
+        interact_prox,                               # interactable/loot/quest-NPC proximity
+        quest_signal,                                # ready-to-turn-in, else max progress
+    ], dtype=np.float32)
+
+
+def extract_features_v1(obs: np.ndarray) -> np.ndarray:
+    """Original 13-channel encoder (kept for the committed v1 checkpoints)."""
     o = obs
     mob_aggro = o[126:151:6].mean() if o.shape[0] > 150 else 0.0
     return np.array([
@@ -51,6 +137,16 @@ def extract_features(obs: np.ndarray) -> np.ndarray:
         o[16:112:2].mean(),                          # ability readiness fraction
         o[157:604:2].mean(),                         # mean quest progress
     ], dtype=np.float32)
+
+
+# Feature set selector. v1 = committed checkpoints (params_fly_v2.pt); v2 =
+# navigation-aware, same 13 slots, needs a retrained readout. Set FLY_FEATURES=v2.
+FEATURE_VERSION = os.environ.get("FLY_FEATURES", "v1").strip().lower()
+
+
+def extract_features(obs: np.ndarray) -> np.ndarray:
+    """Dispatch on FLY_FEATURES so one env var switches encoder+checkpoint together."""
+    return extract_features_v2(obs) if FEATURE_VERSION == "v2" else extract_features_v1(obs)
 
 
 class FlyBrain:

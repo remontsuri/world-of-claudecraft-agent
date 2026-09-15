@@ -101,6 +101,12 @@ class Runner:
             self.net = MLPControl(obs_dim, n_actions).to(device)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=args.lr)
         self.n_actions = n_actions
+        # Ability actions are gated by the game's GCD: casting again while it
+        # ticks mostly queues/voids. Measured on the committed v2 checkpoint:
+        # 71.6% of steps were ability casts spread over all 48 slots, i.e. the
+        # policy spent most of an episode on a 1-per-GCD resource.
+        self.mask_abilities = getattr(args, "mask_abilities", False)
+        self.ability_idx = getattr(args, "ability_idx", None)
 
     def feats(self, obs: np.ndarray, silenced: bool = False) -> torch.Tensor:
         if self.brain is not None:
@@ -113,8 +119,11 @@ class Runner:
             self.brain.reset(batch)
 
     @torch.no_grad()
-    def act(self, feats: torch.Tensor, deterministic: bool = False):
+    def act(self, feats: torch.Tensor, mask: torch.Tensor | None = None,
+            deterministic: bool = False):
         logits, value = self.net(feats)
+        if mask is not None:
+            logits = logits.masked_fill(~mask, -1e9)
         dist = torch.distributions.Categorical(logits=logits)
         a = logits.argmax(-1) if deterministic else dist.sample()
         return a.cpu().numpy(), dist.log_prob(a), value, dist.entropy()
@@ -122,6 +131,8 @@ class Runner:
 
 # ------------------------------------------------------------------ PPO
 def ppo_update(net, opt, batch, clip=0.2, ent_coef=0.02, vf_coef=0.5, epochs=4, mb=64):
+    """mask: (N, n_actions) True = allowed; must match the mask used at sampling,
+    otherwise the importance ratio is computed against a different policy."""
     n = batch["feats"].shape[0]
     adv = batch["adv"]
     adv = (adv - adv.mean()) / (adv.std() + 1e-8)
@@ -131,6 +142,8 @@ def ppo_update(net, opt, batch, clip=0.2, ent_coef=0.02, vf_coef=0.5, epochs=4, 
         for s in range(0, n, mb):
             ix = perm[s:s + mb]
             logits, value = net(batch["feats"][ix])
+            if batch.get("mask") is not None:
+                logits = logits.masked_fill(~batch["mask"][ix], -1e9)
             dist = torch.distributions.Categorical(logits=logits)
             logp = dist.log_prob(batch["action"][ix])
             ratio = torch.exp(logp - batch["logp"][ix])
@@ -160,6 +173,20 @@ def compute_gae(rewards, values, dones, last_value, gamma=0.99, lam=0.95):
     return adv, adv + values
 
 
+def ability_mask(obs: np.ndarray, ability_idx, n_actions: int, gcd_threshold: float = 1e-3):
+    """True = action allowed. src/sim/obs.ts: obs[8] = gcdRemaining / GCD, so any
+    value above the threshold means abilities are on cooldown and a cast would
+    only queue."""
+    o = np.asarray(obs, dtype=np.float32)
+    allowed = np.ones((o.shape[0], n_actions), dtype=bool)
+    if ability_idx is None or not len(ability_idx):
+        return torch.as_tensor(allowed)
+    ticking = np.nonzero(o[:, 8] > gcd_threshold)[0]
+    if len(ticking):
+        allowed[np.ix_(ticking, np.asarray(ability_idx))] = False
+    return torch.as_tensor(allowed)
+
+
 def train(args):
     OUT.mkdir(exist_ok=True)
     torch.manual_seed(args.seed)
@@ -168,6 +195,8 @@ def train(args):
     batch = EnvBatch(args.envs, args.max_steps, args.player_class, rewards=rewards)
     obs_dim = batch.envs[0].observation_space.shape[0]
     n_actions = batch.envs[0].action_space.n
+    action_names = batch.envs[0].action_names
+    args.ability_idx = [i for i, name in enumerate(action_names) if name.startswith("ability_")]
     runner = Runner(args, args.envs, obs_dim, n_actions)
     batch.reset([int(rng.integers(1, 900000)) for _ in range(args.envs)])
     runner.episode_reset(args.envs)
@@ -175,10 +204,14 @@ def train(args):
     log = []
     t0 = time.time()
     for update in range(1, args.updates + 1):
-        buf = {"feats": [], "action": [], "logp": [], "value": [], "reward": [], "done": []}
+        buf = {"feats": [], "action": [], "logp": [], "value": [], "reward": [], "done": [],
+               "mask": []}
         for _ in range(args.steps):
             feats = runner.feats(batch.obs)
-            actions, logp, value, _ = runner.act(feats)
+            mask = (ability_mask(batch.obs, runner.ability_idx, n_actions)
+                    if runner.mask_abilities else None)
+            actions, logp, value, _ = runner.act(feats, mask=mask)
+            buf["mask"].append(mask if mask is not None else torch.ones(len(batch.obs), n_actions, dtype=torch.bool))
             dones, rewards = batch.step(actions)
             buf["feats"].append(feats); buf["action"].append(torch.as_tensor(actions))
             buf["logp"].append(logp); buf["value"].append(value)
@@ -217,10 +250,12 @@ def _finish_update(runner, buf, batch):
     with torch.no_grad():
         last_value = runner.net(runner.feats(batch.obs))[1]
     adv, ret = compute_gae(reward, value, done, last_value)
+    mask = torch.stack(buf["mask"]).reshape(-1, feats.shape[-1] and buf["mask"][0].shape[-1]) \
+        if runner.mask_abilities else None
     stats = ppo_update(runner.net, runner.opt, {
         "feats": feats.reshape(-1, feats.shape[-1]), "action": action.reshape(-1),
         "logp": logp.reshape(-1), "value": value.reshape(-1),
-        "adv": adv.reshape(-1), "ret": ret.reshape(-1)})
+        "adv": adv.reshape(-1), "ret": ret.reshape(-1), "mask": mask})
     return stats
 
 
@@ -234,6 +269,8 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     rewards = json.loads(args.rewards) if args.rewards else None
     env = WoWClassicEnv(player_class=args.player_class, max_steps=args.max_steps, rewards=rewards)
     _ACTION_NAMES = env.action_names
+    if getattr(args, "mask_abilities", False):
+        args.ability_idx = [i for i, name in enumerate(env.action_names) if name.startswith("ability_")]
     n_actions = env.action_space.n
     obs_dim = env.observation_space.shape[0]
     sampled = policy_kind.endswith("-sampled")
@@ -273,6 +310,9 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
                     else:
                         f = torch.as_tensor(obs[None])
                     logits = net(f)[0]
+                    if getattr(args, "mask_abilities", False) and getattr(args, "ability_idx", None):
+                        m = ability_mask(np.asarray(obs)[None], args.ability_idx, n_actions)
+                        logits = logits.masked_fill(~m, -1e9)
                     if sampled:
                         a = int(torch.distributions.Categorical(logits=logits).sample())
                     else:
@@ -370,6 +410,9 @@ if __name__ == "__main__":
     p.add_argument("--tag", default="", help="suffix for params/log/benchmark filenames")
     p.add_argument("--conditions", default=None, help="comma-separated subset of conditions to evaluate (merged into existing benchmark)")
     p.add_argument("--eval-seed", type=int, default=900001, dest="eval_seed")
+    p.add_argument("--mask-abilities", action="store_true", dest="mask_abilities",
+                   help="block ability actions while the GCD ticks (kills the 71.6%-of-steps cast spam); "
+                        "train and evaluate with the same flag")
     args = p.parse_args()
     if args.eval_only:
         benchmark(args)
