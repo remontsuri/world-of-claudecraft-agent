@@ -1,0 +1,65 @@
+--- build_circuit.orig.py	2026-09-15 10:08:46.828642168 +0000
++++ /home/user/repo/fly-woc/build_circuit.py	2026-09-15 10:01:33.256642168 +0000
+@@ -119,6 +119,40 @@
+     return keep
+ 
+ 
++def write_graph(path: Path, nodes, pre_i, post_i, w, inputs, readout, chunk: int = 200_000):
++    """Write circuit.json as a stream in ascending (pre, post, weight) order.
++
++    The traced table keeps ~1.9M edges, the full 1.05 GB table an order of
++    magnitude more: a ``sorted()`` list of Python lists (~150 B/edge) and one
++    giant ``json.dumps`` string both stop fitting in RAM at that scale. Order is
++    identical to the previous ``sorted([a, b, c] ...)`` implementation, so the
++    tracing-only output stays byte-identical (sha256 3514c098...).
++    """
++    order = np.argsort(pre_i, kind="stable")          # int32 -> int64 indices
++    bounds = np.searchsorted(pre_i[order], np.arange(len(nodes)), side="left")
++    bounds = np.append(bounds, len(order))
++    with path.open("w") as fh:
++        fh.write(json.dumps({"version": "malecns-woc-circuit-v1", "nodes": nodes},
++                            separators=(",", ":"))[:-1] + ',"edges":[')
++        first, buf = True, []
++        for node in range(len(nodes)):
++            start, stop = int(bounds[node]), int(bounds[node + 1])
++            if stop <= start:
++                continue
++            idx = order[start:stop]
++            idx = idx[np.lexsort((w[idx], post_i[idx]))]
++            buf.extend(f"[{int(pre_i[j])},{int(post_i[j])},{int(w[j])}]" for j in idx)
++            if len(buf) >= chunk:
++                fh.write(("" if first else ",") + ",".join(buf))
++                first, buf = False, []
++        if buf:
++            fh.write(("" if first else ",") + ",".join(buf))
++        tail = json.dumps({"inputs": inputs, "outputs": readout, "channels": CHANNEL_NAMES,
++                           "input_types": [t for _, t in CHANNEL_TYPES]}, separators=(",", ":"))
++        fh.write("]," + tail[1:] + "\n")
++    return int(len(order))
++
++
+ def main():
+     OUT.mkdir(parents=True, exist_ok=True)
+     ann = load_annotations()
+@@ -216,19 +250,14 @@
+                       "side": str(sides[p]),
+                       "nt": (None if nts[p] != nts[p] else str(nts[p])),
+                       "sign": float(signs[p]), "role": role.get(int(b), "interneuron")})
+-    edges = sorted([int(a), int(b), int(c)] for a, b, c in zip(pre_i, post_i, w))
+-
+-    graph = {"version": "malecns-woc-circuit-v1", "nodes": nodes, "edges": edges,
+-             "inputs": inputs, "outputs": readout, "channels": CHANNEL_NAMES,
+-             "input_types": [t for _, t in CHANNEL_TYPES]}
+-    (OUT / "circuit.json").write_text(json.dumps(graph, separators=(",", ":")) + "\n")
++    n_edges = write_graph(OUT / "circuit.json", nodes, pre_i, post_i, w, inputs, readout)
+ 
+     manifest = {
+         "dataset": "FlyEM MaleCNS v1.0, min confidence 0.5, traced-only edges",
+         "license": "CC BY 4.0",
+         "source": "https://male-cns.janelia.org/download/",
+         "sources": src_hashes,
+-        "nodes": len(V), "edges": len(edges), "synapticContacts": int(w.sum()),
++        "nodes": len(V), "edges": n_edges, "synapticContacts": int(w.sum()),
+         "descendingTotal": int(len(dn_ids)),
+         "inputCells": len(inputs), "readoutCells": len(readout),
+         "graphSha256": sha256(OUT / "circuit.json"),
