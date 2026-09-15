@@ -54,7 +54,8 @@ OUT = Path(__file__).parent / "outputs"
 
 # ------------------------------------------------------------------ env batch
 class EnvBatch:
-    def __init__(self, n: int, max_steps: int, player_class: str, rewards: dict | None = None):
+    def __init__(self, n: int, max_steps: int, player_class: str, rewards: dict | None = None,
+                 args=None):
         self.envs = [_EnvClass(player_class=player_class, max_steps=max_steps, rewards=rewards)
                      for _ in range(n)]
         self.env_crashes = 0
@@ -64,6 +65,20 @@ class EnvBatch:
         self.last_infos = [{} for _ in range(n)]
         self.max_crashes = int(os.environ.get("WOC_MAX_ENV_CRASHES", "100"))
         self.finished: list[dict] = []
+        # Quest-oracle shaping (quest_oracle.py): the obs shows a target only within
+        # 1.5*40 = 60 units, but the first quest giver stands ~750 units away, so the
+        # quest chain is unreachable by reward alone. Give the policy a gradient:
+        # reward for closing the distance to the next objective of the next quest.
+        self.oracle = None
+        self.oracle_w = float(getattr(args, "oracle_shaping", 0.0) or 0.0)
+        self.prev_dist: list[float | None] = [None] * n
+        self.prev_quest: list[str | None] = [None] * n
+        self.shaped_total = 0.0
+        if self.oracle_w:
+            from quest_oracle import load_table, guidance
+            self.oracle, self._guidance = load_table(), guidance
+            print(f"[oracle] shaping on, weight {self.oracle_w} "
+                  f"({len(self.oracle['quests'])} quests)", flush=True)
 
     def reset(self, seeds: list[int]):
         for i, env in enumerate(self.envs):
@@ -102,7 +117,18 @@ class EnvBatch:
                 o, _ = env.reset()
                 self.obs[i] = o
                 self.ep_return[i] = 0; self.ep_len[i] = 0
+                self.prev_dist[i] = self.prev_quest[i] = None
                 continue
+            if self.oracle is not None:
+                g = self._guidance(o, float(o[4]) * 900.0, float(o[5]) * 900.0, 0.0, self.oracle)
+                qid, dist = g.get("quest"), g.get("dist")
+                if qid is not None and dist is not None and qid == self.prev_quest[i] \
+                        and self.prev_dist[i] is not None:
+                    shaped = self.oracle_w * float(np.clip((self.prev_dist[i] - dist) / 40.0, -1.0, 1.0))
+                    r = float(r) + shaped
+                    self.shaped_total += shaped
+                if qid is not None:
+                    self.prev_quest[i], self.prev_dist[i] = qid, dist
             self.obs[i] = o
             rewards[i] = r
             self.ep_return[i] += r; self.ep_len[i] += 1
@@ -116,6 +142,7 @@ class EnvBatch:
                 o, _ = env.reset()          # auto-reset; fresh seed stream from env
                 self.obs[i] = o
                 self.ep_return[i] = 0; self.ep_len[i] = 0
+                self.prev_dist[i] = self.prev_quest[i] = None
         return dones, rewards
 
     def close(self):
@@ -230,7 +257,7 @@ def train(args):
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     rewards = json.loads(args.rewards) if args.rewards else None
-    batch = EnvBatch(args.envs, args.max_steps, args.player_class, rewards=rewards)
+    batch = EnvBatch(args.envs, args.max_steps, args.player_class, rewards=rewards, args=args)
     obs_dim = batch.envs[0].observation_space.shape[0]
     n_actions = batch.envs[0].action_space.n
     action_names = batch.envs[0].action_names
@@ -258,17 +285,31 @@ def train(args):
         stats = _finish_update(runner, buf, batch)
         ep = list(batch.finished); batch.finished.clear()
         row = {"update": update, "seconds": round(time.time() - t0, 1), **stats,
-               "episodes": len(ep), "env_crashes": batch.env_crashes}
+               "episodes": len(ep), "env_crashes": batch.env_crashes,
+               "oracle_shaped": round(batch.shaped_total, 3)}
         if ep:
             row["ep_return"] = round(float(np.mean([e["reward"] for e in ep])), 4)
             row["ep_len"] = round(float(np.mean([e["steps"] for e in ep])), 1)
             row["max_level"] = int(max(e["level"] for e in ep))
             row["total_kills"] = int(sum(e["kills"] for e in ep))
         log.append(row)
+        for e in ep:
+            print(f"  [ep] update {update:4d} steps {e['steps']:5d} ret {e['reward']:8.3f} "
+                  f"lvl {e.get('level')} kills {e.get('kills')} quests {e.get('quests_done')}",
+                  flush=True)
+        if args.ckpt_every and update % args.ckpt_every == 0:
+            tag_now = f"_{args.tag}" if args.tag else ""
+            torch.save({"state": runner.net.state_dict(), "seed": args.seed, "updates": update,
+                        "policy": args.policy, "n_actions": n_actions},
+                       OUT / f"params_{args.policy}{tag_now}.pt")
+            (OUT / f"train_log_{args.policy}{tag_now}.json").write_text(json.dumps(
+                {"config": vars(args), "log": log, "env_crashes": batch.env_crashes}, indent=1))
+            print(f"  [ckpt] update {update} -> outputs/params_{args.policy}{tag_now}.pt", flush=True)
         if update % 10 == 0 or update == 1:
             print(f"update {update:4d} | {row.get('episodes', 0):3d} eps | "
                   f"ret {row.get('ep_return', float('nan')):8.3f} | len {row.get('ep_len', float('nan')):6.1f} | "
-                  f"lvl {row.get('max_level', '-')} | ent {stats['ent']:.3f} | {row['seconds']:.0f}s", flush=True)
+                  f"lvl {row.get('max_level', '-')} | ent {stats['ent']:.3f} | {row['seconds']:.0f}s"
+                  + (f" | shaped {row['oracle_shaped']:+.2f}" if batch.oracle_w else ""), flush=True)
 
     tag = f"_{args.tag}" if args.tag else ""
     params_path = OUT / f"params_{args.policy}{tag}.pt"
@@ -287,7 +328,8 @@ def _finish_update(runner, buf, batch):
     reward = torch.stack(buf["reward"]); done = torch.stack(buf["done"])
     with torch.no_grad():
         last_value = runner.net(runner.feats(batch.obs))[1]
-    adv, ret = compute_gae(reward, value, done, last_value)
+    adv, ret = compute_gae(reward, value, done, last_value,
+                           gamma=runner.args.gamma, lam=runner.args.lam)
     mask = torch.stack(buf["mask"]).reshape(-1, feats.shape[-1] and buf["mask"][0].shape[-1]) \
         if runner.mask_abilities else None
     stats = ppo_update(runner.net, runner.opt, {
@@ -464,6 +506,14 @@ if __name__ == "__main__":
     p.add_argument("--tag", default="", help="suffix for params/log/benchmark filenames")
     p.add_argument("--conditions", default=None, help="comma-separated subset of conditions to evaluate (merged into existing benchmark)")
     p.add_argument("--eval-seed", type=int, default=900001, dest="eval_seed")
+    p.add_argument("--oracle-shaping", type=float, default=0.0, dest="oracle_shaping",
+                   help="reward weight for closing distance to the next quest objective "
+                        "(quest_oracle.py); 0 = off")
+    p.add_argument("--gamma", type=float, default=0.99,
+                   help="discount; raise to ~0.999 when the goal (quest chain) is long")
+    p.add_argument("--lam", type=float, default=0.95, help="GAE lambda")
+    p.add_argument("--ckpt-every", type=int, default=0, dest="ckpt_every",
+                   help="save params/train_log every N updates (survives a reboot); 0 = off")
     p.add_argument("--mask-abilities", action="store_true", dest="mask_abilities",
                    help="block ability actions while the GCD ticks (kills the 71.6%-of-steps cast spam); "
                         "train and evaluate with the same flag")
