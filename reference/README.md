@@ -14,6 +14,7 @@
 | `build_circuit_fullscale.patch` | стриминговая запись `circuit.json` для `fly-woc/build_circuit.py` (для полной таблицы, иначе не влезает в RAM) |
 | `SHA256SUMS.txt` | хеши обеих схем и закоммиченного `circuit.json` |
 | `longhorizon_eval.log` | полный эпизод сервера (8000 шагов): fly-sampled — 39.47/38.76/39.32 reward, но **уровень 1, 60 xp, 0 киллов, 1 квест**; greedy fly — 8.00 и пусто. Это замер «играет ли муха» |
+| `env_crash_test_log.json` | краш-тест `env_robust.py`: 2 окружения, SIGKILL одного node посреди прогона — 10/10 апдейтов, exit 0, `env_crashes` = `0,0,0,0,0,1,1,1,1,1` |
 | `progress_eval_smoke.json` | вывод нового `progress_eval.py`: прогресс-метрики (уровень/xp/путь/квесты) и вердикт приёмки M1–M4 |
 
 ## Воспроизведение с нуля

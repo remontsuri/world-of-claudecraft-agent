@@ -144,6 +144,11 @@ python3 train.py --policy mlp --updates 400 --steps 128 --envs 1
 python3 train.py --eval-only --eval-episodes 5
 ```
 
+При `--envs > 1` сервер окружения может умереть; базовый `wow_env.py` глотает его stderr
+(`stderr=subprocess.DEVNULL`), поэтому наружу вылезает только `OSError: [Errno 22]`.
+`env_robust.py` это чинит — причина видна, сервер перезапускается, прогон доживает до конца
+(`ENV_ROBUST.md`, лог краш-теста `../reference/env_crash_test_log.json`).
+
 ## Прогресс: играет ли муха (а не «какой reward»)
 
 Reward набирается и стоя на месте (`questProgress` капает), поэтому прогресс измеряется

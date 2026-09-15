@@ -38,6 +38,14 @@ WOC_PYTHON = os.environ.get("WOC_PYTHON_PATH", "/home/user/repos/woc-game/python
 sys.path.insert(0, WOC_PYTHON)
 from wow_env import WoWClassicEnv  # noqa: E402
 
+# Robust env: captures the node server's stderr (the base class sends it to
+# DEVNULL, which is why a dead server only showed up as OSError Errno 22 on
+# Windows) and restarts a crashed server instead of killing the whole run.
+try:
+    from env_robust import RobustWoWEnv as _EnvClass, EnvServerDied  # noqa: E402
+except Exception:                      # no game checkout / base env import failed
+    _EnvClass, EnvServerDied = WoWClassicEnv, RuntimeError
+
 from fly_brain import FlyBrain, extract_features  # noqa: E402
 from agent import FlyBrainReadout, MLPControl  # noqa: E402
 
@@ -47,24 +55,54 @@ OUT = Path(__file__).parent / "outputs"
 # ------------------------------------------------------------------ env batch
 class EnvBatch:
     def __init__(self, n: int, max_steps: int, player_class: str, rewards: dict | None = None):
-        self.envs = [WoWClassicEnv(player_class=player_class, max_steps=max_steps, rewards=rewards)
+        self.envs = [_EnvClass(player_class=player_class, max_steps=max_steps, rewards=rewards)
                      for _ in range(n)]
+        self.env_crashes = 0
         self.n = n
         self.obs = np.zeros((n, self.envs[0].observation_space.shape[0]), np.float32)
         self.ep_return = np.zeros(n); self.ep_len = np.zeros(n, np.int64)
         self.last_infos = [{} for _ in range(n)]
+        self.max_crashes = int(os.environ.get("WOC_MAX_ENV_CRASHES", "100"))
         self.finished: list[dict] = []
 
     def reset(self, seeds: list[int]):
         for i, env in enumerate(self.envs):
-            self.obs[i], _ = env.reset(seed=seeds[i])
+            self.obs[i], _ = self._reset_env(env, seed=seeds[i])
         self.ep_return[:] = 0; self.ep_len[:] = 0; self.finished.clear()
+
+    def _reset_env(self, env, seed: int | None = None):
+        """reset() that survives a dead server (the wrapper retries internally)."""
+        try:
+            return env.reset(seed=seed) if seed is not None else env.reset()
+        except EnvServerDied as exc:
+            self.env_crashes += 1
+            first = str(exc).splitlines()[0]
+            print(f"[train] env server died during reset ({first}); restarting "
+                  f"(total crashes {self.env_crashes})", flush=True)
+            env.restart()
+            return env.reset(seed=seed) if seed is not None else env.reset()
 
     def step(self, actions: np.ndarray):
         dones = np.zeros(self.n, bool)
         rewards = np.zeros(self.n, np.float32)
         for i, env in enumerate(self.envs):
-            o, r, term, trunc, info = env.step(int(actions[i]))
+            try:
+                o, r, term, trunc, info = env.step(int(actions[i]))
+            except EnvServerDied as exc:
+                # One server died (node OOM, unhandled throw, stale bundle). Do not
+                # lose the run: restart it, start a fresh episode, and keep training.
+                # The transition is dropped rather than fabricated.
+                self.env_crashes += 1
+                first = str(exc).splitlines()[0]
+                print(f"[train] env {i} server died ({first}); restarting "
+                      f"(total crashes {self.env_crashes})", flush=True)
+                if self.env_crashes > self.max_crashes:
+                    raise
+                env.restart()
+                o, _ = env.reset()
+                self.obs[i] = o
+                self.ep_return[i] = 0; self.ep_len[i] = 0
+                continue
             self.obs[i] = o
             rewards[i] = r
             self.ep_return[i] += r; self.ep_len[i] += 1
@@ -220,7 +258,7 @@ def train(args):
         stats = _finish_update(runner, buf, batch)
         ep = list(batch.finished); batch.finished.clear()
         row = {"update": update, "seconds": round(time.time() - t0, 1), **stats,
-               "episodes": len(ep)}
+               "episodes": len(ep), "env_crashes": batch.env_crashes}
         if ep:
             row["ep_return"] = round(float(np.mean([e["reward"] for e in ep])), 4)
             row["ep_len"] = round(float(np.mean([e["steps"] for e in ep])), 1)
@@ -237,7 +275,7 @@ def train(args):
     torch.save({"state": runner.net.state_dict(), "seed": args.seed, "updates": args.updates,
                 "policy": args.policy, "n_actions": n_actions}, params_path)
     (OUT / f"train_log_{args.policy}{tag}.json").write_text(json.dumps(
-        {"config": vars(args), "log": log}, indent=1))
+        {"config": vars(args), "log": log, "env_crashes": batch.env_crashes}, indent=1))
     print("saved", params_path)
     batch.close()
 
@@ -267,7 +305,7 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     """One env, fixed seeds. policy_kind: fly|fly-silenced|fly-untrained|mlp|random|openloop"""
     global _ACTION_NAMES
     rewards = json.loads(args.rewards) if args.rewards else None
-    env = WoWClassicEnv(player_class=args.player_class, max_steps=args.max_steps, rewards=rewards)
+    env = _EnvClass(player_class=args.player_class, max_steps=args.max_steps, rewards=rewards)
     _ACTION_NAMES = env.action_names
     if getattr(args, "mask_abilities", False):
         args.ability_idx = [i for i, name in enumerate(env.action_names) if name.startswith("ability_")]
@@ -295,6 +333,7 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
         if brain is not None:
             brain.reset(1)
         total = 0.0; steps = 0
+        crashes = 0
         trace = []
         prev_events = {"kills": 0, "deaths": 0, "quests_done": 0, "level": 1}
         while True:
@@ -317,7 +356,22 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
                         a = int(torch.distributions.Categorical(logits=logits).sample())
                     else:
                         a = int(logits.argmax(-1))
-            obs, r, term, trunc, info = env.step(a)
+            try:
+                obs, r, term, trunc, info = env.step(a)
+            except EnvServerDied as exc:
+                crashes += 1
+                if crashes > 5:
+                    raise
+                first = str(exc).splitlines()[0]
+                print(f"  [{policy_kind}] env server died ({first}); restarting + fresh episode",
+                      flush=True)
+                env.restart()
+                obs, _ = env.reset(seed=seed)
+                if brain is not None:
+                    brain.reset(1)
+                total = 0.0; steps = 0
+                prev_events = {"kills": 0, "deaths": 0, "quests_done": 0, "level": 1}
+                continue
             total += r; steps += 1
             # compact per-step trace: only action changes and game events
             events = {key: info.get(key) for key in ("kills", "deaths", "quests_done", "level")}
