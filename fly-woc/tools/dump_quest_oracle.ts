@@ -13,6 +13,7 @@
 // Формат: {"order": [...224 id в порядке obs...], "obs_base": 156, "quests": {...}}
 
 import { QUEST_ORDER, QUESTS, NPCS } from './src/sim/data';
+import { ACTIONS, obsSize } from './src/sim/obs';
 import { questObjectiveAreas } from './src/sim/quest_targets';
 
 const log = new Map<string, any>();
@@ -54,4 +55,12 @@ for (const qid of QUEST_ORDER) {
     }),
   };
 }
-console.log(JSON.stringify({ order: [...QUEST_ORDER], obs_base: 156, quests }));
+// Метаданные версии: по ним quest_oracle.py понимает, подходит ли таблица сборке.
+// Слоты способностей берём из списка действий (13 + ABILITY_SLOTS) — это не
+// зависит от того, где в данной версии определён CLASSES.
+const abilitySlots = ACTIONS.filter((a) => a.startsWith('ability_')).length;
+console.log(JSON.stringify({
+  game: { quests_count: QUEST_ORDER.length, obs_size: obsSize(), actions: ACTIONS.length,
+          ability_slots: abilitySlots, base_actions: ACTIONS.filter((a) => !a.startsWith('ability_')).length },
+  order: [...QUEST_ORDER], quests,
+}));

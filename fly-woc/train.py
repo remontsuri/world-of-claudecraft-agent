@@ -285,6 +285,11 @@ def train(args):
     n_actions = batch.envs[0].action_space.n
     action_names = batch.envs[0].action_names
     args.ability_idx = [i for i, name in enumerate(action_names) if name.startswith("ability_")]
+    # Раскладка obs: выводим из окружения (длина obs + число действий), иначе
+    # на сборке с другим числом квестов энкодер прочитает чужие поля.
+    from obs_layout import configure as _configure_layout
+    _layout = _configure_layout(obs_size=int(batch.obs.shape[1]), n_actions=n_actions)
+    print(f"[obs] {_layout.describe()}", flush=True)
     runner = Runner(args, args.envs, obs_dim, n_actions)
     batch.reset([int(rng.integers(1, 900000)) for _ in range(args.envs)])
     runner.episode_reset(args.envs)
@@ -371,6 +376,8 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     global _ACTION_NAMES
     rewards = json.loads(args.rewards) if args.rewards else None
     env = _EnvClass(player_class=args.player_class, max_steps=args.max_steps, rewards=rewards)
+    from obs_layout import configure as _configure_layout
+    print(f"[obs] {_configure_layout(obs_size=env.observation_space.shape[0], n_actions=env.action_space.n).describe()}", flush=True)
     oracle_tbl, net_extra = None, False
     if getattr(args, "oracle_obs", False) and args.policy == "fly":
         from quest_oracle import load_table, oracle_vector

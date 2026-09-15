@@ -50,7 +50,11 @@ TABLE_PATH = Path(__file__).parent / "data" / "quest_oracle.json"
 
 
 def load_table(path: Path | None = None) -> dict:
-    return json.loads(Path(path or TABLE_PATH).read_text())
+    return json.loads(Path(path or os.environ.get("WOC_QUEST_TABLE") or TABLE_PATH).read_text())
+
+
+def table_path_for_game() -> Path:
+    return Path(os.environ.get("WOC_QUEST_TABLE") or TABLE_PATH)
 
 
 def decode_state(v: float) -> str:
@@ -169,8 +173,27 @@ def check(steps: int = 60, seed: int = 900001) -> int:
     env = WoWClassicEnv(player_class="warrior", max_steps=steps)
     obs, info = env.reset(seed=seed)
     # Раскладку сверяем по ДВУМ величинам окружения: длина obs и число действий.
-    layout = from_obs(obs, n_actions=int(env.action_space.n))
-    print(f"obs={np.asarray(obs).shape[0]}  слотов квестов: {N_QUESTS}  "
+    from obs_layout import configure
+    try:
+        layout = configure(obs_size=int(np.asarray(obs).shape[0]), n_actions=int(env.action_space.n))
+    except ValueError as exc:
+        game = table.get("game") or {}
+        print("ТАБЛИЦА НЕ ОТ ЭТОЙ СБОРКИ ИГРЫ")
+        print(f"  {exc}")
+        print(f"  в таблице {table.get('game', {}).get('quests_count', len(table['order']))} квестов "
+              f"(файл снят с obs={game.get('obs_size', '?')}, действий={game.get('actions', '?')})")
+        print("  что делать: перегенерировать таблицу под свою версию игры —")
+        print("    npx esbuild tools/dump_quest_oracle.ts --bundle --platform=node \\")
+        print("        --format=cjs --outfile=/tmp/dump.cjs && node /tmp/dump.cjs > data/quest_oracle.json")
+        print("  либо указать готовую таблицу: WOC_QUEST_TABLE=data/quest_oracle_204.json")
+        env.close()
+        return 2
+    if layout.n_quests != len(table["order"]):
+        print(f"ВНИМАНИЕ: в таблице {len(table['order'])} квестов, окружение говорит про "
+              f"{layout.n_quests} — канал и шейпинг работать не будут.")
+        env.close()
+        return 2
+    print(f"obs={np.asarray(obs).shape[0]}  слотов квестов: {layout.n_quests}  "
           f"(в таблице {len(table['order'])})")
     print(f"раскладка: {layout.describe()}")
     seen_states, rows = set(), []

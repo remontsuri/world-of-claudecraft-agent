@@ -171,6 +171,9 @@ def main() -> int:
     rewards = json.loads(args.rewards) if args.rewards else None
     env = WoWClassicEnv(player_class="warrior", max_steps=args.max_steps, rewards=rewards)
     ckpt = args.checkpoint if args.checkpoint and Path(args.checkpoint).exists() else None
+    from obs_layout import configure as _configure_layout
+    _layout = _configure_layout(obs_size=env.observation_space.shape[0], n_actions=env.action_space.n)
+    print(f"[obs] {_layout.describe()}", flush=True)
     oracle_tbl = load_table() if (args.oracle_obs and args.policy == "fly") else None
     brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0],
                        env.action_space.n, oracle_extra=5 if oracle_tbl is not None else 0)
