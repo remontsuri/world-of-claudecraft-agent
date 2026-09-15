@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """quest_oracle.py — куда идти по квесту, не заглядывая в Sim.
 
-В obs игры 224 квеста лежат парами (state, progress) в obs[156:604], порядок —
-`QUEST_ORDER` из `src/sim/data.ts`, он же порядок, в котором их пишет
-`src/sim/obs.ts`. Статическая таблица `data/quest_oracle.json` получается из
-самого игрового резолвера `src/sim/quest_targets.ts` (см.
-`tools/dump_quest_oracle.ts`) и содержит для каждого квеста координаты
-выдающего/принимающего NPC и зоны каждой цели.
+В obs игры 224 квеста лежат парами (state, progress), порядок — `QUEST_ORDER` из
+`src/sim/data.ts`, он же порядок, в котором их пишет `src/sim/obs.ts`.
+Статическая таблица `data/quest_oracle.json` получается из самого игрового
+резолвера `src/sim/quest_targets.ts` (см. `tools/dump_quest_oracle.ts`) и
+содержит для каждого квеста координаты выдающего/принимающего NPC и зоны каждой
+цели.
+
+Начало квестового блока (бывший QUEST_BASE = 156) НЕ захардкожено: игра считает
+размер obs как 63 + 2*ABILITY_SLOTS + 2*КВЕСТЫ, и при смене числа слотов
+способностей (48 → 28 в текущей версии, obs 607 → 567) все индексы после
+способностей сдвигаются. Раскладка выводится из длины obs и числа квестов —
+см. `obs_layout.py`.
 
 Почему это нужно: без координат цели агент узнаёт о квесте только тогда, когда
 случайно подойдёт к нужному мобу — 224 квеста так не перебрать (в замерах
@@ -30,8 +36,12 @@ from pathlib import Path
 
 import numpy as np
 
-QUEST_BASE = 156          # obs[156 + 2*i] = state квеста i
-N_QUESTS = 224            # QUEST_ORDER.length
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))  # obs_layout рядом
+from obs_layout import ObsLayout, from_obs, quest_count  # noqa: E402
+
+N_QUESTS = quest_count()  # QUEST_ORDER.length: из data/quest_oracle.json, не константа
 WORLD_MAX_X = 900.0       # src/sim/data.ts: WORLD_MAX_X
 DIST_NORM = 40.0          # obs хранит d/40 ...
 DIST_CLAMP = 1.5          # ... с обрезкой 1.5
@@ -54,13 +64,20 @@ def decode_state(v: float) -> str:
     return "untaken"
 
 
-def quest_slots(obs: np.ndarray, table: dict) -> list[tuple[str, str, float]]:
-    """[(questId, state, progress)] для всех 224 слотов obs."""
+def quest_slots(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
+                n_actions: int | None = None) -> list[tuple[str, str, float]]:
+    """[(questId, state, progress)] для всех слотов квестов в obs.
+
+    Раскладка берётся из длины obs (obs_layout), а не из константы: игра меняет
+    число слотов способностей, и блок квестов вместе с ними сдвигается.
+    """
     obs = np.asarray(obs, dtype=np.float32).reshape(-1)
+    layout = layout or from_obs(obs, n_actions=n_actions)
     out = []
     for i, qid in enumerate(table["order"]):
-        state = decode_state(float(obs[QUEST_BASE + 2 * i]))
-        prog = float(obs[QUEST_BASE + 2 * i + 1])
+        base = layout.quest_base + 2 * i
+        state = decode_state(float(obs[base]))
+        prog = float(obs[base + 1])
         out.append((qid, state, prog))
     return out
 
@@ -82,13 +99,14 @@ def _target_for(quest: dict, prog: float, state: str) -> tuple[str, dict | None]
     return "no_coords", None
 
 
-def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | None = None) -> dict:
+def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | None = None,
+             layout: ObsLayout | None = None) -> dict:
     """Первый по порядку незакрытый квест → куда идти и сколько осталось пути.
 
     x, z — мировые координаты (obs[4] * WORLD_MAX_X), facing — радианы.
     """
     table = table or load_table()
-    slots = quest_slots(obs, table)
+    slots = quest_slots(obs, table, layout=layout)
     for qid, state, prog in slots:
         if state == "done":
             continue
@@ -111,22 +129,29 @@ def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | N
     return {"quest": None, "name": None, "target_kind": "all_done"}
 
 
-def guidance_from_obs(obs: np.ndarray, table: dict | None = None) -> dict:
+def guidance_from_obs(obs: np.ndarray, table: dict | None = None,
+                      n_actions: int | None = None) -> dict:
     """Самодостаточно: x, z и facing берём из obs (4, 5, 6/7 — obs.ts)."""
     o = np.asarray(obs, dtype=np.float32).reshape(-1)
     facing = float(np.arctan2(o[6], o[7]))
-    return guidance(o, float(o[4]) * WORLD_MAX_X, float(o[5]) * WORLD_MAX_X, facing, table)
+    return guidance(o, float(o[4]) * WORLD_MAX_X, float(o[5]) * WORLD_MAX_X, facing, table,
+                    layout=from_obs(o, n_actions=n_actions))
 
 
 def oracle_vector(obs: np.ndarray, x: float | None = None, z: float | None = None,
-                  facing: float | None = None, table: dict | None = None) -> np.ndarray:
+                  facing: float | None = None, table: dict | None = None,
+                  layout: ObsLayout | None = None, n_actions: int | None = None) -> np.ndarray:
     """5 чисел для бокового канала политики: [dist_norm, sin, cos, active?, ready?].
+
+    Оба аргумента (layout / n_actions) нужны только для сверки раскладки; сам
+    вектор всегда начинается с блока квестов, выведенного из длины obs.
 
     Если координаты не переданы, берём их из самой obs. Когда незакрытых квестов
     нет — dist_norm = 1.5 (максимум), чтобы «нечего делать» не читалось как
     «стоим на цели».
     """
-    g = (guidance_from_obs(obs, table) if x is None else guidance(obs, x, z, facing or 0.0, table))
+    g = (guidance_from_obs(obs, table, n_actions=n_actions) if x is None
+         else guidance(obs, x, z, facing or 0.0, table, layout=layout))
     if g.get("quest") is None:
         return np.asarray([DIST_CLAMP, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
     state = g["quest_state"]
@@ -143,14 +168,19 @@ def check(steps: int = 60, seed: int = 900001) -> int:
     table = load_table()
     env = WoWClassicEnv(player_class="warrior", max_steps=steps)
     obs, info = env.reset(seed=seed)
-    print(f"obs={np.asarray(obs).shape[0]}  слотов квестов: {N_QUESTS}")
+    # Раскладку сверяем по ДВУМ величинам окружения: длина obs и число действий.
+    layout = from_obs(obs, n_actions=int(env.action_space.n))
+    print(f"obs={np.asarray(obs).shape[0]}  слотов квестов: {N_QUESTS}  "
+          f"(в таблице {len(table['order'])})")
+    print(f"раскладка: {layout.describe()}")
     seen_states, rows = set(), []
     for t in range(steps):
         a = env.action_space.sample()
         obs, r, term, trunc, info = env.step(int(a))
-        slots = quest_slots(obs, table)
+        slots = quest_slots(obs, table, layout=layout)
         seen_states.update(s for _, s, _ in slots)
-        g = guidance(obs, float(obs[4]) * WORLD_MAX_X, float(obs[5]) * WORLD_MAX_X, 0.0, table)
+        g = guidance(obs, float(obs[4]) * WORLD_MAX_X, float(obs[5]) * WORLD_MAX_X, 0.0, table,
+                     layout=layout)
         rows.append((t, g.get("quest"), g.get("quest_state"), g.get("target_kind"),
                      g.get("dist"), g.get("target")))
         if term or trunc:

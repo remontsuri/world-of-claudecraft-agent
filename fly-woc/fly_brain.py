@@ -20,13 +20,20 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))  # obs_layout рядом
+from obs_layout import from_obs  # noqa: E402
+
 DYNAMICS = {"iterations": 3, "leak": 0.7, "gain": 1.4, "outputGain": 4.0}  # Fly Dino v2 constants
 
 # ---------------------------------------------------------------- observations
-# WoWClassicEnv obs layout (src/sim/obs.ts, queried sizes: obs 607, actions 61):
-#   self 0..15 | abilities 16..111 (48 x [ready, cd_frac]) | target 112..120
-#   mobs 121..150 (5 x 6) | interactable 151..155 | quests 156..603 (224 x 2)
-#   paladin tail 604..606
+# WoWClassicEnv obs layout (src/sim/obs.ts): self 16 | abilities 2*ABILITY_SLOTS |
+# target 9 | mobs 5x6 | interactable 5 | quests 2*QUEST_ORDER.length | paladin 3.
+# Индексы блоков НЕ захардкожены: игра меняет ABILITY_SLOTS (48 -> 28 в текущей
+# версии), и всё после способностей сдвигается. Блоки выводятся из длины obs
+# через obs_layout.from_obs: 607 -> цель 112, мобы 121, интеракт 151, квесты 156;
+# 567 -> цель 72, мобы 81, интеракт 111, квесты 116.
 # 13 engineered features; the assignment to cell types is a fixed engineering
 # encoder with no claimed biological interpretation (Fly Dino v2 wording).
 # v2 channel names (same 13 slots, different semantics from index 8 on).
@@ -76,7 +83,11 @@ def extract_features_v2(obs: np.ndarray) -> np.ndarray:
     """
     o = np.asarray(obs, dtype=np.float32).reshape(-1)
     n = o.shape[0]
-    if n < 156:                      # truncated obs (tests): fall back to v1
+    try:
+        L = from_obs(o)
+    except ValueError:               # truncated/foreign obs (tests): fall back to v1
+        return extract_features_v1(obs)
+    if n != L.obs_size or n < L.paladin_base:   # sanity: вектор короче раскладки
         return extract_features_v1(obs)
 
     # Distances in the obs are ALREADY d/40 clamped to 1.5 (the 60-unit obs
@@ -84,13 +95,14 @@ def extract_features_v2(obs: np.ndarray) -> np.ndarray:
     def unit(i: int) -> float:
         return float(np.clip(o[i] / 1.5, 0.0, 1.0))
 
-    # Interactable block 151..155 = [exists, d/40, sin, cos, type]
-    interact_exists = float(o[151]) if n > 151 else 0.0
-    interact_prox = interact_exists * (1.0 - unit(152))
+    # Interactable block = [exists, d/40, sin, cos, type]
+    ib = L.interact_base
+    interact_exists = float(o[ib])
+    interact_prox = interact_exists * (1.0 - unit(ib + 1))
 
-    # Quest block 156..603 = 224 x [state, progress], states:
+    # Quest block = N x [state, progress], states:
     # 0 not taken, 0.33 active, 0.66 ready to turn in, 1 done.
-    quests = o[156:604].reshape(-1, 2) if n >= 604 else np.zeros((0, 2), np.float32)
+    quests = o[L.quest_slice()].reshape(-1, 2)
     if quests.size:
         state, progress = quests[:, 0], quests[:, 1]
         ready = bool(((state > 0.5) & (state < 1.0)).any())   # 0.66: hand it in
@@ -106,13 +118,13 @@ def extract_features_v2(obs: np.ndarray) -> np.ndarray:
         o[1],                                        # resource ratio
         o[11],                                       # in combat flag
         1.0 - o[8],                                  # gcd ready
-        o[112],                                      # target exists
-        unit(115),                                   # target distance
-        0.5 * (float(o[116]) + 1.0),                 # target bearing sin -> 0..1
-        0.5 * (float(o[117]) + 1.0),                 # target bearing cos -> 0..1
-        unit(121),                                   # nearest hostile mob distance
-        0.5 * (float(o[122]) + 1.0),                 # nearest mob bearing sin
-        0.5 * (float(o[123]) + 1.0),                 # nearest mob bearing cos
+        o[L.target_base],                            # target exists
+        unit(L.target_base + 3),                     # target distance
+        0.5 * (float(o[L.target_base + 4]) + 1.0),   # target bearing sin -> 0..1
+        0.5 * (float(o[L.target_base + 5]) + 1.0),   # target bearing cos -> 0..1
+        unit(L.mobs_base),                           # nearest hostile mob distance
+        0.5 * (float(o[L.mobs_base + 1]) + 1.0),     # nearest mob bearing sin
+        0.5 * (float(o[L.mobs_base + 2]) + 1.0),     # nearest mob bearing cos
         interact_prox,                               # interactable/loot/quest-NPC proximity
         quest_signal,                                # ready-to-turn-in, else max progress
     ], dtype=np.float32)
@@ -120,22 +132,23 @@ def extract_features_v2(obs: np.ndarray) -> np.ndarray:
 
 def extract_features_v1(obs: np.ndarray) -> np.ndarray:
     """Original 13-channel encoder (kept for the committed v1 checkpoints)."""
-    o = obs
-    mob_aggro = o[126:151:6].mean() if o.shape[0] > 150 else 0.0
+    o = np.asarray(obs, dtype=np.float32).reshape(-1)
+    L = from_obs(o)
+    mob_aggro = o[L.mobs_base + 5: L.interact_base: 6].mean()   # per-mob aggro flag
     return np.array([
         o[0],                                        # hp ratio
         o[1],                                        # resource ratio
         o[11],                                       # in combat flag
         1.0 - o[8],                                  # gcd ready
-        o[112],                                      # target exists
-        min(o[115] / 1.5, 1.0),                      # target distance (0..1)
-        o[113],                                      # target hp ratio
-        (o[116] + 1.0) / 2.0,                        # target bearing sin
-        (o[117] + 1.0) / 2.0,                        # target bearing cos
-        min(o[121] / 1.5, 1.0),                      # nearest mob distance
+        o[L.target_base],                            # target exists
+        min(o[L.target_base + 3] / 1.5, 1.0),        # target distance (0..1)
+        o[L.target_base + 1],                        # target hp ratio
+        (o[L.target_base + 4] + 1.0) / 2.0,          # target bearing sin
+        (o[L.target_base + 5] + 1.0) / 2.0,          # target bearing cos
+        min(o[L.mobs_base] / 1.5, 1.0),              # nearest mob distance
         mob_aggro,                                   # fraction of mobs aggroed
-        o[16:112:2].mean(),                          # ability readiness fraction
-        o[157:604:2].mean(),                         # mean quest progress
+        o[L.ability_base: L.target_base: 2].mean(),  # ability readiness fraction
+        o[L.quest_base + 1: L.quest_end: 2].mean(),  # mean quest progress
     ], dtype=np.float32)
 
 
