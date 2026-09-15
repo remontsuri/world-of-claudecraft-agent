@@ -9,6 +9,7 @@
 | `benchmark_fullgraph.json` | те же чекпойнты v2 на схеме из **полной** таблицы связей (`data/circuit-full/`) |
 | `eval_v2_repro.log` | лог повторного прогона (traced) |
 | `fullgraph_eval.log` | лог прогона на полной таблице (fly-условия) |
+| `fullgraph_eval_extended.log` | повторный прогон на полной таблице: fly / fly-sampled / fly-silenced по 5 сидов — все числа совпали с traced-схемой. Остановлен до `fly-untrained`: `mlp`, `openloop`, `random` схему не читают (`train.py:241`), их прогон на полном графе ничего не проверяет |
 | `compare_circuits.txt` | поэлементное сравнение traced-схемы и полной (по bodyId) |
 | `build_circuit_fullscale.patch` | стриминговая запись `circuit.json` для `fly-woc/build_circuit.py` (для полной таблицы, иначе не влезает в RAM) |
 | `SHA256SUMS.txt` | хеши обеих схем и закоммиченного `circuit.json` |
