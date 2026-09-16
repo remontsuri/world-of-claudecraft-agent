@@ -1,0 +1,17 @@
+traced :   8835 nodes  1,874,865 edges    15,800,512 contacts
+full   :   8836 nodes  1,874,492 edges    15,798,906 contacts
+
+node ids identical: False
+  only in traced: bodyId 33539  type=LPLC4  nt=acetylcholine  role=interneuron  sign=1.0
+  only in traced: bodyId 513378  type=LPT110  nt=acetylcholine  role=interneuron  sign=1.0
+  only in traced: bodyId 558803  type=LoVC25  nt=acetylcholine  role=interneuron  sign=1.0
+  only in full: bodyId 104626  type=None  nt=gaba  role=interneuron  sign=-1.0
+  only in full: bodyId 117841  type=None  nt=glutamate  role=interneuron  sign=-1.0
+  only in full: bodyId 149047  type=None  nt=acetylcholine  role=interneuron  sign=1.0
+  only in full: bodyId 811338  type=None  nt=histamine  role=interneuron  sign=-1.0
+
+edge pairs: common 1,874,136 | traced-only 729 | full-only 356
+  99.961% of traced pairs exist in the full table
+  common pairs with identical contact weight: 1,874,136 (100.000%); differing: 0
+  traced-only edges: contacts 3,839
+  full-only edges:   contacts 2,233
