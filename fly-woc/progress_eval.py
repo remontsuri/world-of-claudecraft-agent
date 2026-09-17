@@ -136,10 +136,10 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability
 
 
 def build(policy: str, checkpoint: Path | None, seed: int, obs_dim: int, n_actions: int,
-          oracle_extra: int = 0, device=None, backend: str | None = None):
+          oracle_extra: int = 0, device=None, backend: str | None = None, circuit: Path | None = None):
     base = policy[:-len("-sampled")] if policy.endswith("-sampled") else policy
     dev = resolve_device(device)
-    brain = FlyBrain(device=dev, backend=backend) if base.startswith("fly") else None
+    brain = FlyBrain(circuit_path=circuit, device=dev, backend=backend) if base.startswith("fly") else None
     net = None
     if base.startswith("fly"):
         torch.manual_seed(seed)
@@ -160,6 +160,8 @@ def main() -> int:
     ap.add_argument("--device", default=None, help="cuda | rocm | cpu | mps | auto (по умолчанию WOC_DEVICE/auto)")
     ap.add_argument("--backend", default=None,
                     help="бэкенд схемы: scipy | edge | sparse (иначе WOC_BRAIN_BACKEND, иначе auto)")
+    ap.add_argument("--circuit", type=Path, default=None,
+                    help="путь к circuit.json (по умолчанию data/circuit.json; для контролей rewired/er)")
     ap.add_argument("--policy", default="fly-sampled",
                     choices=["fly", "fly-sampled", "fly-silenced", "fly-untrained", "mlp", "mlp-sampled", "random", "openloop"])
     ap.add_argument("--checkpoint", type=Path, default=Path(__file__).parent / "outputs" / "params_fly_v2.pt")
@@ -189,7 +191,7 @@ def main() -> int:
         oracle_vector(np.zeros(env.observation_space.shape[0], dtype=np.float32), table=oracle_tbl)
     brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0],
                        env.action_space.n, oracle_extra=5 if oracle_tbl is not None else 0,
-                       backend=args.backend)
+                       backend=args.backend, circuit=args.circuit)
 
     print(f"policy={args.policy} encoder={FEATURE_VERSION} "
           f"checkpoint={ckpt if ckpt else '(none)'} max_steps={args.max_steps}"
