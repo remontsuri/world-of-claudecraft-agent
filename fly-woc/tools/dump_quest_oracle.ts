@@ -12,7 +12,7 @@
 //
 // Формат: {"order": [...224 id в порядке obs...], "obs_base": 156, "quests": {...}}
 
-import { QUEST_ORDER, QUESTS, NPCS } from './src/sim/data';
+import { QUEST_ORDER, QUESTS, NPCS, WORLD_MIN_X, WORLD_MAX_X, WORLD_MIN_Z, WORLD_MAX_Z } from './src/sim/data';
 import { ACTIONS, obsSize } from './src/sim/obs';
 import { questObjectiveAreas } from './src/sim/quest_targets';
 
@@ -61,6 +61,10 @@ for (const qid of QUEST_ORDER) {
 const abilitySlots = ACTIONS.filter((a) => a.startsWith('ability_')).length;
 console.log(JSON.stringify({
   game: { quests_count: QUEST_ORDER.length, obs_size: obsSize(), actions: ACTIONS.length,
-          ability_slots: abilitySlots, base_actions: ACTIONS.filter((a) => !a.startsWith('ability_')).length },
+          ability_slots: abilitySlots, base_actions: ACTIONS.filter((a) => !a.startsWith('ability_')).length,
+          // Границы мира нужны оракулу для нормализации x/z ровно так, как это
+          // делает obs.ts; без них quest_oracle.py берёт свои дефолты, и при
+          // смене границ в новой сборке направление на цель поедет молча.
+          world_bounds: { minX: WORLD_MIN_X, maxX: WORLD_MAX_X, minZ: WORLD_MIN_Z, maxZ: WORLD_MAX_Z } },
   order: [...QUEST_ORDER], quests,
 }));

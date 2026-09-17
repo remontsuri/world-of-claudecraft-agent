@@ -19,6 +19,7 @@ obs = 60 + 2*способности + 2*квесты (+3, если есть хв
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from fly_brain import extract_features_v1, extract_features_v2  # noqa: E402
 
 TABLE_224 = load_table(HERE / "data" / "quest_oracle.json")          # текущий апстрим
 TABLE_204 = load_table(HERE / "data" / "quest_oracle_204.json")      # v0.36–v0.39.0
+TABLE_214 = load_table(HERE / "data" / "quest_oracle_214.json")      # v0.40.0
 
 
 def synth(layout, table) -> np.ndarray:
@@ -76,6 +78,7 @@ def main() -> int:
 
     print("\n2) чтение блоков на синтетике каждой раскладки")
     cases = [("v0.42.2 (224 квеста)", 607, 61, TABLE_224),
+             ("v0.40.0 (214 квестов)", 587, 61, TABLE_214),
              ("v0.39.0 (204 квеста)", 567, 61, TABLE_204),
              ("гипотетическая 28 слотов", 567, 41, TABLE_224)]
     for label, obs_size, actions, table in cases:
@@ -118,14 +121,30 @@ def main() -> int:
             ("одной длины obs мало", lambda: detect(567), "нужно второе число"),
             ("не-WoC окружение", lambda: detect(100, n_actions=5), "не WoC"),
             ("таблица не от этой сборки",
-             lambda: detect(567, n_actions=61, n_quests=224), "не от этой сборки")):
+             lambda: detect(567, n_actions=61, n_quests=224), "не от этой сборки"),
+            ("чтение слотов из чужой таблицы",
+             lambda: quest_slots(synth(obs_layout.configure(obs_size=587, n_actions=61, n_quests=214),
+                                       TABLE_224), TABLE_224), "не от этой сборки"),
+            ("режим «короткая таблица разрешена»",
+             lambda: (os.environ.__setitem__("WOC_QUEST_TABLE_ALLOW_SHORT", "1"),
+                      quest_slots(synth(obs_layout.configure(obs_size=587, n_actions=61,
+                                                             n_quests=214), TABLE_204), TABLE_204)[0],
+                      os.environ.pop("WOC_QUEST_TABLE_ALLOW_SHORT"))[1],
+             None)):
         try:
-            fn()
-            print(f"  FAIL {desc}: ошибки не было"); ok = False
+            result = fn()
+            if expect is None:
+                ok &= result is not None
+                print(f"  {'OK ' if result is not None else 'FAIL'} {desc}: сработало (первый слот {result})")
+            else:
+                print(f"  FAIL {desc}: ошибки не было"); ok = False
         except ValueError as exc:
-            good = expect in str(exc)
-            ok &= good
-            print(f"  {'OK ' if good else 'FAIL'} {desc}: {str(exc)[:88]}…")
+            if expect is None:
+                print(f"  FAIL {desc}: неожиданный отказ {str(exc)[:70]}…"); ok = False
+            else:
+                good = expect in str(exc)
+                ok &= good
+                print(f"  {'OK ' if good else 'FAIL'} {desc}: {str(exc)[:88]}…")
 
     print("\nитог:", "все проверки прошли" if ok else "есть провалы")
     return 0 if ok else 1

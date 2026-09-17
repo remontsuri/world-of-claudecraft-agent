@@ -96,13 +96,24 @@ def quest_slots(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
     n_quests_in_obs = layout.n_quests
     n = min(n_quests_in_table, n_quests_in_obs)
     if n_quests_in_table != n_quests_in_obs:
-        import warnings
-        warnings.warn(
-            f"В таблице оракула {n_quests_in_table} квестов, а окружение говорит "
-            f"про {n_quests_in_obs}. Используем первые {n}. Квесты маппятся по ID "
-            f"в порядке QUEST_ORDER из obs.ts.",
-            stacklevel=2,
+        # Порядок квестов в obs — это QUEST_ORDER конкретной сборки, и он НЕ
+        # совпадает между версиями: у v0.42.2 (224) с v0.40.0 (214) расходится
+        # уже со второй позиции, то есть позиционный маппинг ведёт агента по
+        # чужим координатам. Оракул — жёсткий вход, поэтому здесь отказ, а не
+        # предупреждение. Осознанный короткий список (204 — префикс 214-й)
+        # включается явным флагом.
+        msg = (
+            f"таблица оракула не от этой сборки: в ней {n_quests_in_table} квестов, "
+            f"окружение говорит про {n_quests_in_obs} (obs={obs.shape[0]}, "
+            f"действий={layout.n_actions}). Сгенерируй таблицу под свою сборку: "
+            f"bash tools/make_quest_oracle.sh <тег игры> data/quest_oracle.json; "
+            f"если таблица заведомо короче и порядок совпадает по префиксу — "
+            f"WOC_QUEST_TABLE_ALLOW_SHORT=1"
         )
+        if not os.environ.get("WOC_QUEST_TABLE_ALLOW_SHORT"):
+            raise ValueError(msg)
+        import warnings
+        warnings.warn(msg + f". Используем первые {n}.", stacklevel=2)
     out = []
     for i in range(n):
         qid = table["order"][i]
