@@ -218,6 +218,7 @@ def describe_target(qid, quest, kind, target, state, prog, x, z, facing) -> dict
         "dist": round(dist, 1), "dist_norm": round(min(dist / DIST_NORM, DIST_CLAMP), 3),
         "bearing_rel": round(rel, 3),
         "sin": round(float(np.sin(rel)), 3), "cos": round(float(np.cos(rel)), 3),
+        "active": state == "active", "ready": state == "ready",
     }
 
 

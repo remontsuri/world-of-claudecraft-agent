@@ -3,7 +3,7 @@
 Сгенерировано из кода. Назначение берётся из docstring/комментария самого файла —
 то есть из того, что автор написал для себя, а не из пересказа.
 
-## `fly-woc/*.py` — активная линия (14 файлов)
+## `fly-woc/*.py` — активная линия (15 файлов)
 
 | Файл | Тип | Строк | Назначение |
 |---|---|---|---|
@@ -13,6 +13,8 @@
 | `check_io.py` | модуль | 58 | I/O sanity check: does the game observation actually drive the circuit? fly-craftax M2/M3 lesson: their retina stayed silent until a lamina bias was added, and an agent can score with zero visual cont |
 | `device_utils.py` | модуль | 120 | device_utils.py — единственное место, где выбирается устройство вычислений. Порядок выбора: аргумент --device → переменная WOC_DEVICE → cuda → mps → cpu. Почему отдельный модуль: прежний код выбирал у |
 | `env_robust.py` | модуль | 204 | env_robust.py — make long WoC training runs survive a dying env server. Why this exists (the crash we hit on Windows): WoWClassicEnv spawns the node server with ``stderr=subprocess.DEVNULL``, so when  |
+| `fly_llm.py` | модуль | 549 | LLM-кортекс поверх замороженного коннектома: выбирает ЦЕЛЬ (квест/mode/go), коннектом исполняет. Вето правил, строгая JSON-схема, бэкенды fake/server (llama.cpp json_schema), неблокирующий фон. Тесты — tools/test_fly_llm.py |
+| `fly_lm_brain.py` | модуль | 390 | «LLM в мозгу»: двусторонняя связка с коннектомом — сводка активности 82 DN для промпта, калиброванный (по измеренному dDN/dканал) проектор «состояние LLM → сдвиг 13 каналов», границы по группам каналов, контроль disconnected (ровно нулевой сдвиг) |
 | `fly_brain.py` | модуль | 467 | Frozen MaleCNS circuit engine + engineered sensory drive (world-of-claudecraft). Dynamics follow the Fly Dino v2 protocol (flyjump src/lib/connectome.ts): signed, normalized, leaky-tanh rate units, 3  |
 | `flybrain_8k_gpu.py` | модуль | 119 | FlyBrain8KGPU — оптимизированный 8K MaleCNS subset на GPU (CSR format). |
 | `flybrain_full.py` | модуль | 103 | FlyBrainFull — полный MaleCNS 211K нейронов на GPU с rate-based propagation. |
@@ -25,10 +27,11 @@
 > Аудит всей линии на ошибки и цена горячего пути (с числами «до/после»):
 > `fly-woc/AUDIT-2026-09-17.md`.
 
-## `fly-woc/tools/` — проверки и сборка (14 файлов)
+## `fly-woc/tools/` — проверки и сборка (22 файлов)
 
 | Файл | Строк | Что делает |
 |---|---|---|
+| `accel_m1_m3.sh` | 100 | # accel_m1_m3.sh — ступени к M1–M3. Каждая следующая запускается только после зелёной |
 | `dump_quest_oracle.ts` | 70 | — |
 | `env_robust.py` | 16 | env_robust.py (в tools/) — ЗАГЛУШКА для тестов без игры. Настоящий env_robust.py поднимает node-сервер игры, следит за его падением и перезапускает. Здесь — простое перенаправление на заглушку окружен |
 | `fake_wow_env.py` | 64 | fake_wow_env.py — заглушка игрового окружения для тестов БЕЗ игры и node. Зачем: train.py импортирует wow_env на уровне модуля, поэтому проверять устройство (мозг + readout + маска + оракул) без чекау |
@@ -36,12 +39,22 @@
 | `make_control_graph.py` | 215 | make_control_graph.py — контроли топологии для MaleCNS-схемы (свой, без чужого кода). Зачем: утверждение «важна именно топология коннектома» проверяемо ТОЛЬКО против схемы с той же плотностью и теми ж |
 | `make_quest_oracle.sh` | 47 | !/usr/bin/env bash |
 | `probe_game_shape.ts` | 31 | — |
+| `record_replay.py` | 180 | record_replay.py — записать прогон мухи в живой игре, чтобы его можно было УВИДЕТЬ. |
+| `render_replay.py` | 324 | render_replay.py — превратить запись прогона (record_replay.py) в одну HTML-анимацию. |
 | `run_checks.sh` | 18 | !/usr/bin/env bash |
+| `serve_viz.py` | 115 | Показать наши клетки в Neuroglancer — чужом готовом вьюере, без своего рендера. |
+| `smoke_llm_goal.py` | 131 | smoke_llm_goal.py — живая проверка «киборга» на настоящей маленькой модели. |
 | `test_control_graph.py` | 186 | test_control_graph.py — приёмка контролей топологии без игры, GPU и сети. Сравниваем контроль не с полной схемой, а с её же подграфом-источником (`--swaps 0` даёт ровно ту выборку узлов, с которой пот |
 | `test_device.py` | 258 | test_device.py — приёмка устройства вычислений: GPU-путь там, где он должен быть. Проверяем не «есть ли cuda» (в песочнице её нет), а корректность плумбинга: 1) resolve_device: auto -> лучшее доступно |
+| `test_fly_llm.py` | 287 | test_fly_llm.py — приёмка «киборга»: LLM выбирает цель, коннектом рулит. |
+| `test_llm_in_brain.py` | 210 | test_llm_in_brain.py — приёмка двусторонней связки: вклад в DN ≥3 %, чтение мозга в промпте, границы каналов, разрыв = строго ноль, калибровка измерена |
+| `reservoir_experiment.py` | 177 | reservoir_experiment.py — повтор контроля FLM: предсказание следующего состояния мира по состояниям мозга (reservoir) против прямого входа и сырых obs |
+| `analyze_coupling.py` | 108 | analyze_coupling.py — расхождение траекторий «связка vs разрыв», метрики игры, отчёт связки из meta |
 | `test_obs_layout.py` | 178 | test_obs_layout.py — раскладка obs не должна зависеть от версии игры. Сборки сняты исполнением игрового кода (tools/probe_game_shape.ts) на тегах: obs = 60 + 2*способности + 2*квесты (+3, если есть хв |
 | `test_parallel_envs.py` | — | параллельный шаг по средам: корректность (reward/done/obs совпадают поэлементно с последовательным прогоном) и выигрыш (8 сред с задержкой 20 мс → 7.7x). У заглушки окружения для этого появилась ручка `WOC_FAKE_LATENCY_MS` |
 | `test_quest_oracle.py` | 154 | test_quest_oracle.py — приёмка таблиц оракула без игры, GPU и сети. Что проверяется у каждой data/quest_oracle*.json: 1) схема: game/order/quests; ключи game и квестов — как у соседних таблиц; 2) ариф |
+| `verify_provenance.py` | 201 | verify_provenance.py — «наш мозг — это правда MaleCNS?» Проверка по исходным данным. |
+| `viz_export.py` | 258 | Сцены Neuroglancer для нашей схемы: наши клетки внутри настоящего MaleCNS. |
 | `wow_env.py` | 13 | wow_env.py (в tools/) — ЗАГЛУШКА игрового окружения для тестов. Настоящий wow_env живёт в чекауте игры (python/wow_env.py) и запускает node-симу. Этот файл даёт тот же интерфейс, чтобы можно было запу |
 
 ## `src/fly_brain/` — ядро и старые эксперименты (14 файлов)
