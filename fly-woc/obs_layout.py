@@ -160,14 +160,24 @@ def detect(obs_size: int, n_actions: int | None = None, n_quests: int | None = N
         # different ability/quest split (e.g. 567 = 48 abilities + 204 quests),
         # so allowing a 10% mismatch silently maps the wrong quest IDs.
         if n_quests is not None and int(n_quests) != derived:
-            # Table is stale relative to the actual game build. Prefer the
-            # size-derived quest count and warn rather than crash — the
-            # obs vector is ground truth for what the env actually emits.
-            import warnings
-            warnings.warn(
-                f"quest table says {n_quests} quests but obs={obs_size} implies "
-                f"{derived} (actions={n_actions}). Using {derived} from obs layout."
+            # Число квестов в таблице — это QUEST_ORDER её сборки. Если оно не
+            # совпадает с тем, что следует из obs, таблица от другой версии, и
+            # позиционное чтение слотов уводит агента по чужим координатам.
+            # Отсюда отказ (прежде здесь было предупреждение с подменой числа —
+            # это ровно тот молчаливый фолбэк, из-за которого терялись квесты).
+            # Исключение — заведомо КОРОТКАЯ таблица, если она префикс: её
+            # включают флагом осознанно.
+            allow_short = bool(os.environ.get("WOC_QUEST_TABLE_ALLOW_SHORT")) and int(n_quests) < derived
+            msg = (
+                f"таблица оракула не от этой сборки: в ней {n_quests} квестов, "
+                f"obs={obs_size} при {n_actions} действиях даёт {derived}. "
+                f"Перегенерируй таблицу: bash tools/make_quest_oracle.sh <тег игры> data/quest_oracle.json"
             )
+            if not allow_short:
+                raise ValueError(msg)
+            import warnings
+            warnings.warn(msg + f". Используем короткую таблицу ({n_quests} слотов из {derived}).",
+                          stacklevel=2)
         n_quests = derived
     else:
         tail = paladin_tail_for(obs_size, 0)

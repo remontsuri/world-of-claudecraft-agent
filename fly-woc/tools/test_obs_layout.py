@@ -106,12 +106,26 @@ def main() -> int:
               + (" | " + "; ".join(issues) if issues else ""))
 
     print("\n2a) раскладка выводится из замеров сборки, а не из файла таблицы")
+    # _RESOLVED — истина от ЖИВОГО окружения (configure() сразу после создания env).
+    # Выше он выставлен под гипотетическую сборку 567/41, поэтому здесь сбрасываем:
+    # иначе проверка ловила бы не код, а порядок вызовов в этом же процессе.
+    obs_layout._RESOLVED = None
     for size, expect_quests in ((587, 214), (607, 224), (567, 204), (556, 202)):
         d = obs_layout.from_obs(np.zeros(size, dtype=np.float32))
         good = d.n_quests == expect_quests
         ok &= good
         print(f"  {'OK ' if good else 'FAIL'} obs={size} без configure() -> квестов={d.n_quests} "
               f"(ожидалось {expect_quests})")
+
+    print("\n2b) кэш _RESOLVED (окружение) важнее замеров — иначе не разобрать 567 = 28/224")
+    obs_layout._RESOLVED = None
+    saved = obs_layout.configure(obs_size=567, n_actions=41, n_quests=224)
+    d = obs_layout.from_obs(np.zeros(567, dtype=np.float32))
+    good = (d.ability_slots, d.n_quests) == (28, 224)
+    ok &= good
+    print(f"  {'OK ' if good else 'FAIL'} после configure(567, 41) -> способностей={d.ability_slots} "
+          f"квестов={d.n_quests} (ожидалось 28/224)")
+    obs_layout._RESOLVED = None
 
     print("\n3) регрессия: на 607 старые индексные формулы дают то же")
     layout = obs_layout.configure(obs_size=607, n_actions=61, n_quests=224)
