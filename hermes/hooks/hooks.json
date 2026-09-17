@@ -1,0 +1,27 @@
+{
+  "_comment": "Шаблон регистрации хуков. Имена событий и ключей сверить с рабочим конфигом hermes (у нас он на D:\\.hermes\\), после чего поправить ЭТОТ файл, а не контракт скриптов: скрипты в hermes/hooks/*.sh специально не знают ничего про hermes.",
+  "_contract": {
+    "stdin": "{\"event\": \"...\", \"cwd\": \"...\", \"tool\": \"...\", \"command\": \"...\", \"paths\": [...], \"task\": \"...\"}",
+    "stdout": "{\"continue\": true|false, \"message\": \"...\"}",
+    "blocking": "continue=false или ненулевой код возврата"
+  },
+  "hooks": [
+    {
+      "event": "session_start",
+      "command": "bash hermes/hooks/session_start.sh",
+      "purpose": "цель, инварианты, незакрытые пункты роадмапа, состояние ветки и портов"
+    },
+    {
+      "event": "pre_tool",
+      "matcher": ["Bash", "Edit", "Write"],
+      "command": "bash hermes/hooks/guard.sh",
+      "blocking": true,
+      "purpose": "запрет force-push, убийства hermes-процессов, правки исходников игры, коммита тяжёлых файлов"
+    },
+    {
+      "event": "task_end",
+      "command": "bash hermes/hooks/task_end.sh",
+      "purpose": "напомнить проверки по изменённым каталогам и не потерять результат"
+    }
+  ]
+}

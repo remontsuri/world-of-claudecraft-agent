@@ -218,3 +218,44 @@ java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:879
 - Verification: Real game behavior > tests
 - Workflow: Phase-1 root-cause → TDD → live verification
 - Reporting: Tables LAYER|EXPECTED|ACTUAL|STATUS
+
+---
+
+## Обновление 2026-09-17: Java-линия активна, база знаний, hermes
+
+### Что теперь главное
+
+* Активная линия — **автономный Java-бот** в `woof-agent/`. Fly-линия (коннектом) — на паузе,
+  её приёмка объявлена заранее и не меняется.
+* Новая документация бота: `woof-agent/README.md` (быстрый старт), `ARCHITECTURE.md`
+  (как устроено и почему), `ROADMAP.md` (что закрыто и чем), `DEPENDENCIES.md`
+  (java/jar/node/порты), `FILES.md` (карта всех файлов).
+* База знаний: `knowledge/` — `principles.md` (как думать), `woc-game.md` (игра и её числа),
+  `fly-connectome.md` (схема, контроли, LIF, атрибуция MaleCNS), `pitfalls.md` (наши грабли),
+  `verification.md` (протокол приёмки). **Читать перед работой, дописывать в тот же день.**
+* Для hermes: `hermes/README.md` (порядок чтения и цикл работы), `hermes/TOOLS.md`
+  (что запускать, что считается успехом), `hermes/skills/woc-master-goal/SKILL.md`
+  (главная цель и инварианты), `hermes/hooks/` (session_start — напоминание о главном,
+  guard — блокировка запретов, task_end — проверки и «не потеряй результат»).
+
+### Обязательные проверки
+
+| Когда | Команда | Успех |
+|---|---|---|
+| после правок Java | `bash woof-agent/tools/build.sh && bash woof-agent/tools/run_tests.sh` | `build ok` / `tests passed=3 failed=0` |
+| перед пушем Java | `bash woof-agent/tools/run_e2e.sh` | `УСПЕХ ... нарушений контракта нет` |
+| после правок fly-линии | `bash fly-woc/tools/run_checks.sh` | `ВСЁ ЗЕЛЁНОЕ` |
+| на машине с GPU | `python3 fly-woc/tools/gpu_check.py --device cuda --bench` | выбран `cuda`, код возврата 0 |
+
+### Правила, добавленные сегодня
+
+1. **Нет молчаливых фолбэков.** Недоступное устройство, чужая таблица квестов,
+   неизвестный навык, неготовая часть моста — это ошибка с текстом, а не «как-нибудь».
+2. **`--force` push запрещён.** Перед пушем — свежий клон и `merge-base --is-ancestor`:
+   локальная история уже расходилась с remote (те же фиксы, другие SHA).
+3. **Пушим только в `backup`** (и только fast-forward); `master` не трогаем.
+4. **Пороги метрик объявляются до замера** (M1–M4) и после замера не двигаются.
+5. **Устройство вычислений выбирается само** (`--device` → `WOC_DEVICE` → cuda → mps → cpu);
+   явный запрос недоступного GPU — `RuntimeError`. Подробности: `fly-woc/GPU-DEVICE.md`.
+6. **Найденное записываем сразу**: факт — в `knowledge/`, поведение — в `woof-agent/ARCHITECTURE.md`,
+   долг — в `woof-agent/ROADMAP.md`. Знание, не записанное в репозиторий, потеряно.
