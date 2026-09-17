@@ -147,3 +147,7 @@ bridge_run.log
 *.tar.gz
 data/ppo_*.zip
 fly-woc/data/circuit_full.json
+
+# Java-сборка woof-agent (javac без Maven): классы, список источников, тестовые классы
+woof-agent/build/
+*.class
