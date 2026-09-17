@@ -105,6 +105,14 @@ def main() -> int:
         print(f"  {'OK ' if good else 'FAIL'} {label}: {layout.describe()}"
               + (" | " + "; ".join(issues) if issues else ""))
 
+    print("\n2a) раскладка выводится из замеров сборки, а не из файла таблицы")
+    for size, expect_quests in ((587, 214), (607, 224), (567, 204), (556, 202)):
+        d = obs_layout.from_obs(np.zeros(size, dtype=np.float32))
+        good = d.n_quests == expect_quests
+        ok &= good
+        print(f"  {'OK ' if good else 'FAIL'} obs={size} без configure() -> квестов={d.n_quests} "
+              f"(ожидалось {expect_quests})")
+
     print("\n3) регрессия: на 607 старые индексные формулы дают то же")
     layout = obs_layout.configure(obs_size=607, n_actions=61, n_quests=224)
     o = synth(layout, TABLE_224)
@@ -125,6 +133,8 @@ def main() -> int:
             ("чтение слотов из чужой таблицы",
              lambda: quest_slots(synth(obs_layout.configure(obs_size=587, n_actions=61, n_quests=214),
                                        TABLE_224), TABLE_224), "не от этой сборки"),
+            ("раскладка неизвестной сборки не угадывается",
+             lambda: obs_layout.from_obs(np.zeros(999, dtype=np.float32)), "не определяет раскладку"),
             ("режим «короткая таблица разрешена»",
              lambda: (os.environ.__setitem__("WOC_QUEST_TABLE_ALLOW_SHORT", "1"),
                       quest_slots(synth(obs_layout.configure(obs_size=587, n_actions=61,

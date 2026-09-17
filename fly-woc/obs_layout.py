@@ -233,6 +233,11 @@ def resolved() -> "ObsLayout | None":
     return _RESOLVED
 
 
+def _measured_split(obs_size: int) -> list[tuple]:
+    """Замеры сборок с такой длиной obs: (версия, способностей, квестов, obs, действий)."""
+    return [row for row in MEASURED_VERSIONS if row[3] == obs_size]
+
+
 def from_obs(obs, table_path: Path | None = None, n_actions: int | None = None,
              n_quests: int | None = None, strict: bool = True) -> ObsLayout:
     """Раскладка по вектору obs.
@@ -247,7 +252,20 @@ def from_obs(obs, table_path: Path | None = None, n_actions: int | None = None,
     if n_actions is None and n_quests is None:
         if _RESOLVED is not None and _RESOLVED.obs_size == size:
             return _RESOLVED
-        n_quests = quest_count(table_path)
+        # Раньше здесь бралось число квестов ИЗ ФАЙЛА ТАБЛИЦЫ. Это делало таблицу
+        # самой себе подтверждением: на окружении 587 с таблицей 224 получалась
+        # «согласованная» раскладка, и чтение слотов шло по чужим координатам
+        # молча. Теперь раскладку задают замеры сборок, а неоднозначность — отказ.
+        cands = _measured_split(size)
+        kinds = {(slots, quests) for _, slots, quests, _, _ in cands}
+        if len(kinds) == 1:
+            _, slots, quests, _, actions = cands[0]
+            return detect(size, n_actions=actions, n_quests=quests, strict=strict)
+        detail = ", ".join(f"{ver}: {slots}/{quests}" for ver, slots, quests, _, _ in cands) or "замеров нет"
+        raise ValueError(
+            f"obs={size} не определяет раскладку однозначно ({detail}) — передай n_actions "
+            f"или вызови obs_layout.configure(obs_size, n_actions) сразу после создания окружения"
+        )
     return detect(size, n_actions=n_actions, n_quests=n_quests, strict=strict)
 
 
