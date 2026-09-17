@@ -32,6 +32,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from device_utils import describe_device, device_info, resolve_device
+
 # Path to the world-of-claudecraft checkout containing python/wow_env.py.
 # Override with WOC_PYTHON_PATH (e.g. D:/world-of-claudecraft/python on Windows).
 WOC_PYTHON = os.environ.get("WOC_PYTHON_PATH", "D:/woc-game/python")
@@ -154,24 +156,31 @@ class EnvBatch:
 class Runner:
     """One brain instance + one policy net; produces actions and PPO tensors."""
 
-    def __init__(self, args, n_envs: int, obs_dim: int, n_actions: int, device="cpu"):
+    def __init__(self, args, n_envs: int, obs_dim: int, n_actions: int, device=None):
         self.args = args
-        self.device = device
-        self.brain = FlyBrain(device=device) if args.policy == "fly" else None
+        # Устройство одно на весь раннер: мозг считает на нём же, где живёт readout.
+        # Раньше FlyBrain(device=...) игнорировал параметр и работал на CPU, а сеть
+        # уезжала на GPU — отсюда переносы тензоров в каждом шаге.
+        self.device = resolve_device(device)
+        self.brain = FlyBrain(device=self.device) if args.policy == "fly" else None
         self.oracle_table = None
         if getattr(args, "oracle_obs", False) and args.policy == "fly":
             from quest_oracle import load_table, guidance_from_obs, oracle_vector  # noqa: F401
             global oracle_vector
             self.oracle_table = load_table()
+            # Сверка таблицы со сборкой СРАЗУ: иначе несовпадение (224-я таблица на
+            # obs=587) всплывало бы только на первом шаге обучения, уже после загрузки
+            # окружений и прогрева.
+            oracle_vector(np.zeros(obs_dim, dtype=np.float32), table=self.oracle_table)
             print(f"[oracle] side channel into the readout: +5 inputs "
                   f"({len(self.oracle_table['quests'])} quests)", flush=True)
         if args.policy == "fly":
             torch.manual_seed(args.seed)
             extra = 5 if self.oracle_table is not None else 0
-            self.net = FlyBrainReadout(self.brain.n_dn + extra, n_actions).to(device)
+            self.net = FlyBrainReadout(self.brain.n_dn + extra, n_actions).to(self.device)
         else:
             torch.manual_seed(args.seed)
-            self.net = MLPControl(obs_dim, n_actions).to(device)
+            self.net = MLPControl(obs_dim, n_actions).to(self.device)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=args.lr)
         self.n_actions = n_actions
         # Ability actions are gated by the game's GCD: casting again while it
@@ -197,9 +206,9 @@ class Runner:
     def feats(self, obs: np.ndarray, silenced: bool = False) -> torch.Tensor:
         if self.brain is not None:
             f = np.stack([extract_features(o) for o in obs])
+            # Признаки приезжают на устройство мозга один раз на батч; наружу
+            # brain.step отдаёт тензор на своём устройстве — переносить нечего.
             base = self.brain.step(torch.as_tensor(f, device=self.device), silenced=silenced)
-            if isinstance(base, torch.Tensor) and base.device != self.device:
-                base = base.to(self.device)
             extra = self.oracle_extra(obs)
             return base if extra is None else torch.cat([base, extra], dim=1)
         return torch.as_tensor(obs, device=self.device)
@@ -210,10 +219,10 @@ class Runner:
 
     def reset_done(self, dones: np.ndarray) -> None:
         """Reset MaleCNS state for environments that just auto-reset."""
-        if self.brain is not None and self.brain.h is not None:
+        if self.brain is not None:
             mask = np.asarray(dones, dtype=bool)
             if mask.any():
-                self.brain.h[mask] = 0.0
+                self.brain.zero_rows(mask)
 
     @torch.no_grad()
     def act(self, feats: torch.Tensor, mask: torch.Tensor | None = None,
@@ -252,7 +261,7 @@ def ppo_update(net, opt, batch, clip=0.2, ent_coef=0.02, vf_coef=0.5, epochs=4, 
             opt.zero_grad(); loss.backward()
             nn.utils.clip_grad_norm_(net.parameters(), 0.5)
             opt.step()
-            stats = {"pg": float(pg), "vf": float(vf), "ent": float(ent)}
+            stats = {"pg": float(pg.detach()), "vf": float(vf.detach()), "ent": float(ent.detach())}
     return stats
 
 
@@ -299,8 +308,9 @@ def train(args):
     from obs_layout import configure as _configure_layout
     _layout = _configure_layout(obs_size=int(batch.obs.shape[1]), n_actions=n_actions)
     print(f"[obs] {_layout.describe()}", flush=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[train] device: {device}", flush=True)
+    device = resolve_device(getattr(args, "device", None))
+    info = device_info()
+    print(f"[train] device: {describe_device(device)} | доступно: {info['devices']} | torch {info['torch']}", flush=True)
     runner = Runner(args, args.envs, obs_dim, n_actions, device=device)
     batch.reset([int(rng.integers(1, 900000)) for _ in range(args.envs)])
     runner.episode_reset(args.envs)
@@ -406,7 +416,8 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     obs_dim = env.observation_space.shape[0]
     sampled = policy_kind.endswith("-sampled")
     base = policy_kind[:-len("-sampled")] if sampled else policy_kind
-    brain = FlyBrain() if base.startswith("fly") else None
+    dev = resolve_device(getattr(args, "device", None))
+    brain = FlyBrain(device=dev) if base.startswith("fly") else None
 
     # Determine oracle usage: explicit flag > checkpoint shape > default
     oracle_tbl, net_extra = None, False
@@ -418,16 +429,17 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     if use_oracle:
         from quest_oracle import load_table, oracle_vector
         oracle_tbl, net_extra = load_table(), True
+        oracle_vector(np.zeros(obs_dim, dtype=np.float32), table=oracle_tbl)   # fail-fast
         print(f"[eval] oracle side channel detected (+5 inputs)", flush=True)
     net = None
     if base.startswith("fly"):
         torch.manual_seed(args.seed)
         extra = 5 if use_oracle else 0
-        net = FlyBrainReadout(brain.n_dn + extra, n_actions)
+        net = FlyBrainReadout(brain.n_dn + extra, n_actions).to(dev)
         if params is not None and base != "fly-untrained":
             net.load_state_dict(params["state"])
     elif base.startswith("mlp"):
-        net = MLPControl(obs_dim, n_actions)
+        net = MLPControl(obs_dim, n_actions).to(dev)
         if params is not None:
             net.load_state_dict(params["state"])
     net.eval() if net is not None else None
@@ -450,16 +462,17 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
             else:
                 with torch.no_grad():
                     if brain is not None:
-                        f = brain.step(torch.as_tensor(extract_features(obs)[None]),
-                                       silenced=(base == "fly-silenced"))
+                        f = brain.step(
+                            torch.as_tensor(extract_features(obs)[None], device=dev),
+                            silenced=(base == "fly-silenced"))
                         if net_extra:
                             f = torch.cat([f, torch.as_tensor(
-                                oracle_vector(obs, table=oracle_tbl)[None])], dim=1)
+                                oracle_vector(obs, table=oracle_tbl)[None], device=dev)], dim=1)
                     else:
-                        f = torch.as_tensor(obs[None])
+                        f = torch.as_tensor(obs[None], device=dev)
                     logits = net(f)[0]
                     if getattr(args, "mask_abilities", False) and getattr(args, "ability_idx", None):
-                        m = ability_mask(np.asarray(obs)[None], args.ability_idx, n_actions)
+                        m = ability_mask(np.asarray(obs)[None], args.ability_idx, n_actions, device=dev)
                         logits = logits.masked_fill(~m, -1e9)
                     if sampled:
                         a = int(torch.distributions.Categorical(logits=logits).sample())
@@ -512,8 +525,9 @@ def benchmark(args):
     OUT.mkdir(exist_ok=True)
     tag = f"_{args.tag}" if args.tag else ""
     fly_path, mlp_path = OUT / f"params_fly{tag}.pt", OUT / f"params_mlp{tag}.pt"
-    fly_params = torch.load(fly_path, weights_only=False) if fly_path.exists() else None
-    mlp_params = torch.load(mlp_path, weights_only=False) if mlp_path.exists() else None
+    dev = resolve_device(getattr(args, "device", None))
+    fly_params = torch.load(fly_path, weights_only=False, map_location=dev) if fly_path.exists() else None
+    mlp_params = torch.load(mlp_path, weights_only=False, map_location=dev) if mlp_path.exists() else None
     results = []
     if args.conditions:
         conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
@@ -558,6 +572,8 @@ def benchmark(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument("--device", default=None,
+                   help="cuda | cuda:0 | mps | cpu | auto (по умолчанию: WOC_DEVICE, иначе auto)")
     p.add_argument("--policy", choices=["fly", "mlp"], default="fly")
     p.add_argument("--updates", type=int, default=400)
     p.add_argument("--steps", type=int, default=96, help="env steps per env per update")
@@ -585,7 +601,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt-every", type=int, default=0, dest="ckpt_every",
                    help="save params/train_log every N updates (survives a reboot); 0 = off")
     p.add_argument("--mask-abilities", action="store_true", dest="mask_abilities",
-                   help="block ability actions while the GCD ticks (kills the 71.6%-of-steps cast spam); "
+                   help="block ability actions while the GCD ticks (kills the 71.6%%-of-steps cast spam); "
                         "train and evaluate with the same flag")
     args = p.parse_args()
     if args.eval_only:

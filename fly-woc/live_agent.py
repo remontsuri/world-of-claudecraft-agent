@@ -241,10 +241,13 @@ def main() -> None:
     sys.path.insert(0, str(root))
     from fly_brain import FlyBrain
     from agent import FlyBrainReadout
+    from device_utils import describe_device, resolve_device
 
     bridge = Bridge(args.bridge)
-    brain = FlyBrain(args.circuit)
-    state = torch.load(root / args.model, map_location="cpu", weights_only=False)
+    dev = resolve_device(getattr(args, "device", None))
+    brain = FlyBrain(args.circuit, device=dev)
+    print(f"[fly-live] {brain.describe()}", flush=True)
+    state = torch.load(root / args.model, map_location=dev, weights_only=False)
     checkpoint = state if isinstance(state, dict) else {}
     state = checkpoint.get("state", checkpoint.get("state_dict", state))
     actor0 = state.get("actor.0.weight") if isinstance(state, dict) else None
@@ -254,7 +257,7 @@ def main() -> None:
         from quest_oracle import load_table
         oracle_table = load_table()
         print("[fly-live] oracle side channel detected (+5)")
-    network = FlyBrainReadout(brain.n_dn + extra, 61)
+    network = FlyBrainReadout(brain.n_dn + extra, 61).to(dev)
     network.load_state_dict(state, strict=True)
     network.eval()
     brain.reset(1)
@@ -264,9 +267,9 @@ def main() -> None:
 
     for step in range(args.steps):
         features = live_features(info)
-        dn = brain.step(torch.from_numpy(features[None, :]))
+        dn = brain.step(torch.as_tensor(features[None, :], device=dev))
         if extra:
-            oracle = torch.from_numpy(oracle_extra_live(info, oracle_table)[None, :])
+            oracle = torch.as_tensor(oracle_extra_live(info, oracle_table)[None, :], device=dev)
             dn = torch.cat([dn, oracle], dim=1)
         logits, _ = network(dn)
         logits = logits[0] / max(args.temperature, 1e-3)

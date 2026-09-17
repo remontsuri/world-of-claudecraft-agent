@@ -24,7 +24,7 @@ class DopamineModulatedSTDP:
     """DA-STDP learning for KC→MBON synapses."""
     
     def __init__(self, n_kc=4133, n_mbon=96, tau_stdp=20.0, eta=0.001, 
-                 da_tau=100.0, device='cpu'):
+                 da_tau=100.0, device=None):
         """
         n_kc: number of Kenyon cells
         n_mbon: number of MB output neurons
@@ -37,6 +37,9 @@ class DopamineModulatedSTDP:
         self.tau_stdp = tau_stdp
         self.eta = eta
         self.da_tau = da_tau
+        if device is None:                      # было 'cpu': STDP-веса уезжали на CPU
+            from src.fly_brain.engine import get_device
+            device = get_device()
         self.device = device
         
         # KC→MBON weights (sparse)

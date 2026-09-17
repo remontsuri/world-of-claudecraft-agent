@@ -17,8 +17,11 @@ import json
 import os
 from pathlib import Path
 
+import os
 import numpy as np
 import torch
+
+from device_utils import describe_device, resolve_device
 
 import sys as _sys
 from pathlib import Path as _Path
@@ -26,6 +29,8 @@ _sys.path.insert(0, str(_Path(__file__).resolve().parent))  # obs_layout ряд�
 from obs_layout import from_obs  # noqa: E402
 
 DYNAMICS = {"iterations": 3, "leak": 0.7, "gain": 1.4, "outputGain": 4.0}  # Fly Dino v2 constants
+
+DEFAULT_CIRCUIT = Path(__file__).parent / "data" / "circuit.json"
 
 # ---------------------------------------------------------------- observations
 # WoWClassicEnv obs layout (src/sim/obs.ts): self 16 | abilities 2*ABILITY_SLOTS |
@@ -162,65 +167,301 @@ def extract_features(obs: np.ndarray) -> np.ndarray:
     return extract_features_v2(obs) if FEATURE_VERSION == "v2" else extract_features_v1(obs)
 
 
-class FlyBrain:
-    """Batched frozen circuit. Input: (B, 13) features. Output: (B, n_dn) torch tensor.
+# --------------------------------------------------------------- загрузка схемы
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i] in " \t\r\n":
+        i += 1
+    return i
 
-    The graph needs no autograd, so the propagation runs in scipy.sparse
-    (OpenMP-parallel CSR); torch's CPU sparse CSR matmul measured ~234 ms per
-    multiply on this graph vs ~2 ms for scipy. Only the returned DN slice
-    re-enters torch, for the trainable readout.
+
+class _Grow:
+    """Растущий numpy-массив: схема из 1.87M рёбер не должна собираться сначала в
+    список Python-объектов."""
+
+    __slots__ = ("a", "n")
+
+    def __init__(self, dtype, cap: int = 4096):
+        self.a = np.empty(max(cap, 1), dtype)
+        self.n = 0
+
+    def add(self, value) -> None:
+        if self.n == self.a.size:
+            self.a = np.resize(self.a, self.a.size * 2)
+        self.a[self.n] = value
+        self.n += 1
+
+    def array(self) -> np.ndarray:
+        return self.a[: self.n]
+
+
+def load_circuit(path: str | Path) -> dict:
+    """Потоково разбирает schematic-json и отдаёт массивы вместо дерева объектов.
+
+    Зачем не `json.loads`: на нашей схеме (8835 узлов / 1.87M рёбер) он строит
+    1.87M вложенных списков — пик ~0.6 ГБ, из которых 0.5 ГБ сразу становятся мусором.
+    Тут пик — текст файла (25 МБ) плюс нужные массивы (~45 МБ), то есть в 10 раз меньше.
+    Формат чтения тот же; при незнакомой структуре разбор падает с явной ошибкой,
+    а не молча отдаёт пустые массивы.
+    """
+    text = Path(path).read_text()
+    dec = json.JSONDecoder()
+    i = _skip_ws(text, text.index("{") + 1)
+
+    meta: dict = {}
+    node_field = {k: [] for k in ("type", "side", "nt", "role")}
+    # Оценка ёмкости по размеру файла: на нашей схеме это ~28 байт на ребро, берём с
+    # запасом. Иначе удвоение буфера даёт пик в 2 раза выше нужного (и лишний churn).
+    cap = max(4096, len(text) // 16)
+    signs = _Grow(np.float64, cap // 200)
+    pre = _Grow(np.int64, cap)
+    post = _Grow(np.int64, cap)
+    contacts = _Grow(np.float64, cap)
+    seen = set()
+
+    while True:
+        i = _skip_ws(text, i)
+        if text[i] == "}":
+            break
+        if text[i] == ",":
+            i += 1
+            continue
+        key, i = dec.raw_decode(text, i)
+        i = _skip_ws(text, i)
+        if text[i] != ":":
+            raise ValueError(f"схема {path}: ожидался ':' после ключа {key!r}")
+        i = _skip_ws(text, i + 1)
+        seen.add(key)
+
+        if key in ("nodes", "edges"):
+            if text[i] != "[":
+                raise ValueError(f"схема {path}: {key} должен быть списком")
+            i += 1
+            big = key == "edges"
+            while True:
+                i = _skip_ws(text, i)
+                if text[i] == "]":
+                    i += 1
+                    break
+                if text[i] == ",":
+                    i += 1
+                    continue
+                item, i = dec.raw_decode(text, i)
+                if big:
+                    pre.add(item[0])
+                    post.add(item[1])
+                    contacts.add(item[2])
+                else:
+                    signs.add(item.get("sign", 1.0))
+                    for f in node_field:
+                        node_field[f].append(item.get(f))
+        else:
+            meta[key], i = dec.raw_decode(text, i)
+
+    missing = {"version", "nodes", "edges", "inputs", "outputs"} - seen
+    if missing:
+        raise ValueError(f"схема {path}: нет обязательных ключей {sorted(missing)}")
+    n = signs.n
+    if len(pre.array()) == 0:
+        raise ValueError(f"схема {path}: рёбер нет — это не схема")
+    lo, hi = int(min(pre.array().min(), post.array().min())), int(max(pre.array().max(), post.array().max()))
+    if lo < 0 or hi >= n:
+        raise ValueError(f"схема {path}: ребро ссылается на узел вне 0..{n - 1} ({lo}..{hi})")
+
+    return {
+        "n": n,
+        "pre": pre.array(), "post": post.array(), "contacts": contacts.array(),
+        "signs": signs.array(),
+        "nodes": node_field,
+        "inputs": meta["inputs"], "outputs": meta["outputs"],
+        "channels": meta.get("channels"), "input_types": meta.get("input_types"),
+        "version": meta.get("version"),
+        "n_edges": int(pre.n),
+    }
+
+
+class FlyBrain:
+    """Пакетная замороженная схема: вход (B, 13), выход (B, n_dn) — тензор НА self.device.
+
+    Три бэкенда одного и того же уравнения:
+      scipy  — CPU-эталон (numpy + scipy CSR). На CPU быстрее torch: у torch
+               CPU-разрежённый matmul на этой схеме измерялся ~234 мс/умножение
+               против ~2 мс у scipy (одноядерный путь);
+      edge   — gather + index_add по рёбрам. Основной для GPU: 1.87M рёбер,
+               батч маленький (2-8), память под один шаг ~B*M*4 байт;
+      sparse — torch.sparse COO matmul. Кроссплатформенная альтернатива и,
+               главное, эталон для сверки — eq-тест всех трёх бэкендов.
+
+    Прежняя версия считала всё в scipy и возвращала CPU-тензор независимо от
+    device, поэтому в train.py жил костыль base.to(self.device), а «GPU» в
+    названиях файлов ни к чему не обязывал. Здесь устройство выбирается один раз
+    (device_utils.resolve_device), и состояние h живёт на нём же.
     """
 
-    def __init__(self, circuit_path: str | Path = Path(__file__).parent / "data" / "circuit.json",
-                 device: str = "cpu"):
-        from scipy.sparse import coo_matrix
-        graph = json.loads(Path(circuit_path).read_text())
-        self.graph = graph
-        n = len(graph["nodes"])
-        self.n = n
-        self.device = device
-        pre = np.array([e[0] for e in graph["edges"]], dtype=np.int32)
-        post = np.array([e[1] for e in graph["edges"]], dtype=np.int32)
-        contacts = np.array([e[2] for e in graph["edges"]], dtype=np.float64)
-        signs = np.array([nd["sign"] for nd in graph["nodes"]], dtype=np.float64)
+    BACKENDS = ("scipy", "edge", "sparse")
 
-        # Fly Dino normalization: incoming signed weights normalized by the total
-        # absolute signed contact count at each postsynaptic cell; zero -> 0.
+    def __init__(self, circuit_path: str | Path | None = None, device=None,
+                 backend: str | None = None, dtype: torch.dtype = torch.float32):
+        self.graph_path = Path(circuit_path or DEFAULT_CIRCUIT)
+        circuit = load_circuit(self.graph_path)
+        n = self.n = circuit["n"]
+        self.device = resolve_device(device)
+        self.dtype = dtype
+
+        pre, post = circuit["pre"], circuit["post"]
+        contacts, signs = circuit["contacts"], circuit["signs"]
+
+        # Fly Dino normalization: входящие знаковые веса нормируются на суммарный
+        # абсолютный контакт постсинаптической клетки; ноль -> 0.
         denom = np.zeros(n)
         np.add.at(denom, post, contacts * np.abs(signs[pre]))
-        w = np.where(denom[post] > 0, contacts * signs[pre] / np.maximum(denom[post], 1e-12), 0.0)
+        w = np.where(denom[post] > 0,
+                     contacts * signs[pre] / np.maximum(denom[post], 1e-12), 0.0).astype(np.float32)
 
-        # W_T[post, pre] so that (W_T @ h.T) accumulates presynaptic activity
-        # into each postsynaptic cell.
-        self.W_T = coo_matrix((w.astype(np.float32), (post, pre)), shape=(n, n)).tocsr()
-        self.W_T.sum_duplicates()
+        self.input_idx_np = np.array([c for c, _ in circuit["inputs"]], dtype=np.int64)
+        self.input_ch_np = np.array([ch for _, ch in circuit["inputs"]], dtype=np.int64)
+        self.out_idx_np = np.array(circuit["outputs"], dtype=np.int64)
+        self.n_dn = len(circuit["outputs"])
+        self.n_edges = circuit["n_edges"]
+        # Компактные метаданные вместо полного графа: 1.87M рёбер в Python-объектах —
+        # это ~0.5 ГБ на каждую копию мозга (на машине с 1 ГБ два Runner'а падали по
+        # OOM). Полный файл при необходимости перечитывается по self.graph_path,
+        # типы клеток нужны для адресации входов по типам (см. ECOSYSTEM.md).
+        self.graph = {
+            "version": circuit["version"],
+            "n_nodes": n,
+            "n_edges": self.n_edges,
+            "channels": circuit["channels"],
+            "input_types": circuit["input_types"],
+            "inputs": [list(map(int, pair)) for pair in circuit["inputs"]],
+            "outputs": [int(o) for o in circuit["outputs"]],
+            "node_types": circuit["nodes"]["type"],
+        }
+        # Драйв пишется индексацией; при дубликатах индексов numpy берёт последний,
+        # torch — недетерминирован. Сейчас индексы уникальны (52 нейрона), но при
+        # пересборке схемы это не гарантировано — на такой случай есть index_add_.
+        self._input_idx_unique = len(set(self.input_idx_np.tolist())) == self.input_idx_np.size
 
-        self.input_idx = np.array([c for c, _ in graph["inputs"]], dtype=np.int64)
-        self.input_ch = np.array([ch for _, ch in graph["inputs"]], dtype=np.int64)
-        self.out_idx_np = np.array(graph["outputs"], dtype=np.int64)
-        self.n_dn = len(graph["outputs"])
-        self.h = None            # numpy (B, n)
-        self._u = None
+        backend = (backend or os.environ.get("WOC_BRAIN_BACKEND") or "auto").strip().lower()
+        if backend == "auto":
+            backend = "scipy" if self.device.type == "cpu" else "edge"
+        if backend not in self.BACKENDS:
+            raise ValueError(f"неизвестный бэкенд схемы {backend!r}; доступны {self.BACKENDS}")
+        self.backend = backend
 
+        if backend == "scipy":
+            from scipy.sparse import coo_matrix
+            # W_T[post, pre], чтобы (W_T @ h.T) собирал активность пре-клеток в пост.
+            self.W_T = coo_matrix((w, (post, pre)), shape=(n, n)).tocsr()
+            self.W_T.sum_duplicates()
+            self.h = None                       # numpy (B, n)
+        else:
+            self.pre_t = torch.as_tensor(pre, dtype=torch.long, device=self.device)
+            self.post_t = torch.as_tensor(post, dtype=torch.long, device=self.device)
+            self.w_t = torch.as_tensor(w, dtype=self.dtype, device=self.device)
+            self.input_idx = torch.as_tensor(self.input_idx_np, dtype=torch.long, device=self.device)
+            self.input_ch = torch.as_tensor(self.input_ch_np, dtype=torch.long, device=self.device)
+            self.out_idx = torch.as_tensor(self.out_idx_np, dtype=torch.long, device=self.device)
+            if backend == "sparse":
+                indices = torch.stack([self.post_t, self.pre_t])
+                self.W_sparse = torch.sparse_coo_tensor(
+                    indices, self.w_t, (n, n), device=self.device).coalesce()
+            self.h = None                       # torch (B, n) на self.device
+
+    # ---------------------------------------------------------------- состояние
     def reset(self, batch: int):
-        self.h = np.zeros((batch, self.n), np.float32)
+        if self.backend == "scipy":
+            self.h = np.zeros((batch, self.n), np.float32)
+        else:
+            self.h = torch.zeros((batch, self.n), dtype=self.dtype, device=self.device)
 
+    def zero_all(self):
+        if self.h is None:
+            return
+        if self.backend == "scipy":
+            self.h[:] = 0
+        else:
+            self.h.zero_()
+
+    def zero_rows(self, mask) -> None:
+        """Обнулить состояние выбранных окружений (авто-ресет среды)."""
+        if self.h is None:
+            return
+        if self.backend == "scipy":
+            self.h[np.asarray(mask, dtype=bool)] = 0.0
+        else:
+            m = mask if isinstance(mask, torch.Tensor) else torch.as_tensor(mask, device=self.device)
+            self.h[m.to(torch.bool)] = 0.0
+
+    def state_copy(self):
+        """Копия состояния для диагностики (check_io) — тип зависит от бэкенда."""
+        if self.h is None:
+            return None
+        return self.h.copy() if self.backend == "scipy" else self.h.detach().clone()
+
+    def restore_state(self, state) -> None:
+        if state is None:
+            return
+        if self.backend == "scipy":
+            self.h = np.array(state, dtype=np.float32)
+        else:
+            self.h = state.clone().to(self.device, dtype=self.dtype)
+
+    def describe(self) -> str:
+        return (f"FlyBrain(backend={self.backend}, device={describe_device(self.device)}, "
+                f"dtype={str(self.dtype).replace('torch.', '')}, n={self.n}, "
+                f"n_dn={self.n_dn}, edges={self.n_edges})")
+
+    # ---------------------------------------------------------------- шаг схемы
     def step(self, feats, silenced: bool = False):
-        """feats: (B, 13) torch tensor or numpy -> DN activities (B, n_dn) as torch tensor."""
-        if isinstance(feats, torch.Tensor):
-            feats = feats.detach().cpu().numpy()
-        B = feats.shape[0]
+        """feats: (B, 13) torch-тензор или numpy -> (B, n_dn) на self.device.
+
+        Конверсий устройства внутри шага нет: если вход пришёл с другого
+        устройства, он переносится один раз на входе.
+        """
+        B = int(feats.shape[0])
         if self.h is None or self.h.shape[0] != B:
             self.reset(B)
         if silenced:
-            self.h[:] = 0
-            return torch.zeros(B, self.n_dn)
-        u = np.zeros((B, self.n), np.float32)
-        # Fly Dino drive encoding: u = 2 * (feature - 0.5) on driven cells only.
-        u[:, self.input_idx] = 2.0 * (feats[:, self.input_ch] - 0.5)
-        leak = DYNAMICS["leak"]; gain = DYNAMICS["gain"]
+            self.zero_all()
+            if self.backend == "scipy":
+                return torch.zeros(B, self.n_dn, dtype=torch.float32)
+            return torch.zeros(B, self.n_dn, dtype=self.dtype, device=self.device)
+
+        leak = DYNAMICS["leak"]
+        gain = DYNAMICS["gain"]
+        out_gain = DYNAMICS["outputGain"]
+
+        if self.backend == "scipy":
+            f = feats.detach().cpu().numpy() if isinstance(feats, torch.Tensor) else np.asarray(feats)
+            u = np.zeros((B, self.n), np.float32)
+            # Fly Dino drive encoding: u = 2 * (feature - 0.5) только на драйв-клетках.
+            u[:, self.input_idx_np] = 2.0 * (f[:, self.input_ch_np] - 0.5)
+            for _ in range(DYNAMICS["iterations"]):
+                inp = u + gain * (self.W_T @ self.h.T).T
+                self.h = (1 - leak) * self.h + leak * np.tanh(inp, dtype=np.float32)
+            out = self.h[:, self.out_idx_np] * out_gain
+            return torch.from_numpy(np.ascontiguousarray(out))
+
+        x = feats if isinstance(feats, torch.Tensor) else torch.as_tensor(feats)
+        if x.device != self.device:
+            x = x.to(self.device, non_blocking=True)
+        if x.dtype != self.dtype:
+            x = x.to(self.dtype)
+
+        u = torch.zeros((B, self.n), dtype=self.dtype, device=self.device)
+        drive = 2.0 * (x[:, self.input_ch] - 0.5)
+        if self._input_idx_unique:
+            u[:, self.input_idx] = drive
+        else:
+            u.index_add_(1, self.input_idx, drive)
+
+        h = self.h
         for _ in range(DYNAMICS["iterations"]):
-            inp = u + gain * (self.W_T @ self.h.T).T
-            self.h = (1 - leak) * self.h + leak * np.tanh(inp, dtype=np.float32)
-        out = self.h[:, self.out_idx_np] * DYNAMICS["outputGain"]
-        return torch.from_numpy(np.ascontiguousarray(out))
+            if self.backend == "edge":
+                rec = torch.zeros_like(h)
+                rec.index_add_(1, self.post_t, h.index_select(1, self.pre_t) * self.w_t)
+            else:
+                rec = torch.sparse.mm(self.W_sparse, h.transpose(0, 1)).transpose(0, 1)
+            h = (1 - leak) * h + leak * torch.tanh(u + gain * rec)
+        self.h = h
+        return h.index_select(1, self.out_idx) * out_gain

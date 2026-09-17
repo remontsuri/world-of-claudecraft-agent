@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
+from device_utils import resolve_device
 from scipy.sparse import csr_matrix
 
 
@@ -13,16 +15,16 @@ class FlyBrain8KGPU:
     """Frozen MaleCNS 8K subset with rate-based propagation on GPU."""
 
     def __init__(self, circuit_path=None, device=None, n_iters=5):
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = resolve_device(device)   # единый выбор: аргумент -> WOC_DEVICE -> cuda/mps -> cpu
         self.n_iters = n_iters
         if circuit_path is None:
             circuit_path = str(Path(__file__).resolve().parent / 'data' / 'circuit.json')
-        print(f'[FlyBrain8KGPU] loading from {circuit_path}...')
+        print(f'[FlyBrain8KGPU] loading from {circuit_path}... device={self.device}')
 
         with open(circuit_path) as f:
             graph = json.load(f)
 
-        self.graph = graph
+        self.graph_path = Path(circuit_path)
         n = len(graph['nodes'])
         self.n = n
 
@@ -51,6 +53,9 @@ class FlyBrain8KGPU:
         self.input_ch = torch.tensor([ch for _, ch in graph['inputs']], dtype=torch.long, device=self.device)
         self.out_idx = torch.tensor(graph['outputs'], dtype=torch.long, device=self.device)
         self.n_dn = len(graph['outputs'])
+        # см. fly_brain.py: 1.87M рёбер в Python-объектах (~0.5 ГБ) держать не нужно
+        self.graph = {"n_nodes": n, "n_edges": len(pre), "channels": graph.get("channels")}
+        del graph
 
         # Pre-compute input mapping for vectorized drive
         self.input_map = []

@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from wow_env import WoWClassicEnv  # noqa: E402
 from fly_brain import FlyBrain, extract_features, FEATURE_VERSION  # noqa: E402
+from device_utils import describe_device, resolve_device  # noqa: E402
 from quest_oracle import load_table, oracle_vector  # noqa: E402
 from agent import FlyBrainReadout, MLPControl  # noqa: E402
 
@@ -83,16 +84,20 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability
         else:
             with torch.no_grad():
                 if brain is not None:
-                    f = brain.step(torch.as_tensor(extract_features(obs)[None]),
+                    # Признаки и боковой канал приезжают на устройство мозга; наружу
+                    # step отдаёт тензор на нём же, поэтому переносить нечего.
+                    dev = brain.device
+                    f = brain.step(torch.as_tensor(extract_features(obs)[None], device=dev),
                                    silenced=(policy == "fly-silenced"))
                     if oracle_tbl is not None:
                         f = torch.cat([f, torch.as_tensor(
-                            oracle_vector(obs, table=oracle_tbl)[None])], dim=1)
+                            oracle_vector(obs, table=oracle_tbl)[None], device=dev)], dim=1)
                 else:
-                    f = torch.as_tensor(obs[None])
+                    f = torch.as_tensor(obs[None], device=net.device)
                 logits = net(f)[0]
                 if ability_idx:
-                    m = ability_mask(np.asarray(obs)[None], ability_idx, logits.shape[-1])
+                    m = ability_mask(np.asarray(obs)[None], ability_idx, logits.shape[-1],
+                                     device=logits.device)
                     logits = logits.masked_fill(~m[0], -1e9)
                 a = (int(torch.distributions.Categorical(logits=logits).sample())
                      if policy.endswith("-sampled") else int(logits.argmax(-1)))
@@ -131,26 +136,28 @@ def run_episode(env, brain, net, policy: str, seed: int, max_steps: int, ability
 
 
 def build(policy: str, checkpoint: Path | None, seed: int, obs_dim: int, n_actions: int,
-          oracle_extra: int = 0):
+          oracle_extra: int = 0, device=None):
     base = policy[:-len("-sampled")] if policy.endswith("-sampled") else policy
-    brain = FlyBrain() if base.startswith("fly") else None
+    dev = resolve_device(device)
+    brain = FlyBrain(device=dev) if base.startswith("fly") else None
     net = None
     if base.startswith("fly"):
         torch.manual_seed(seed)
-        net = FlyBrainReadout(brain.n_dn + oracle_extra, n_actions)
+        net = FlyBrainReadout(brain.n_dn + oracle_extra, n_actions).to(dev)
         if checkpoint is not None and base != "fly-untrained":
-            net.load_state_dict(torch.load(checkpoint, weights_only=False)["state"])
+            net.load_state_dict(torch.load(checkpoint, weights_only=False, map_location=dev)["state"])
         net.eval()
     elif base.startswith("mlp"):
-        net = MLPControl(obs_dim, n_actions)
+        net = MLPControl(obs_dim, n_actions).to(dev)
         if checkpoint is not None:
-            net.load_state_dict(torch.load(checkpoint, weights_only=False)["state"])
+            net.load_state_dict(torch.load(checkpoint, weights_only=False, map_location=dev)["state"])
         net.eval()
     return brain, net
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--device", default=None, help="cuda | cpu | mps | auto (по умолчанию WOC_DEVICE/auto)")
     ap.add_argument("--policy", default="fly-sampled",
                     choices=["fly", "fly-sampled", "fly-silenced", "fly-untrained", "mlp", "mlp-sampled", "random", "openloop"])
     ap.add_argument("--checkpoint", type=Path, default=Path(__file__).parent / "outputs" / "params_fly_v2.pt")
@@ -175,6 +182,9 @@ def main() -> int:
     _layout = _configure_layout(obs_size=env.observation_space.shape[0], n_actions=env.action_space.n)
     print(f"[obs] {_layout.describe()}", flush=True)
     oracle_tbl = load_table() if (args.oracle_obs and args.policy == "fly") else None
+    if oracle_tbl is not None:
+        # та же проверка «таблица от этой сборки», что и в train.py, но при запуске замера
+        oracle_vector(np.zeros(env.observation_space.shape[0], dtype=np.float32), table=oracle_tbl)
     brain, net = build(args.policy, ckpt, args.torch_seed, env.observation_space.shape[0],
                        env.action_space.n, oracle_extra=5 if oracle_tbl is not None else 0)
 

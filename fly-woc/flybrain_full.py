@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from device_utils import resolve_device
+
 
 class FlyBrainFull:
     """Frozen MaleCNS 211K full graph with rate-based propagation on GPU."""
@@ -14,7 +16,7 @@ class FlyBrainFull:
     def __init__(self, circuit_path=None, device=None):
         if circuit_path is None:
             circuit_path = str(Path(__file__).parent / 'data' / 'circuit_full.json')
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = resolve_device(device)   # единый выбор: аргумент -> WOC_DEVICE -> cuda/mps -> cpu
         print(f'[FlyBrainFull] loading from {circuit_path}...')
 
         with open(circuit_path) as f:

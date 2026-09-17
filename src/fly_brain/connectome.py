@@ -58,11 +58,17 @@ def load_connectome(parquet_path=PARQUET_PATH, completeness_path=COMPLETENESS_PA
     return df, flyid2i, i2flyid, n_neurons
 
 
-def build_sparse_weights(df, flyid2i, n_neurons, w_scale=0.275, device="cpu"):
+def build_sparse_weights(df, flyid2i, n_neurons, w_scale=0.275, device=None):
     """Build sparse CSR weight matrix W[i,j] = w_scale * connectivity.
     
     W[i,j] represents synaptic weight from neuron j to neuron i (column-stochastic).
+
+    device=None -> лучшее доступное (get_device): раньше по умолчанию было "cpu",
+    и вызов без device клал 1.87M весов на CPU даже когда модель считает на GPU.
     """
+    if device is None:
+        from src.fly_brain.engine import get_device
+        device = get_device()
     pre_idx = df["Presynaptic_ID"].map(flyid2i).values.astype(np.int64)
     post_idx = df["Postsynaptic_ID"].map(flyid2i).values.astype(np.int64)
     weights = df["Connectivity"].values.astype(np.float32) * w_scale

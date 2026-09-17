@@ -26,19 +26,52 @@ MODEL_PARAMS = {
 
 DT = 0.2  # Simulation timestep in ms
 
-def get_device():
-    """Get best available device."""
-    if torch.cuda.is_available():
-        print(f"[engine] Using GPU: {torch.cuda.get_device_name(0)}")
-        return 'cuda'
-    try:
+def get_device(prefer=None):
+    """Лучшее доступное устройство: аргумент -> WOC_DEVICE -> cuda -> directml -> mps -> cpu.
+
+    Явный запрос недоступного устройства — ошибка, а не тихий откат: молчаливый
+    CPU-фолбэк уже приводил к тому, что обучение шло на CPU, пока в логах было «GPU».
+    """
+    import os
+    want = (prefer or os.environ.get("WOC_DEVICE") or "").strip().lower()
+    if want in ("gpu",):
+        want = "cuda"
+
+    def ok(name):
+        if name.startswith("cuda"):
+            return torch.cuda.is_available()
+        if name == "mps":
+            backend = getattr(torch.backends, "mps", None)
+            return bool(backend is not None and backend.is_available())
+        if name == "directml":
+            try:
+                import torch_directml
+                return bool(torch_directml.is_available())
+            except ImportError:
+                return False
+        return name == "cpu"
+
+    if want and want != "auto":
+        if not ok(want):
+            raise RuntimeError(f"запрошено устройство {want!r} (WOC_DEVICE={os.environ.get('WOC_DEVICE')!r}), "
+                               f"но оно недоступно")
+        dev = want
+    elif torch.cuda.is_available():
+        dev = "cuda"
+    elif ok("directml"):
+        dev = "directml"
+    elif ok("mps"):
+        dev = "mps"
+    else:
+        dev = "cpu"
+    if dev == "cuda":
+        print(f"[engine] Using GPU: {torch.cuda.get_device_name(0)}", flush=True)
+    else:
+        print(f"[engine] Using {dev}", flush=True)
+    if dev == "directml":
         import torch_directml
-        if torch_directml.is_available():
-            return torch_directml.device()
-    except ImportError:
-        pass
-    print("[engine] Using CPU")
-    return 'cpu'
+        return torch_directml.device()
+    return dev
 
 
 def load_sparse_from_parquet(parquet_path='D:/fly-brain/data/2025_Connectivity_783.parquet'):

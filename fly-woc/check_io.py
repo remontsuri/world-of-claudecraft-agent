@@ -16,19 +16,20 @@ from fly_brain import FlyBrain, extract_features
 
 env = WoWClassicEnv(player_class="warrior", max_steps=60)
 brain = FlyBrain()
+print(brain.describe(), flush=True)
 obs, _ = env.reset(seed=7)
 brain.reset(1)
 
 rows = {"full": [], "black": [], "silenced": []}
 for i in range(60):
     f = torch.as_tensor(extract_features(obs)[None])
-    h_before = brain.h.copy()
+    h_before = brain.state_copy()
     full_out = brain.step(f)                          # the live branch: state advances
-    h_after = brain.h.copy()
+    h_after = brain.state_copy()
     rows["full"].append(full_out.numpy()[0])
-    brain.h = h_before.copy()
-    rows["black"].append(brain.step(torch.zeros(1, 13)).numpy()[0])
-    brain.h = h_before.copy()
+    brain.restore_state(h_before)
+    rows["black"].append(brain.step(torch.zeros(1, 13, device=brain.device)).cpu().numpy()[0])
+    brain.restore_state(h_before)
     rows["silenced"].append(brain.step(f, silenced=True).numpy()[0])
     brain.h = h_after                                 # restore the live branch
     a = env.action_space.sample()
