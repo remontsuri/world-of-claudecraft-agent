@@ -233,6 +233,8 @@ java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:879
 * База знаний: `knowledge/` — `principles.md` (как думать), `woc-game.md` (игра и её числа),
   `fly-connectome.md` (схема, контроли, LIF, атрибуция MaleCNS), `pitfalls.md` (наши грабли),
   `verification.md` (протокол приёмки). **Читать перед работой, дописывать в тот же день.**
+* Корневые ориентиры: `README.md` (что это и с чего начать), `GIT-WORKFLOW.md`
+  (роли веток и протокол перед пушем).
 * Для hermes: `hermes/README.md` (порядок чтения и цикл работы), `hermes/TOOLS.md`
   (что запускать, что считается успехом), `hermes/skills/woc-master-goal/SKILL.md`
   (главная цель и инварианты), `hermes/hooks/` (session_start — напоминание о главном,
@@ -246,6 +248,7 @@ java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:879
 | перед пушем Java | `bash woof-agent/tools/run_e2e.sh` | `УСПЕХ ... нарушений контракта нет` |
 | после правок fly-линии | `bash fly-woc/tools/run_checks.sh` | `ВСЁ ЗЕЛЁНОЕ` |
 | на машине с GPU | `python3 fly-woc/tools/gpu_check.py --device cuda --bench` | выбран `cuda`, код возврата 0 |
+| после правок хуков/инструкций | `bash hermes/hooks/selftest.sh` | `хуки: passed=12 failed=0` |
 
 ### Правила, добавленные сегодня
 
