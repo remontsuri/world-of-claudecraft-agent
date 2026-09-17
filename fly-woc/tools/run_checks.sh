@@ -23,6 +23,7 @@ run() {  # run "имя" команда...
 }
 
 run test_quest_oracle  python3 tools/test_quest_oracle.py
+run test_control_graph python3 tools/test_control_graph.py
 run test_obs_layout    python3 tools/test_obs_layout.py
 run obs_layout_selftest python3 obs_layout.py
 
