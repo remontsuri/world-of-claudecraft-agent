@@ -235,6 +235,10 @@ java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:879
   `verification.md` (протокол приёмки). **Читать перед работой, дописывать в тот же день.**
 * Корневые ориентиры: `README.md` (что это и с чего начать), `GIT-WORKFLOW.md`
   (роли веток и протокол перед пушем).
+* Fly-линия (муха): `fly-woc/README.md` (протокол эксперимента), `fly-woc/ARCHITECTURE.md`
+  (слои, устройство, что доказано и что нет), `fly-woc/ROADMAP.md` (план, пороги M1–M4,
+  что нужно от машины), `fly-woc/DEPENDENCIES.md`, `fly-woc/FILES.md` (карта файлов),
+  `fly-woc/GPU-DEVICE.md`; журнал экспериментов — `knowledge/fly-experiments.md`.
 * Для hermes: `hermes/README.md` (порядок чтения и цикл работы), `hermes/TOOLS.md`
   (что запускать, что считается успехом), `hermes/skills/woc-master-goal/SKILL.md`
   (главная цель и инварианты), `hermes/hooks/` (session_start — напоминание о главном,

@@ -6,7 +6,7 @@
 | Линия | Что | Где | Состояние |
 |---|---|---|---|
 | **Java-бот** | автономный агент: мост к игре, навыки, квестовые фазы | `woof-agent/` | активная |
-| **Коннектом** | схема на 8835 нейронов, обучение читаута, контроли (rewired/ER) | `fly-woc/`, `src/fly_brain/` | на паузе, приёмка объявлена |
+| **Коннектом (муха)** | схема на 8835 нейронов, обучение читаута, контроли (rewired/ER) | `fly-woc/`, `src/fly_brain/` | активная работа по ветке `backup`; приёмка объявлена |
 
 ## С чего начать
 
@@ -16,6 +16,7 @@
 | агенту-исполнителю | `AGENTS.md` → `knowledge/principles.md` → `knowledge/pitfalls.md` → `woof-agent/ROADMAP.md` |
 | тому, кто пушит | `GIT-WORKFLOW.md` (правила веток и протокол перед пушем) |
 | тому, кто ищет знание | `knowledge/` (индекс — `knowledge/README.md`) |
+| тому, кто работает по мухе | `fly-woc/README.md` (протокол эксперимента) → `fly-woc/ARCHITECTURE.md` → `fly-woc/ROADMAP.md` (план и пороги) → `fly-woc/DEPENDENCIES.md`, `fly-woc/FILES.md`, `fly-woc/GPU-DEVICE.md`, `fly-woc/ECOSYSTEM.md` |
 | тому, что настраивает hermes | `hermes/README.md`, `hermes/TOOLS.md`, `hermes/hooks/` |
 
 ## Быстрые команды
@@ -26,9 +27,10 @@ bash woof-agent/tools/build.sh
 bash woof-agent/tools/run_tests.sh      # ожидаем: tests passed=3 failed=0
 bash woof-agent/tools/run_e2e.sh        # ожидаем: УСПЕХ ... нарушений контракта нет
 
-# Коннектом (пауза)
+# Коннектом (муха)
 bash fly-woc/tools/run_checks.sh        # ожидаем: ВСЁ ЗЕЛЁНОЕ
 python3 fly-woc/tools/test_device.py    # 25 проверок выбора устройства
+python3 fly-woc/tools/gpu_check.py --device cuda --bench   # на машине с картой
 
 # Хуки hermes: проверка, что предохранители работают
 bash hermes/hooks/selftest.sh           # ожидаем: ВСЁ ЗЕЛЁНОЕ

@@ -25,15 +25,23 @@ ss -ltnp | grep -E '8791|9231|9232'                     # не заняты ли
 e2e — единственная проверка, которая прогоняет весь цикл (мост → агент → квест).
 Его нельзя «ускорить» частичным прогоном: он и есть приёмка.
 
-## Fly-линия (когда вернёмся)
+## Fly-линия (муха + её ветка `backup`)
 
 | Когда | Команда | Успех |
 |---|---|---|
-| после правок коннектома/оракула | `bash fly-woc/tools/run_checks.sh` | `ВСЁ ЗЕЛЁНОЕ` (6 блоков) |
-| после правок устройства/схемы | `python3 fly-woc/tools/test_device.py` | `итог: устройство разведено корректно` (25 проверок) |
-| проверка контролей | `python3 fly-woc/tools/test_control_graph.py --full` | `итог: контроли корректны` |
-| на машине с GPU | `python3 fly-woc/tools/gpu_check.py --device cuda --bench` | выбранное устройство `cuda`, медиана шага, код возврата 0 |
-| ступени до M1–M3 | `bash fly-woc/tools/accel_m1_m3.sh` | проходит дальше `probe`, пороги M1–M3 |
+| после любой правки линии | `bash fly-woc/tools/run_checks.sh` | `ВСЁ ЗЕЛЁНОЕ` (6 блоков) |
+| правки устройства/схемы/памяти | `python3 fly-woc/tools/test_device.py` | `итог: устройство разведено корректно`, 25 проверок |
+| контроли топологии | `python3 fly-woc/tools/test_control_graph.py --full` | `итог: контроли корректны` |
+| собрать контрольные графы | `python3 fly-woc/tools/make_control_graph.py --mode degree|er --seed N` | рядом со схемой появился файл с блоком `control` (sha источника, seed, счётчики) |
+| таблица оракула под сборку | `bash fly-woc/tools/make_quest_oracle.sh <тег игры>` | файл нужной версии; чужая таблица обязана падать с `ValueError` |
+| целостность схемы и I/O | `python3 fly-woc/check_io.py` | схема реагирует на вход (не молчит) |
+| на машине с GPU | `python3 fly-woc/tools/gpu_check.py --device cuda --bench` | выбрано `cuda`, медиана шага, код возврата 0 |
+| ступени к M1–M3 | `bash fly-woc/tools/accel_m1_m3.sh` | прошло дальше `probe`; нужны `WOC_PYTHON_PATH` и GPU |
+| метрики эпизода | `python3 fly-woc/progress_eval.py --device cpu` | строка метрик M0–M4 по условиям `our/rewired/er/...` |
+
+Важное про числа: на CPU осмысленен только `scipy`-бэкенд (`auto` его и берёт);
+`edge` — для GPU. Реальные цифры снимаются на машине с картой, и без них скорость
+не обещаем.
 
 ## Проверка, которая спасает от глупого пуша
 

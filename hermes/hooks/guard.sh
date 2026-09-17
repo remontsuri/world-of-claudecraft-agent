@@ -61,6 +61,34 @@ case "$blob" in
 esac
 
 case "$blob" in
+  *quest_oracle*.json*|*circuit.json*)
+    case "$blob" in
+      *rm\ *|*"rm -"*|*del\ *|*Remove-Item*)
+        deny "удалять таблицы оракула и схему нельзя: circuit.json и data/quest_oracle*.json - это воспроизводимость. Если нужна новая версия, клади рядом и указывай sha старой." ;;
+    esac ;;
+esac
+
+case "$blob" in
+  *male-cns*|*gsutil*|*build_full_circuit*|*"211K"*|*"full-connectome"*)
+    deny "полные данные MaleCNS и полномасштабная сборка/тренировка запускаются ТОЛЬКО с явного подтверждения пользователя (LFS исчерпан, в песочнице нет ни места, ни GPU)." ;;
+esac
+
+case "$blob" in
+  *".feather"*)
+    case "$blob" in
+      *"git add"*|*"git commit"*) deny "feather-файлы (веса/аннотации коннектома) в коммит не кладём: >100 МБ идут в Releases." ;;
+    esac ;;
+esac
+
+case "$blob" in
+  *WOC_BRAIN_BACKEND=edge*|*WOC_BRAIN_BACKEND=sparse*)
+    case "$blob" in
+      *cpu*|*--device\ cpu*)
+        allow "ВНИМАНИЕ: edge/sparse на CPU в ~13 раз медленнее scipy (843 мс против 62 мс на шаг, B=4). Для CPU-прогона оставь auto/scipy." ;;
+    esac ;;
+esac
+
+case "$blob" in
   *"git push"*)
     case "$blob" in
       *master*|*main*|*release*|*levy-street*)
