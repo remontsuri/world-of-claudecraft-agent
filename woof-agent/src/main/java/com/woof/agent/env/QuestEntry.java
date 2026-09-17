@@ -15,6 +15,9 @@ public class QuestEntry {
     public Integer killCount;
     public String targetType;
     public String targetMobId;
+    public Double turnInX;      // где сдавать (snapshot.cjs: quests[].turnInNpc)
+    public Double turnInZ;
+    public String turnInNpcName;
 
     public QuestEntry() {}
 }

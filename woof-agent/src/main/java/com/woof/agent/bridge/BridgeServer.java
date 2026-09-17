@@ -1,64 +1,96 @@
 package com.woof.agent.bridge;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.woof.agent.env.WorldState;
-import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.handshake.ServerHandshake;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
-import java.net.URI;
+import java.nio.charset.StandardCharsets;
 
 /**
- * BridgeServer — HTTP+WebSocket bridge to Chrome CDP.
- * Full replacement for browser_bridge.cjs.
- * Connects to Chrome DevTools Protocol on port 9222, exposes HTTP API on port 8791.
+ * BridgeServer — HTTP-мост на Java, тот же контракт, что у browser_bridge.cjs:
+ *
+ *   POST / {"action":"snapshot"|"step"|"navigate"|"raw_move"|"respawn"|"explore"}
+ *   -> {ok:true, info:{...}} либо {ok:false, error:"..."}
+ *
+ * Бэкенд подставляется: сейчас реализован UpstreamBackend (Java впереди, Node
+ * за ним — рабочий переходный вариант и он же проверяется тестами). Порт
+ * игровой логики на CDP — отдельный этап, см. BRIDGE-PORT.md: там посчитан
+ * объём (actions.cjs 968 строк, snapshot.cjs 456, game_client.cjs 151), и до
+ * его окончания CdpBackend честно падает с внятным сообщением, а не молчит.
  */
-public class BridgeServer extends WebSocketClient {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-    private final com.woof.agent.env.GameEnvironment env;
-    private long msgId = 1;
+public class BridgeServer {
 
-    public BridgeServer(int port, com.woof.agent.env.GameEnvironment env) {
-        super(URI.create("ws://127.0.0.1:9222/devtools/page/CC6F6E01BC4922C6D6F00C0DFA9CA7A8"));
-        this.env = env;
+    /** Источник обработки команд. */
+    public interface Backend {
+        JsonNode handle(String action, ObjectNode cmd) throws Exception;
+        default void close() {}
     }
 
-    @Override
-    public void onOpen(ServerHandshake handshake) {
-        System.out.println("[Bridge] Connected to CDP");
-        // Enable Runtime
-        send("{\"id\":1,\"method\":\"Runtime.enable\"}");
-        send("{\"id\":2,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"typeof window.__game !== 'undefined'\"}}");
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final HttpServer server;
+    private final Backend backend;
+
+    public BridgeServer(int port, Backend backend) throws IOException {
+        this.backend = backend;
+        this.server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+        server.createContext("/", this::handle);
+        server.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(2));
     }
 
-    @Override
-    public void onMessage(String message) {
+    public void start() {
+        server.start();
+        System.out.println("[Bridge] Java-мост слушает :" + server.getAddress().getPort()
+                + " (бэкенд: " + backend.getClass().getSimpleName() + ")");
+    }
+
+    public void stop() { server.stop(0); backend.close(); }
+
+    private void handle(HttpExchange ex) throws IOException {
+        byte[] out;
+        int code = 200;
         try {
-            // Handle CDP responses
-            if (message.contains("\"result\"")) {
-                env.onCdpMessage(message);
+            if ("GET".equals(ex.getRequestMethod())) {
+                ObjectNode ok = mapper.createObjectNode();
+                ok.put("ok", true);
+                ok.put("bridge", "java");
+                ok.put("backend", backend.getClass().getSimpleName());
+                ok.put("hint", "POST {\"action\":\"snapshot\"}");
+                out = mapper.writeValueAsBytes(ok);
+            } else {
+                ObjectNode cmd = readJson(ex);
+                String action = cmd.path("action").asText("");
+                if (action.isEmpty()) {
+                    ObjectNode err = mapper.createObjectNode();
+                    err.put("ok", false);
+                    err.put("error", "нет поля action");
+                    out = mapper.writeValueAsBytes(err);
+                } else {
+                    out = mapper.writeValueAsBytes(backend.handle(action, cmd));
+                }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            code = 500;
+            ObjectNode err = mapper.createObjectNode();
+            err.put("ok", false);
+            err.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+            out = mapper.writeValueAsBytes(err);
         }
+        ex.getResponseHeaders().add("content-type", "application/json");
+        ex.sendResponseHeaders(code, out.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(out); }
     }
 
-    @Override
-    public void onClose(int code, String reason, boolean remote) {
-        System.out.println("[Bridge] Disconnected: " + reason);
-    }
-
-    @Override
-    public void onError(Exception ex) {
-        System.err.println("[Bridge] Error: " + ex.getMessage());
-    }
-
-    /** Evaluate JavaScript in the game page */
-    public String evaluate(String expression) throws Exception {
-        long id = msgId++;
-        String msg = String.format("{\"id\":%d,\"method\":\"Runtime.evaluate\",\"params\":{\"expression\":\"%s\"}}",
-                id, expression.replace("\"", "\\\""));
-        send(msg);
-        // Wait for response (simplified)
-        return "{\"ok\":true}";
+    private ObjectNode readJson(HttpExchange ex) throws IOException {
+        try (InputStream is = ex.getRequestBody()) {
+            byte[] buf = is.readAllBytes();
+            if (buf.length == 0) return mapper.createObjectNode();
+            return (ObjectNode) mapper.readTree(new String(buf, StandardCharsets.UTF_8));
+        }
     }
 }

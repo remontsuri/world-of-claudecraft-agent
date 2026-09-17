@@ -10,6 +10,10 @@ public class PlayerState {
     public double y;
     public double z;
     public double facing;
+    public int level;
+    public int xp;
+    public boolean dead;
+    public boolean inCombat;
 
     public PlayerState() {}
 }

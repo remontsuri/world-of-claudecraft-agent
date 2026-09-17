@@ -16,6 +16,8 @@ public class Skill {
     public List<String> preconditions;
     public List<String> postconditions;
     public Map<String, Object> params;
+    /** Индекс навыка в таблице моста (SkillIndex) */
+    public int bridgeIndex = -1;
 
     public Skill(String id, String name) {
         this.id = id;

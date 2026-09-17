@@ -1,12 +1,30 @@
 package com.woof.agent.core;
 
-import com.woof.agent.memory.SkillLibrary;
 import com.woof.agent.memory.Skill;
+import com.woof.agent.memory.SkillLibrary;
 
 /**
- * SkillRegistry — loads and registers all game skills.
+ * SkillRegistry — регистрирует навыки ИМЕННО теми именами, которые понимает
+ * мост. Прежний список содержал "turn_in" и "sell", тогда как мост ждёт
+ * "turn_in_quest" и "sell_junk", и не содержал equip/frostbolt/fireball/craft_item.
  */
 public class SkillRegistry {
+    private static final String[][] DEFAULTS = {
+            {"farm",            "цель + атака (подход — отдельный навык navigate)"},
+            {"loot",            "обыскать труп рядом"},
+            {"accept_quest",    "взять квест у NPC в радиусе"},
+            {"turn_in_quest",   "сдать готовый квест"},
+            {"sell_junk",       "продать лишнее торговцу"},
+            {"gather",          "добыть ресурсный узел (с подходом)"},
+            {"craft",           "ремесло (в live-клиенте не открыто)"},
+            {"heal",            "выпить зелье лечения"},
+            {"equip",           "надеть снаряжение"},
+            {"buy",             "купить у торговца"},
+            {"cast_frostbolt",  "дальний урон + замедление"},
+            {"cast_fireball",   "дальний урон + DoT"},
+            {"craft_item",      "изготовить предмет по рецепту"},
+    };
+
     private final SkillLibrary library;
 
     public SkillRegistry(SkillLibrary library) {
@@ -14,25 +32,14 @@ public class SkillRegistry {
         registerDefaults();
     }
 
-    public SkillLibrary getLibrary() {
-        return library;
-    }
+    public SkillLibrary getLibrary() { return library; }
 
     private void registerDefaults() {
-        library.register(new Skill("farm", "Farm mobs for quest objectives"));
-        library.register(new Skill("navigate", "Navigate to target location"));
-        library.register(new Skill("return_to_giver", "Return to quest giver"));
-        library.register(new Skill("flee", "Flee from combat"));
-        library.register(new Skill("accept_quest", "Accept quest from NPC"));
-        library.register(new Skill("turn_in", "Turn in completed quest"));
-        library.register(new Skill("heal", "Heal via potion or spell"));
-        library.register(new Skill("gather", "Gather resource node"));
-        library.register(new Skill("loot", "Loot from mob corpse"));
-        library.register(new Skill("explore", "Explore to find objectives"));
-        library.register(new Skill("sell", "Sell items to vendor"));
-        library.register(new Skill("buy", "Buy from vendor"));
-        library.register(new Skill("craft", "Craft item at station"));
-        library.register(new Skill("cast_frostbolt", "Cast Frostbolt spell"));
-        library.register(new Skill("cast_fireball", "Cast Fireball spell"));
+        for (String[] d : DEFAULTS) {
+            Skill skill = new Skill(d[0], d[0]);
+            skill.description = d[1];
+            skill.bridgeIndex = SkillIndex.idx(d[0]);
+            library.register(skill);
+        }
     }
 }

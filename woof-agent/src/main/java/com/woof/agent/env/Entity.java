@@ -18,8 +18,28 @@ public class Entity {
     public Boolean canQuest;   // for NPCs — can give/take quests
     public String resourceType; // for resource nodes: "herb", "ore", "wood"
     public Integer itemId;     // for items
+    public Integer hp;         // for mobs
+    public Boolean questTarget; // моб — цель активного квеста (snapshot.cjs: quest_target)
+    public Boolean lootable;    // труп можно обыскать
+    public Boolean looted;      // уже обыскан
+    public Boolean vendor;      // NPC — торговец
 
     public Entity() {}
+
+    /** Моб (не NPC), живой и враждебный */
+    public boolean isHostileMob() {
+        return "mob".equals(kind) && Boolean.TRUE.equals(hostile) && !Boolean.TRUE.equals(dead);
+    }
+
+    public boolean isDeadMob() {
+        return "mob".equals(kind) && Boolean.TRUE.equals(dead);
+    }
+
+    /** Труп, который ещё можно обыскать */
+    public boolean isLootable() {
+        return isDeadMob() && !Boolean.TRUE.equals(looted)
+                && (lootable == null || Boolean.TRUE.equals(lootable));
+    }
 
     public double distanceTo(Entity other) {
         if (other == null) return Double.MAX_VALUE;

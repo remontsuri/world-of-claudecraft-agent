@@ -21,6 +21,7 @@ public class WorldState {
     // Quests
     @JsonProperty("quests") public QuestInfo quests;
     @JsonProperty("quests_done") public int questsDone;
+    @JsonProperty("quest_cadence_blocked") public List<String> questCadenceBlocked;
 
     // Combat
     @JsonProperty("kills") public int kills;
@@ -49,6 +50,9 @@ public class WorldState {
     @JsonProperty("recipes_known") public List<String> recipesKnown;
     @JsonProperty("stations") public List<String> stations;
     @JsonProperty("player_class") public String playerClass;
+
+    /** Радиус взаимодействия в игре (gathering.ts INTERACT_RANGE) */
+    public static final double INTERACT_RANGE = 5.0;
 
     // Computed flags
     @JsonProperty("has_mob") public boolean hasMob;
@@ -85,6 +89,59 @@ public class WorldState {
         if (nearby == null) return false;
         return nearby.stream()
                 .anyMatch(e -> "npc".equals(e.kind) && (e.canQuest != null && e.canQuest));
+    }
+
+    /** Есть ли активный (взят и не сдан) квест */
+    public boolean hasActiveQuest() {
+        return quests != null && quests.active != null && !quests.active.isEmpty();
+    }
+
+    /** Есть ли квест, готовый к сдаче */
+    public boolean hasReadyQuest() {
+        return quests != null && quests.ready != null && !quests.ready.isEmpty();
+    }
+
+    /** Ближайший готовый к сдаче квест */
+    public QuestEntry readyQuest() {
+        return hasReadyQuest() ? quests.ready.get(0) : null;
+    }
+
+    /** Первый активный квест */
+    public QuestEntry activeQuest() {
+        return hasActiveQuest() ? quests.active.get(0) : null;
+    }
+
+    /** NPC, который может дать/принять квест, в радиусе взаимодействия */
+    public Entity questGiverInRange() {
+        if (nearby == null) return null;
+        return nearby.stream()
+                .filter(e -> "npc".equals(e.kind) && Boolean.TRUE.equals(e.canQuest))
+                .filter(e -> e.dist != null && e.dist <= INTERACT_RANGE)
+                .min((a, b) -> Double.compare(a.dist, b.dist))
+                .orElse(null);
+    }
+
+    /** Ближайший ЕЩЁ НЕ ОБЫСКАННЫЙ труп (для loot).
+     *  Фильтр по isLootable, а не isDeadMob: иначе агент бесконечно «обыскивает»
+     *  уже обысканный труп — проверено на полигоне, зацикливался насмерть. */
+    public Entity lootInRange() {
+        if (nearby == null) return null;
+        return nearby.stream()
+                .filter(Entity::isLootable)
+                .filter(e -> e.dist != null && e.dist <= INTERACT_RANGE)
+                .min((a, b) -> Double.compare(a.dist, b.dist))
+                .orElse(null);
+    }
+
+    /** Квест в кулдауне (повторяемые work-order): брать нельзя */
+    public boolean isCadenceBlocked(String questId) {
+        return questCadenceBlocked != null && questId != null && questCadenceBlocked.contains(questId);
+    }
+
+    /** Координаты NPC по имени/id из снимка */
+    public double[] npcCoord(String npcId) {
+        if (npcPositions == null || npcId == null) return null;
+        return npcPositions.get(npcId);
     }
 
     /** Find nearest hostile mob within range */

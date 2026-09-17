@@ -1,116 +1,103 @@
-# WoOF Agent — Architecture & Project Memory
+# Архитектура woof-agent
 
-Этот файл — архитектурный план Java-рерайта WoC агента.
-Читать ПЕРЕД любыми правками в `woof-agent/`.
+Документ описывает **то, что действительно в коде** на 2026-09-17. Карта файлов —
+`FILES.md`, журнал порта моста — `BRIDGE-PORT.md`, история решений — `AUDIT-2026-09-16.md`.
 
----
+## 1. Задача и границы
 
-## Stack
-- Java 17 (Eclipse Temurin), Maven, Jackson, Java-WebSocket
-- Полная автономность от python/ — нулевая зависимость от Python
+Бот играет в локальную копию World of Claudecraft автономно: сам решает, куда идти,
+кого бить, что собирать и когда сдавать квест. Границы:
 
-## Project Location
-`D:\world-of-claudecraft\woof-agent\`
+* игра — чужой код, мы её **не правим**;
+* браузер — чужой процесс, мы её **не перезагружаем** (никаких reload через CDP);
+* связь с игрой — один HTTP-контракт (мост), а не «пиксели» и не инъекции в исходники.
 
-## Module Structure
+## 2. Слои
+
 ```
-woof-agent/
-├── pom.xml
-├── libs/                          # jackson-*.jar, java-websocket.jar
-├── src/main/java/com/woof/agent/
-│   ├── Bootstrap.java             # Entry point
-│   ├── VoyagerAgent.java          # Main loop: OBSERVE→DECIDE→EXECUTE→VERIFY→LEARN
-│   ├── WorldState.java            # Canonical source of truth
-│   ├── PlayerState.java           # HP/position/facing/level
-│   ├── Entity.java                # Mob/NPC/resource/item
-│   ├── QuestInfo.java             # Active/ready/done quests
-│   ├── QuestEntry.java            # Single quest
-│   ├── Objective.java             # Kill/gather/interact/escort
-│   ├── ItemStack.java             # Inventory
-│   ├── arbitration/
-│   │   └── ArbitrationLayer.java  # Decision owner
-│   ├── fsm/
-│   │   └── GoalFSM.java           # Quest FSM
-│   ├── memory/
-│   │   ├── SkillLibrary.java      # Registry & retrieval
-│   │   ├── Skill.java             # Executable capability
-│   │   └── WorldMemory.java       # Persistent knowledge
-│   ├── env/
-│   │   └── GameEnvironment.java   # Bridge connection, snapshot, step
-│   ├── bridge/
-│   │   └── BridgeServer.java      # HTTP+WS bridge (замена browser_bridge.cjs)
-│   ├── core/
-│   │   ├── AgentCore.java         # Voyager loop engine
-│   │   └── SkillRegistry.java     # 14 skills
-│   └── mcp/
-│       └── WoofMcpServer.java     # HTTP JSON-RPC :8792
-└── build/classes/
+┌─────────────────────────────────────────────────────────────┐
+│ VoyagerAgent                решение: какой навык сейчас     │
+│  ├── ArbitrationLayer       приоритеты, гейты фаз, антицикл │
+│  ├── GoalFSM                фазы квестовой цепочки          │
+│  └── SkillLibrary/Index     канон навыков (13 + алиасы)     │
+├─────────────────────────────────────────────────────────────┤
+│ GameEnvironment             HTTP к мосту: snapshot/step/... │
+│  └── SnapshotMapper         JSON моста -> PlayerState/...   │
+├─────────────────────────────────────────────────────────────┤
+│ BridgeServer (:8791)        контракт POST / {action: ...}   │
+│  ├── UpstreamBackend        -> Node-мост (browser_bridge)   │
+│  └── CdpBackend             -> Chrome DevTools Protocol      │
+│      └── CdpClient (:9222)  найти ЖИВУЮ вкладку, eval в ней │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Decision Chain (Production)
-```
-VoyagerAgent → ArbitrationLayer.decide(worldState) → skill
-                ↓
-            Survival gate (danger → flee/heal regardless of phase)
-                ↓
-            PHASE_ALLOWED gate (QuestState → allowed skills)
-                ↓
-            WorldState filter (hasMob, hasGiver, quest active?)
-                ↓
-            Infinite loop detection (force different after 5 repeats)
-```
+Почему две реализации моста: Node-мост (`tools/ref/browser_bridge.cjs`) — рабочий
+эталон поведения; Java-мост переносит его контракт один-в-один, чтобы убрать Node
+из продакшена. Порт идёт по `BRIDGE-PORT.md`, слой за слоем, и до конца не закрыт.
 
-## Critical Invariants
-- `qs == ACTIVE ⇒ accept_quest = INVALID` (never re-accept active quest)
-- `hp < 0.30 && danger ⇒ flee` (survival overrides objective)
-- `no nearby mob ⇒ farm removed from candidates`
-- `PHASE_ALLOWED["NO_QUEST"] = [accept_quest, farm, explore]`
+## 3. Контракт моста
 
-## Quest FSM
-```
-QUEST_NONE → FIND_GIVER → ACCEPT → DO_OBJECTIVE → RETURN_TO_GIVER → TURN_IN → QUEST_COMPLETE
-```
+`POST /` → JSON. `action` ∈ `snapshot | step | navigate | raw_move | respawn | explore`
+плюс `health`. Ключи: `step` → `idx` (индекс навыка), `raw_move` → `kind`.
+Ответ: `{"ok": true, ...}` либо `{"ok": false, "error": "..."}`.
 
-## Skill Library (14 skills)
-farm, navigate, return_to_giver, turn_in, accept_quest, heal, flee, explore, loot, gather, sell, buy, craft, cast_frostbolt, cast_fireball
+Три инварианта, которые проверяются тестами:
 
-## MCP Server (:8792)
-Tools: `woof_status`, `woof_logs`, `woof_config`, `woof_build`, `woof_test`, `woof_game_state`, `woof_execute_action`
+1. **Неизвестный `action` не исполняется** — ответ `ok:false` (`TestJavaBridge`).
+2. **`idx` доходит до бэкенда как есть** — мост не «додумывает» навык (`TestJavaBridge`).
+3. **Неготовый бэкенд честно падает**: `CdpBackend` без `--upstream` → `HTTP 500`
+   с телом `{"ok":false,"error":"...BRIDGE-PORT..."}`. Тело лежит в `errorStream`,
+   поэтому клиент обязан читать и его (это же правило — для любого внешнего клиента).
 
-## Build & Run
-```bash
-cd D:/world-of-claudecraft/woof-agent
-JAVA_HOME='C:/Program Files/Java/jdk-17.0.20.1+1'
-find src -name "*.java" > sources.txt
-javac -encoding UTF-8 -cp "libs/*" -d build/classes @sources.txt
-java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:8792/
-```
+## 4. Выбор вкладки CDP
 
-## Integration
-- Bridge :8791 (Node.js browser_bridge.cjs OR Java BridgeServer)
-- WoC-MCP: player state, quest log, action execution
-- CDP :9222 (Chrome DevTools)
-- Game :5173 (Vite dev)
+`CdpClient.acquirePage()` берёт не «первую вкладку с подходящим URL», а **живую**:
+перебирает page-таргеты, совпадающие по URL-фильтру, и в каждом исполняет пробу
+`window.__game.sim` с `primaryId` и существующей сущностью игрока. Первая ответившая
+`true` — рабочая. Это прямое следствие реального случая: в браузере висят мёртвые
+вкладки с тем же URL, и бот «работал» ни с чем.
 
-## Git & Repository
+Отсюда и требование к фейку в тестах: вкладки должны отличаться URL (`/live`),
+иначе проверка «выбрана живая» вырождается в «выбрана любая» — ровно этот дефект
+нашёлся 2026-09-17 и был исправлен в `tools/fake_cdp.cjs`.
 
-- **Единственный репозиторий**: `D:\world-of-claudecraft`
-- Remote: `origin backup` → `https://github.com/remontsuri/world-of-claudecraft-agent.git`
-- Ветка: `backup`
-- Push ТОЛЬКО в `origin backup`, никогда в `levy-street`
-- Отдельной папки `world-of-claudecraft-agent` **НЕТ** — вся работа в `D:\world-of-claudecraft`
+## 5. Таймауты и отказы
 
-## Migration Status
-1. ✅ Java project skeleton + compiles
-2. ✅ MCP server + registered in Hermes
-3. 🔄 VoyagerAgent connects to WoC-MCP (real observation)
-4. ⬜ ArbitrationLayer produces real decisions
-5. ⬜ Execute skills via WoC-MCP
-6. ⬜ q_spiders E2E test (kill 6 spiders, collect 4 silk, turn in)
-7. ✅ Commit + push to backup
+| Место | Значение | Почему |
+|---|---|---|
+| `GameEnvironment` connect | 5 с | мост локальный, долгий коннект = моста нет |
+| `GameEnvironment` read | 120 с | `farm`/`navigate` держат вкладку долго по замыслу |
+| `CdpClient` eval | параметр (5 с в пробе) | зависший eval не должен блокировать агента вечно |
+| `CdpClient` connect | 5 с | то же для CDP-эндпоинта |
 
-## Memory Keys
-- `D:\world-of-claudecraft\AGENTS.md` — standing rules (Python agent)
-- `D:\world-of-claudecraft\woof-agent\ARCHITECTURE.md` — этот файл (Java agent)
-- `D:\.hermes\skills\woc\woc-master-goal\` — master goal references
-- Session: session_search(query='WoOF architecture', session_id='20260910_191713_ea1905de')
+Сторожевого таймера (watchdog) в Java-мосте **нет** — не надо его искать и не надо
+обещать в отчётах: это свойство Node-моста, а не портированного кода.
+
+## 6. Данные
+
+Состояние мира приходит снимком: игрок (позиция, hp, уровень), ближайшие мобы,
+квесты со статусами, инвентарь, вендоры. `SnapshotMapper` раскладывает JSON в
+`PlayerState` / `Entity` / `QuestEntry` / `QuestInfo` / `ItemStack` / `VendorState` —
+дальше агент работает с типами, а не с сырым JSON.
+
+## 7. Сборка и запуск
+
+* Maven/Gradle не нужны: `tools/build.sh` = `javac` + `libs/*.jar` (6 jar-ов, см.
+  `DEPENDENCIES.md`, тянутся `tools/fetch_libs.sh`).
+* `tools/run_tests.sh` — три набора, фейковый CDP на `9231/9232`.
+* `tools/run_e2e.sh` — фейковая игра + фейковый мост, полный цикл, `[Agent] SUMMARY`.
+
+Скрипты обязаны быть устойчивы к чужим процессам: `run_tests.sh` перед стартом
+проверяет порты `8791/9231/9232` и убивает **только свои** инструменты
+(по точному пути в `cmdline`); посторонний процесс на этих портах — остановка с
+объяснением, а не тихая работа против чужих данных.
+
+## 8. Что считается приёмкой
+
+1. `bash tools/run_tests.sh` → `tests passed=3 failed=0`.
+2. `bash tools/run_e2e.sh` → `УСПЕХ: ... нарушений контракта нет`.
+3. Живой прогон на машине пользователя: игра на `:5173`, мост на `:8791`,
+   агент проходит цепочку и сдаёт квест (шаги/убийства/квесты в логе).
+
+Пункты 1–2 выполняются в песочнице без игры. Пункт 3 — только на машине с игрой
+и GPU; см. `ROADMAP.md`.
