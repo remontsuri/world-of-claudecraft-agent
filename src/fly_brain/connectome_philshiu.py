@@ -4,9 +4,8 @@ Uses Brian2 LIF simulation with FlyWire v783 connectivity (138K neurons, 15M syn
 Not used for action selection (PPO does that) — runs in background for logging/visualization
 of real connectome activity responding to game stimuli.
 """
-import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import pandas as pd
 
@@ -149,8 +148,9 @@ class FlyConnectomeModel:
         
         # Poisson stimulation
         for idx in neu_exc:
-            p = _PoissonInput(target=neu[idx], target_var='v', N=1,
-                              rate=rate_hz * _Hz, weight=params['w_syn'] * _mV)
+            # объект сам регистрируется в сети, поэтому результат не связываем
+            _PoissonInput(target=neu[idx], target_var='v', N=1,
+                          rate=rate_hz * _Hz, weight=params['w_syn'] * _mV)
             neu[idx].rfc = 0 * _ms  # no refractory for Poisson targets
         
         # Spike monitor

@@ -1,6 +1,5 @@
 """sensor_adapter.py — map WoC game observations to fly photoreceptor inputs."""
 import numpy as np
-import torch
 from pathlib import Path
 import sys
 

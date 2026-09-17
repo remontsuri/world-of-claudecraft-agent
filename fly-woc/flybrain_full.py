@@ -4,7 +4,6 @@ import json
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 
 from device_utils import resolve_device
@@ -83,8 +82,6 @@ class FlyBrainFull:
 
 
 if __name__ == '__main__':
-    import time
-
     brain = FlyBrainFull()
     features = torch.randn(2, 13, device=brain.device)
 

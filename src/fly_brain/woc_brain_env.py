@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.fly_brain.engine import BrainEngine
-from src.fly_brain.motor_decoder import FixedThresholdDecoder, MotorDecoder
+from src.fly_brain.motor_decoder import FixedThresholdDecoder
 from src.fly_brain.sensor_adapter import SensorAdapter
 from src.fly_brain.da_stdp import DopamineModulatedSTDP
 

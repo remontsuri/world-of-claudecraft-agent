@@ -250,7 +250,7 @@ if __name__ == "__main__":
     engine = BrainEngine()
     engine.initialize()
     
-    print(f"\n[engine] Running test simulation (100 steps)...")
+    print("\n[engine] Running test simulation (100 steps)...")
     random_neurons = np.random.choice(engine.n_neurons, size=500, replace=False).tolist()
     
     for i in range(10):

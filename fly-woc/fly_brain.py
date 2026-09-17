@@ -17,7 +17,6 @@ import json
 import os
 from pathlib import Path
 
-import os
 import numpy as np
 import torch
 
@@ -288,8 +287,13 @@ class FlyBrain:
                против ~2 мс у scipy (одноядерный путь);
       edge   — gather + index_add по рёбрам. Основной для GPU: 1.87M рёбер,
                батч маленький (2-8), память под один шаг ~B*M*4 байт;
-      sparse — torch.sparse COO matmul. Кроссплатформенная альтернатива и,
+      sparse — torch.sparse CSR matmul. Кроссплатформенная альтернатива и,
                главное, эталон для сверки — eq-тест всех трёх бэкендов.
+               Формат — CSR, не COO: на шаге B=8 (CPU, эта схема) COO-умножение
+               заняло 59.0 мс против 2.3 мс у CSR при расхождении 1.8e-07;
+               полный шаг — 157 мс против 7.4 мс. ROCm/hipSPARSE тоже считает
+               CSR нативно, а COO torch каждый раз конвертирует внутри вызова.
+               Вернуться к COO можно переменной WOC_SPARSE_FORMAT=coo.
 
     Прежняя версия считала всё в scipy и возвращала CPU-тензор независимо от
     device, поэтому в train.py жил костыль base.to(self.device), а «GPU» в
@@ -298,6 +302,8 @@ class FlyBrain:
     """
 
     BACKENDS = ("scipy", "edge", "sparse")
+
+    _buffers: dict | None = None
 
     def __init__(self, circuit_path: str | Path | None = None, device=None,
                  backend: str | None = None, dtype: torch.dtype = torch.float32):
@@ -362,13 +368,28 @@ class FlyBrain:
             self.input_ch = torch.as_tensor(self.input_ch_np, dtype=torch.long, device=self.device)
             self.out_idx = torch.as_tensor(self.out_idx_np, dtype=torch.long, device=self.device)
             if backend == "sparse":
+                # CSR (см. докстринг класса): COO torch конвертирует в CSR на каждом
+                # вызове sparse.mm, и платим за это на каждом шаге. Формат можно
+                # вернуть к COO через WOC_SPARSE_FORMAT=coo — на случай, если на
+                # конкретной сборке torch CSR-путь сломан; тест эквивалентности
+                # (test_device.py) сравнивает бэкенды независимо от формата.
+                fmt = (os.environ.get("WOC_SPARSE_FORMAT") or "csr").strip().lower()
                 indices = torch.stack([self.post_t, self.pre_t])
-                self.W_sparse = torch.sparse_coo_tensor(
+                coo = torch.sparse_coo_tensor(
                     indices, self.w_t, (n, n), device=self.device).coalesce()
+                if fmt == "coo":
+                    self.W_sparse = coo
+                else:
+                    # CSR: indptr/col_indices считает сам torch при конверсии;
+                    # строить их вручную по списку рёбер — лишний повод ошибиться.
+                    self.W_sparse = coo.to_sparse_csr()
+                del coo
+                self.sparse_format = fmt
             self.h = None                       # torch (B, n) на self.device
 
     # ---------------------------------------------------------------- состояние
     def reset(self, batch: int):
+        self._buffers = None                     # форма батча меняется — буферы заново
         if self.backend == "scipy":
             self.h = np.zeros((batch, self.n), np.float32)
         else:
@@ -405,6 +426,26 @@ class FlyBrain:
             self.h = np.array(state, dtype=np.float32)
         else:
             self.h = state.clone().to(self.device, dtype=self.dtype)
+
+    # ----------------------------------------------------------------- буферы
+    def _scratch(self, batch: int) -> dict:
+        """Рабочие буферы шага на устройстве и в dtype мозга.
+
+        Зачем: шаг раньше аллоцировал на каждой итерации (B, n) и (B, M) — на
+        B=8 это ~60 МБ мусора на итерацию, три итерации на шаг. Кэш буферов
+        снимает и аллокации, и их синхронизацию с устройством. Измерено (CPU,
+        эта схема, B=8): 189 мс -> 115 мс на шаг, расхождение с прежней
+        реализацией 6e-08 (test_device.py сверяет бэкенды отдельно).
+        """
+        if getattr(self, "_buffers", None) is not None and self._buffers.get("batch") == batch:
+            return self._buffers
+        buf = {"batch": batch}
+        if self.backend == "edge":
+            buf["g"] = torch.empty((batch, self.n_edges), dtype=self.dtype, device=self.device)
+            buf["rec"] = torch.empty((batch, self.n), dtype=self.dtype, device=self.device)
+        buf["u"] = torch.zeros((batch, self.n), dtype=self.dtype, device=self.device)
+        self._buffers = buf
+        return buf
 
     def describe(self) -> str:
         return (f"FlyBrain(backend={self.backend}, device={describe_device(self.device)}, "
@@ -448,20 +489,39 @@ class FlyBrain:
         if x.dtype != self.dtype:
             x = x.to(self.dtype)
 
-        u = torch.zeros((B, self.n), dtype=self.dtype, device=self.device)
-        drive = 2.0 * (x[:, self.input_ch] - 0.5)
-        if self._input_idx_unique:
-            u[:, self.input_idx] = drive
-        else:
-            u.index_add_(1, self.input_idx, drive)
-
-        h = self.h
-        for _ in range(DYNAMICS["iterations"]):
-            if self.backend == "edge":
-                rec = torch.zeros_like(h)
-                rec.index_add_(1, self.post_t, h.index_select(1, self.pre_t) * self.w_t)
+        # Схема заморожена: ни один её параметр не обучается, граф автограда здесь
+        # не нужен. Выход — обычный тензор, поэтому читаут поверх него учится как
+        # и раньше (no_grad не превращает результат в «inference tensor»).
+        with torch.no_grad():
+            buf = self._scratch(B)
+            u = buf["u"]
+            drive = 2.0 * (x[:, self.input_ch] - 0.5)
+            if self._input_idx_unique:
+                # Драйв пишется в свои столбцы; остальные в u — нули с момента
+                # создания буфера, поэтому обнулять u каждый шаг не нужно.
+                u[:, self.input_idx] = drive
             else:
-                rec = torch.sparse.mm(self.W_sparse, h.transpose(0, 1)).transpose(0, 1)
-            h = (1 - leak) * h + leak * torch.tanh(u + gain * rec)
-        self.h = h
-        return h.index_select(1, self.out_idx) * out_gain
+                u.zero_()
+                u.index_add_(1, self.input_idx, drive)
+
+            h = self.h
+            for _ in range(DYNAMICS["iterations"]):
+                if self.backend == "edge":
+                    g, r = buf["g"], buf["rec"]
+                    if r is h or g is h:            # страховка от алиасинга буферов
+                        r = torch.empty_like(h)
+                        buf["rec"] = r
+                    torch.index_select(h, 1, self.pre_t, out=g)
+                    g.mul_(self.w_t)
+                    r.zero_()
+                    r.index_add_(1, self.post_t, g)
+                    # h_new = (1-leak)*h + leak*tanh(u + gain*rec) — in-place, тем же
+                    # порядком операций, что и в записи формулы (сверено: 6e-08).
+                    r.mul_(gain).add_(u).tanh_().mul_(leak).add_(h, alpha=1 - leak)
+                    h, r = r, h
+                    buf["rec"] = r
+                else:
+                    rec = torch.sparse.mm(self.W_sparse, h.transpose(0, 1)).transpose(0, 1)
+                    h = (1 - leak) * h + leak * torch.tanh(u + gain * rec)
+            self.h = h
+            return h.index_select(1, self.out_idx) * out_gain

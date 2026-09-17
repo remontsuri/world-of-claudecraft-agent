@@ -61,6 +61,33 @@ FlyBrain(backend=edge, device=cuda:0, dtype=float32, n=8835, n_dn=82, edges=1874
 | `da_stdp.DopamineModulatedSTDP(device='cpu')` по умолчанию | то же для STDP-весов |
 | `flybrain_8k_gpu.py` / `flybrain_full.py` | своя формула выбора устройства (`device or cuda if available`) → переведены на `device_utils` |
 
+## AMD (ROCm), в том числе RX 6750 XT
+
+Карта RDNA2 вне официального списка ROCm, поэтому её «омолаживают» переменной
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` (физически gfx1031, прикидывается gfx1030). Для нас это
+значит три вещи:
+
+1. `torch` — сборка **ROCm**, у неё `torch.version.cuda = None`. Это не «CPU-сборка»:
+   `torch.cuda.is_available()` работает, `--device cuda` — это она и есть. Алиасы
+   `--device rocm|hip|amdgpu` ведут туда же.
+2. В описании устройства печатается `gcnArchName` — то, что реально увидела runtime
+   (`gfx1030` при включённом override) и сама переменная override. Если там `gfx1031`,
+   значит переменная не применилась в этой оболочке.
+3. `PYTORCH_HIP_ALLOC_CONF=expandable_segments:True` выставляется автоматически, если не
+   задана: на 12 ГБ фрагментация — реальная причина OOM при свободной памяти.
+
+Выбор бэкенда схемы — замером, а не по привычке:
+
+```bash
+python3 tools/gpu_check.py --device cuda                 # что видно и как называется
+python3 tools/gpu_check.py --device cuda --bench-backends --steps 30 --batch 8
+python3 train.py --device cuda --backend <победитель> --envs 8
+```
+
+На CPU та же команда показывает, что после перехода на CSR быстрее всех оказался
+`sparse` (7.35 мс против 16.4 у scipy на B=8) — то есть «scipy эталон, edge для GPU»
+больше не исчерпывающая картина, и на карте порядок тоже стоит перемерить.
+
 ## Проверки
 
 ```bash
@@ -73,6 +100,11 @@ python tools/test_device.py       # приёмка устройства: 24 пр
 CPU-состояния, детерминизм, связку Runner (мозг + читаут + маска + оракул) и `--device`.
 
 ## Что осталось проверить на машине с GPU
+
+* `--bench-backends` на 6750 XT: какой бэкенд быстрее (CSR-`sparse` или `edge`) и
+  сходятся ли они с CPU-эталоном в пределах 1e-5;
+* `--envs 8` на живой игре: подтвердить, что 8 потоков не упираются в диск/CPU;
+* пик `torch.cuda.max_memory_allocated()` при B=8 с буферами `edge`.
 
 1. `python tools/gpu_check.py --device cuda --bench` — числа и отсутствие провала.
 2. Короткий прогон: `python train.py --device cuda --updates 5 --steps 32 --envs 2 --no-bench`.

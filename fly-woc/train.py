@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,18 @@ class EnvBatch:
         self.last_infos = [{} for _ in range(n)]
         self.max_crashes = int(os.environ.get("WOC_MAX_ENV_CRASHES", "100"))
         self.finished: list[dict] = []
+        # Среда на шаг = один round-trip по каналу node-процесса. Последовательный
+        # цикл по 8 средам — это 8 таких round-trip'ов подряд, и GPU всё это время
+        # ждёт (на CPU-прогонах доля ещё выше). У каждой среды свой процесс и свой
+        # stdin/stdout, поэтому среды можно вести потоками: одну среду в один момент
+        # трогает ровно один поток, а учёт (obs/rewards/dones/ep_return) остаётся в
+        # главном. WOC_ENV_THREADS=1 возвращает прежнее поведение (по умолчанию —
+        # по потоку на среду, не больше 16).
+        want = int(os.environ.get("WOC_ENV_THREADS") or n)
+        self.threads = max(1, min(want, max(1, n), 16))
+        self._pool = ThreadPoolExecutor(max_workers=self.threads) if self.threads > 1 else None
+        if self._pool is not None:
+            print(f"[env] {n} сред в {self.threads} потоках (WOC_ENV_THREADS=1 — выключить)", flush=True)
         # Quest-oracle shaping (quest_oracle.py): the obs shows a target only within
         # 1.5*40 = 60 units, but the first quest giver stands ~750 units away, so the
         # quest chain is unreachable by reward alone. Give the policy a gradient:
@@ -83,9 +96,32 @@ class EnvBatch:
                   f"({len(self.oracle['quests'])} quests)", flush=True)
 
     def reset(self, seeds: list[int]):
-        for i, env in enumerate(self.envs):
-            self.obs[i], _ = self._reset_env(env, seed=seeds[i])
+        results = self._map(self._reset_one, list(enumerate(seeds)))
+        for i, (obs, crash) in enumerate(results):
+            if crash:
+                self.env_crashes += 1
+                print(f"[train] env {i} server died during reset; restarted "
+                      f"(total crashes {self.env_crashes})", flush=True)
+            self.obs[i] = obs
         self.ep_return[:] = 0; self.ep_len[:] = 0; self.finished.clear()
+
+    def _map(self, fn, items):
+        """Прогнать fn по средам: в пуле — потоками, иначе — как раньше, подряд.
+
+        Порядок результатов сохраняется (map), поэтому учёт в главном потоке не
+        зависит от того, какая среда ответила первой: прогоны воспроизводимы.
+        """
+        if self._pool is None:
+            return [fn(item) for item in items]
+        return list(self._pool.map(fn, items))
+
+    def _reset_one(self, item):
+        i, seed = item
+        try:
+            obs, _ = self._reset_env(self.envs[i], seed=seed)
+            return obs, False
+        except EnvServerDied:
+            return self.obs[i], True
 
     def _reset_env(self, env, seed: int | None = None):
         """reset() that survives a dead server (the wrapper retries internally)."""
@@ -99,39 +135,66 @@ class EnvBatch:
             env.restart()
             return env.reset(seed=seed) if seed is not None else env.reset()
 
+    def _step_one(self, item):
+        """Шаг одной среды. Выполняется в потоке-воркере и НЕ трогает общий учёт.
+
+        Возвращает (crash, r, term, trunc, info, shaped, obs_next):
+          crash   — сервер среды умер, шаг потерян (transition не выдумываем);
+          shaped  — добавка за сокращение дистанции (0.0, если шейпинг выключен);
+          obs_next— наблюдение для следующего шага (при конце эпизода — уже
+                    свежий reset, как и раньше: авто-reset делает сам воркер,
+                    иначе он бы сериализовал потоки).
+        """
+        i, action = item
+        env = self.envs[i]
+        try:
+            o, r, term, trunc, info = env.step(int(action))
+        except EnvServerDied as exc:
+            # Смерть сервера среды (node OOM, необработанный throw): перезапускаем,
+            # начинаем эпизод заново. Сам учёт и печать — в главном потоке.
+            first = str(exc).splitlines()[0]
+            try:
+                env.restart()
+                o, _ = env.reset()
+            except Exception as exc2:                    # noqa: BLE001
+                return (None, i, f"{first} (и повторный старт не удался: {exc2})", 0.0, False, False, {}, 0.0, None)
+            return (True, i, first, 0.0, False, False, {}, 0.0, o)
+        shaped = 0.0
+        if self.oracle is not None:
+            g = self._guidance(o, table=self.oracle)
+            qid, dist = g.get("quest"), g.get("dist")
+            if qid is not None and dist is not None and qid == self.prev_quest[i] \
+                    and self.prev_dist[i] is not None:
+                shaped = self.oracle_w * float(np.clip((self.prev_dist[i] - dist) / 40.0, -1.0, 1.0))
+            if qid is not None:
+                self.prev_quest[i], self.prev_dist[i] = qid, dist
+        obs_next = o
+        if term or trunc:
+            obs_next, _ = env.reset()                   # авто-reset; свежий obs
+        return (False, i, None, r, term, trunc, info, shaped, obs_next)
+
     def step(self, actions: np.ndarray):
         dones = np.zeros(self.n, bool)
         rewards = np.zeros(self.n, np.float32)
-        for i, env in enumerate(self.envs):
-            try:
-                o, r, term, trunc, info = env.step(int(actions[i]))
-            except EnvServerDied as exc:
-                # One server died (node OOM, unhandled throw, stale bundle). Do not
-                # lose the run: restart it, start a fresh episode, and keep training.
-                # The transition is dropped rather than fabricated.
+        results = self._map(self._step_one, list(zip(range(self.n), np.asarray(actions).tolist())))
+        for crash, i, detail, r, term, trunc, info, shaped, obs_next in results:
+            if crash is None:
+                raise EnvServerDied(f"env {i}: {detail}")
+            if crash:
                 self.env_crashes += 1
-                first = str(exc).splitlines()[0]
-                print(f"[train] env {i} server died ({first}); restarting "
+                print(f"[train] env {i} server died ({detail}); restarting "
                       f"(total crashes {self.env_crashes})", flush=True)
                 if self.env_crashes > self.max_crashes:
-                    raise
-                env.restart()
-                o, _ = env.reset()
-                self.obs[i] = o
+                    raise EnvServerDied(f"среды падали больше {self.max_crashes} раз: {detail}")
                 self.ep_return[i] = 0; self.ep_len[i] = 0
                 self.prev_dist[i] = self.prev_quest[i] = None
+                if obs_next is not None:
+                    self.obs[i] = obs_next
                 continue
-            if self.oracle is not None:
-                g = self._guidance(o, table=self.oracle)
-                qid, dist = g.get("quest"), g.get("dist")
-                if qid is not None and dist is not None and qid == self.prev_quest[i] \
-                        and self.prev_dist[i] is not None:
-                    shaped = self.oracle_w * float(np.clip((self.prev_dist[i] - dist) / 40.0, -1.0, 1.0))
-                    r = float(r) + shaped
-                    self.shaped_total += shaped
-                if qid is not None:
-                    self.prev_quest[i], self.prev_dist[i] = qid, dist
-            self.obs[i] = o
+            if shaped:
+                r = float(r) + shaped
+                self.shaped_total += shaped
+            self.obs[i] = obs_next
             rewards[i] = r
             self.ep_return[i] += r; self.ep_len[i] += 1
             self.last_infos[i] = info
@@ -141,8 +204,6 @@ class EnvBatch:
                     "steps": int(self.ep_len[i]), "reward": round(float(self.ep_return[i]), 4),
                     **{k: info.get(k) for k in ("level", "xp", "kills", "deaths", "quests_done", "copper")},
                 })
-                o, _ = env.reset()          # auto-reset; fresh seed stream from env
-                self.obs[i] = o
                 self.ep_return[i] = 0; self.ep_len[i] = 0
                 self.prev_dist[i] = self.prev_quest[i] = None
         return dones, rewards
@@ -150,6 +211,8 @@ class EnvBatch:
     def close(self):
         for env in self.envs:
             env.close()
+        if self._pool is not None:
+            self._pool.shutdown(wait=False)
 
 
 # ------------------------------------------------------------------ policy runner
@@ -162,16 +225,25 @@ class Runner:
         # Раньше FlyBrain(device=...) игнорировал параметр и работал на CPU, а сеть
         # уезжала на GPU — отсюда переносы тензоров в каждом шаге.
         self.device = resolve_device(device)
-        self.brain = FlyBrain(device=self.device) if args.policy == "fly" else None
+        self.brain = (FlyBrain(device=self.device, backend=getattr(args, "backend", None))
+                      if args.policy == "fly" else None)
+        if self.brain is not None:
+            print(f"[brain] {self.brain.describe()}"
+                  + ("" if getattr(args, "backend", None) else "  (авто; WOC_BRAIN_BACKEND или "
+                     "--backend меняют, замер — gpu_check.py --bench-backends)"), flush=True)
         self.oracle_table = None
+        self._oracle_vector = None
         if getattr(args, "oracle_obs", False) and args.policy == "fly":
-            from quest_oracle import load_table, guidance_from_obs, oracle_vector  # noqa: F401
-            global oracle_vector
+            # Функция — в атрибуте, а не через `global`: прежний вариант объявлял
+            # глобальную переменную, которую никто не присваивал, и работал только
+            # потому, что импорт внутри __init__ попадал в глобальные имена модуля.
+            from quest_oracle import load_table, oracle_vector
+            self._oracle_vector = oracle_vector
             self.oracle_table = load_table()
             # Сверка таблицы со сборкой СРАЗУ: иначе несовпадение (224-я таблица на
             # obs=587) всплывало бы только на первом шаге обучения, уже после загрузки
             # окружений и прогрева.
-            oracle_vector(np.zeros(obs_dim, dtype=np.float32), table=self.oracle_table)
+            self._oracle_vector(np.zeros(obs_dim, dtype=np.float32), table=self.oracle_table)
             print(f"[oracle] side channel into the readout: +5 inputs "
                   f"({len(self.oracle_table['quests'])} quests)", flush=True)
         if args.policy == "fly":
@@ -200,7 +272,7 @@ class Runner:
         """
         if self.oracle_table is None:
             return None
-        rows = [oracle_vector(o, table=self.oracle_table) for o in obs]
+        rows = [self._oracle_vector(o, table=self.oracle_table) for o in obs]
         return torch.tensor(np.stack(rows), dtype=torch.float32).to(self.device)
 
     def feats(self, obs: np.ndarray, silenced: bool = False) -> torch.Tensor:
@@ -380,13 +452,16 @@ def _finish_update(runner, buf, batch):
     reward = torch.stack(buf["reward"]); done = torch.stack(buf["done"])
     # V(s_T) needs one extra brain step. Restore the pre-value state so the
     # next rollout does not process the same observation twice.
-    brain_h_backup = None
-    if runner.brain is not None and runner.brain.h is not None:
-        brain_h_backup = runner.brain.h.copy()
+    # Снимок состояния схемы — через state_copy()/restore_state(): у scipy это
+    # numpy-массив (.copy()), у torch-бэкендов (edge/sparse, то есть на GPU) —
+    # тензор, у которого метода .copy() нет вообще. Прежняя строка
+    # `runner.brain.h.copy()` роняла обучение на первом же апдейте с
+    # AttributeError, как только мозг считался не numpy-путём.
+    brain_h_backup = runner.brain.state_copy() if runner.brain is not None else None
     with torch.no_grad():
         last_value = runner.net(runner.feats(batch.obs))[1]
     if brain_h_backup is not None:
-        runner.brain.h = brain_h_backup
+        runner.brain.restore_state(brain_h_backup)
     adv, ret = compute_gae(reward, value, done, last_value,
                            gamma=runner.args.gamma, lam=runner.args.lam)
     mask = torch.stack(buf["mask"]).reshape(-1, feats.shape[-1] and buf["mask"][0].shape[-1]) \
@@ -417,7 +492,8 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
     sampled = policy_kind.endswith("-sampled")
     base = policy_kind[:-len("-sampled")] if sampled else policy_kind
     dev = resolve_device(getattr(args, "device", None))
-    brain = FlyBrain(device=dev) if base.startswith("fly") else None
+    brain = (FlyBrain(device=dev, backend=getattr(args, "backend", None))
+             if base.startswith("fly") else None)
 
     # Determine oracle usage: explicit flag > checkpoint shape > default
     oracle_tbl, net_extra = None, False
@@ -430,7 +506,7 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
         from quest_oracle import load_table, oracle_vector
         oracle_tbl, net_extra = load_table(), True
         oracle_vector(np.zeros(obs_dim, dtype=np.float32), table=oracle_tbl)   # fail-fast
-        print(f"[eval] oracle side channel detected (+5 inputs)", flush=True)
+        print("[eval] oracle side channel detected (+5 inputs)", flush=True)
     net = None
     if base.startswith("fly"):
         torch.manual_seed(args.seed)
@@ -443,7 +519,6 @@ def evaluate(args, policy_kind: str, params: dict | None, n_episodes: int, seed0
         if params is not None:
             net.load_state_dict(params["state"])
     net.eval() if net is not None else None
-    action_names = env.action_names
     episodes = []
     for k in range(n_episodes):
         seed = seed0 + k
@@ -574,6 +649,9 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--device", default=None,
                    help="cuda | cuda:0 | mps | cpu | auto (по умолчанию: WOC_DEVICE, иначе auto)")
+    p.add_argument("--backend", default=None,
+                   help="бэкенд схемы: scipy | edge | sparse (иначе WOC_BRAIN_BACKEND, иначе auto). "
+                        "Что быстрее НА ЭТОЙ карте — замер: tools/gpu_check.py --bench-backends")
     p.add_argument("--policy", choices=["fly", "mlp"], default="fly")
     p.add_argument("--updates", type=int, default=400)
     p.add_argument("--steps", type=int, default=96, help="env steps per env per update")

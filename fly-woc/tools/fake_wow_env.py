@@ -11,7 +11,15 @@ reset(seed), step(a), close().
 """
 from __future__ import annotations
 
+import os
+import time
+
 import numpy as np
+
+# Задержка на вызов, как у настоящего окружения (round-trip по каналу node-процесса).
+# Нужна, чтобы можно было проверить и замерить параллельный шаг по средам: без неё
+# заглушка отвечает мгновенно, и выигрыш от потоков измерять не на чем.
+_LATENCY_S = max(0.0, float(os.environ.get("WOC_FAKE_LATENCY_MS", "0") or 0)) / 1000.0
 
 OBS_SIZE = 587
 BASE_ACTIONS = ["noop", "forward", "back", "turn_left", "turn_right", "strafe_left",
@@ -44,6 +52,8 @@ class WoWClassicEnv:
         self._rng = np.random.default_rng(0)
 
     def reset(self, seed=None):
+        if _LATENCY_S:
+            time.sleep(_LATENCY_S)
         self._steps = 0
         self._rng = np.random.default_rng(0 if seed is None else seed)
         obs = self._rng.random(OBS_SIZE, dtype=np.float32) * 0.5
@@ -51,6 +61,8 @@ class WoWClassicEnv:
         return obs, {"level": 1, "xp": 0, "kills": 0, "deaths": 0, "quests_done": 0}
 
     def step(self, action: int):
+        if _LATENCY_S:
+            time.sleep(_LATENCY_S)
         self._steps += 1
         obs = self._rng.random(OBS_SIZE, dtype=np.float32) * 0.5
         obs[8] = 1.0

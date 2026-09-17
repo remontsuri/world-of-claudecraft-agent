@@ -6,7 +6,7 @@
 
 Подключается, когда tools/ стоит первым в WOC_PYTHON_PATH (см. tools/wow_env.py).
 """
-from fake_wow_env import WoWClassicEnv as RobustWoWEnv  # noqa: F401
+# заглушка для тестов без игры: tools/env_robust.py перекрывает одноимённый модуль  # noqa: F401
 
 
 class EnvServerDied(RuntimeError):

@@ -224,6 +224,60 @@ def part6_runner() -> bool:
     return ok
 
 
+def part6b_update_backends() -> bool:
+    """Один апдейт PPO на КАЖДОМ бэкенде схемы: состояние — и numpy, и тензор.
+
+    Регрессия на настоящий дефект: _finish_update() делал `runner.brain.h.copy()`,
+    а метод .copy() есть только у numpy-массива. На torch-бэкендах (edge и sparse —
+    то есть ровно там, куда ведёт auto при наличии GPU) обучение падало на первом же
+    апдейте с AttributeError: 'Tensor' object has no attribute 'copy'.
+    """
+    import gc
+    import argparse
+    import torch
+
+    from train import Runner, _finish_update
+
+    stub = types.ModuleType("wow_env")
+    stub.WoWClassicEnv = WoWClassicEnv
+    sys.modules["wow_env"] = stub
+    os.environ.setdefault("WOC_PYTHON_PATH", str(HERE))
+
+    n_envs, n_actions = 2, 61
+    ok = True
+    for backend in ("scipy", "edge", "sparse"):
+        args = argparse.Namespace(policy="fly", seed=1, lr=3e-4, oracle_obs=False,
+                                  mask_abilities=False, ability_idx=None,
+                                  gamma=0.99, lam=0.95, backend=backend)
+        runner = Runner(args, n_envs, OBS_SIZE, n_actions, device="cpu")
+        runner.episode_reset(n_envs)
+        obs = np.stack([WoWClassicEnv().reset(seed=1 + i)[0] for i in range(n_envs)])
+        buf = {k: [] for k in ("feats", "action", "logp", "value", "reward", "done", "mask")}
+        for _ in range(2):
+            feats = runner.feats(obs)
+            a, logp, value, _ = runner.act(feats)
+            buf["feats"].append(feats)
+            buf["action"].append(torch.as_tensor(a))
+            buf["logp"].append(logp)
+            buf["value"].append(value)
+            buf["reward"].append(torch.zeros(n_envs))
+            buf["done"].append(torch.zeros(n_envs))
+            buf["mask"].append(torch.ones(n_envs, n_actions, dtype=torch.bool))
+        batch = types.SimpleNamespace(obs=obs)
+        try:
+            stats = _finish_update(runner, buf, batch)
+            good = all(isinstance(v, float) for v in stats.values())
+            print(f"  {'OK  ' if good else 'FAIL'} апдейт на {backend:6s}: "
+                  f"pg={stats.get('pg'):.4f} vf={stats.get('vf'):.4f} ent={stats.get('ent'):.4f}")
+        except Exception as exc:                       # noqa: BLE001 - это и есть проверка
+            good = False
+            print(f"  FAIL апдейт на {backend:6s}: {type(exc).__name__}: {exc}")
+        ok &= good
+        del runner, buf, batch
+        gc.collect()          # мозг держит ~50 МБ; на 1 ГБ RAM три подряд не влезают
+    return ok
+
+
 def part7_cli() -> bool:
     ok = True
     for script in ("train.py", "progress_eval.py"):
@@ -247,6 +301,7 @@ def main() -> int:
                       ("4) детерминизм", part4_determinism),
                       ("5) статическая проверка torch-ветки", part5_static),
                       ("6) связка Runner на заглушке окружения", part6_runner),
+                      ("6b) апдейт PPO на каждом бэкенде схемы", part6b_update_backends),
                       ("7) CLI", part7_cli)):
         print(title)
         ok &= bool(fn())

@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.feather as ft
 import torch
-from scipy.sparse import coo_matrix, csr_matrix
+from scipy.sparse import csr_matrix
 
 
 DATA_DIR = Path('D:/world-of-claudecraft/data/male_cns')
@@ -16,20 +16,19 @@ OUT_JSON = Path('D:/world-of-claudecraft-agent/fly-woc/data/circuit_full.json')
 
 def main():
     t0 = time.time()
-    print(f'[build] reading annotations...')
+    print('[build] reading annotations...')
     ann = ft.read_table(f'{DATA_DIR}/body-annotations.feather').to_pandas()
     n = len(ann)
     body2idx = dict(zip(ann['bodyId'], range(n)))
     print(f'[build] {n} neurons')
 
-    print(f'[build] reading neurotransmitters...')
+    print('[build] reading neurotransmitters...')
     nt = ft.read_table(f'{DATA_DIR}/body-neurotransmitters.feather').to_pandas()
     # Columns: 'body', 'consensus_nt' — use consensus neurotransmitter
-    nt_map = dict(zip(nt['body'], nt['consensus_nt']))
     sign_map = {'ach': 1, 'gaba': -1, 'glu': -1, 'da': 1, '5ht': 1, 'oa': 1}
     body_sign = {int(b): sign_map.get(t, 0) for b, t in zip(nt['body'], nt['consensus_nt'])}
 
-    print(f'[build] reading cached sparse weights...')
+    print('[build] reading cached sparse weights...')
     # nosemgrep: torch_unsafe_load — MaleCNS v1.0 is a published scientific dataset
     cache = torch.load(f'{DATA_DIR}/male_cns_sparse.pt', weights_only=True)
     indices = cache['W_indices'].numpy()
@@ -38,7 +37,7 @@ def main():
 
     # Build normalized weights: W[j,i] = sign[i] * c[j,i] / sum_abs_c[j,i]
     # Fly Dino normalization: incoming signed weights normalized by total absolute signed contact count
-    print(f'[build] normalizing weights...')
+    print('[build] normalizing weights...')
     rows, cols = indices[0], indices[1]  # post, pre
 
     # Compute per-postsynaptic normalization factor
@@ -55,12 +54,12 @@ def main():
     norm_vals = np.where(mask, signed_vals / denom[rows], 0.0)
 
     # Build scipy CSR
-    print(f'[build] building CSR matrix...')
+    print('[build] building CSR matrix...')
     W_csr = csr_matrix((norm_vals.astype(np.float32), (rows, cols)), shape=(n, n))
     print(f'[build] CSR: {W_csr.shape}, nnz: {W_csr.nnz}')
 
     # Select DN readout neurons (top-64 outgoing + forced 18)
-    print(f'[build] selecting DN readout...')
+    print('[build] selecting DN readout...')
     out_degree = np.array(W_csr.getnnz(axis=1)).flatten()
     top_dn = np.argsort(out_degree)[-64:]
 

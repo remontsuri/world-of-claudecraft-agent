@@ -53,8 +53,11 @@ class FlyBrain8KGPU:
         self.input_ch = torch.tensor([ch for _, ch in graph['inputs']], dtype=torch.long, device=self.device)
         self.out_idx = torch.tensor(graph['outputs'], dtype=torch.long, device=self.device)
         self.n_dn = len(graph['outputs'])
-        # см. fly_brain.py: 1.87M рёбер в Python-объектах (~0.5 ГБ) держать не нужно
-        self.graph = {"n_nodes": n, "n_edges": len(pre), "channels": graph.get("channels")}
+        # см. fly_brain.py: 1.87M рёбер в Python-объектах (~0.5 ГБ) держать не нужно.
+        # Число рёбер запоминаем ДО del: раньше строка ниже читала len(graph['edges'])
+        # уже после освобождения словаря и падала с NameError на старте.
+        n_edges = int(len(pre))
+        self.graph = {"n_nodes": n, "n_edges": n_edges, "channels": graph.get("channels")}
         del graph
 
         # Pre-compute input mapping for vectorized drive
@@ -66,7 +69,7 @@ class FlyBrain8KGPU:
             else:
                 self.input_map.append((ch, None))
 
-        print(f'[FlyBrain8KGPU] {n} neurons, {self.n_dn} DN, {len(graph["edges"])} edges, iters={n_iters}, device={self.device}')
+        print(f'[FlyBrain8KGPU] {n} neurons, {self.n_dn} DN, {n_edges} edges, iters={n_iters}, device={self.device}')
 
         # State
         self.h = None

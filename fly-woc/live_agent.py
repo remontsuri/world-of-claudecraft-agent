@@ -241,7 +241,7 @@ def main() -> None:
     sys.path.insert(0, str(root))
     from fly_brain import FlyBrain
     from agent import FlyBrainReadout
-    from device_utils import describe_device, resolve_device
+    from device_utils import resolve_device
 
     bridge = Bridge(args.bridge)
     dev = resolve_device(getattr(args, "device", None))

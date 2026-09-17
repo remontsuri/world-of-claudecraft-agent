@@ -9,7 +9,6 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import numpy as np
 
 # Engine is injected via set_engine()
 ENGINE = None
@@ -31,7 +30,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        global HISTORY
         if self.path == "/api/state":
             # Aggregate last N points into a raster for the UI
             state = {

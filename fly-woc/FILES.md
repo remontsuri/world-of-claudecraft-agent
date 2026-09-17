@@ -22,7 +22,10 @@
 | `quest_oracle.py` | запускаемый | 293 | quest_oracle.py — куда идти по квесту, не заглядывая в Sim. В obs игры 224 квеста лежат парами (state, progress), порядок — `QUEST_ORDER` из `src/sim/data.ts`, он же порядок, в котором их пишет `src/s |
 | `train.py` | запускаемый | 612 | Train the fly-brain readout on world-of-claudecraft with PPO, then evaluate it against the full control battery and export every rollout as evidence. Architecture (identical pattern in Fly Dino v2, fl |
 
-## `fly-woc/tools/` — проверки и сборка (13 файлов)
+> Аудит всей линии на ошибки и цена горячего пути (с числами «до/после»):
+> `fly-woc/AUDIT-2026-09-17.md`.
+
+## `fly-woc/tools/` — проверки и сборка (14 файлов)
 
 | Файл | Строк | Что делает |
 |---|---|---|
@@ -37,6 +40,7 @@
 | `test_control_graph.py` | 186 | test_control_graph.py — приёмка контролей топологии без игры, GPU и сети. Сравниваем контроль не с полной схемой, а с её же подграфом-источником (`--swaps 0` даёт ровно ту выборку узлов, с которой пот |
 | `test_device.py` | 258 | test_device.py — приёмка устройства вычислений: GPU-путь там, где он должен быть. Проверяем не «есть ли cuda» (в песочнице её нет), а корректность плумбинга: 1) resolve_device: auto -> лучшее доступно |
 | `test_obs_layout.py` | 178 | test_obs_layout.py — раскладка obs не должна зависеть от версии игры. Сборки сняты исполнением игрового кода (tools/probe_game_shape.ts) на тегах: obs = 60 + 2*способности + 2*квесты (+3, если есть хв |
+| `test_parallel_envs.py` | — | параллельный шаг по средам: корректность (reward/done/obs совпадают поэлементно с последовательным прогоном) и выигрыш (8 сред с задержкой 20 мс → 7.7x). У заглушки окружения для этого появилась ручка `WOC_FAKE_LATENCY_MS` |
 | `test_quest_oracle.py` | 154 | test_quest_oracle.py — приёмка таблиц оракула без игры, GPU и сети. Что проверяется у каждой data/quest_oracle*.json: 1) схема: game/order/quests; ключи game и квестов — как у соседних таблиц; 2) ариф |
 | `wow_env.py` | 13 | wow_env.py (в tools/) — ЗАГЛУШКА игрового окружения для тестов. Настоящий wow_env живёт в чекауте игры (python/wow_env.py) и запускает node-симу. Этот файл даёт тот же интерфейс, чтобы можно было запу |
 

@@ -81,6 +81,38 @@ def decode_state(v: float) -> str:
     return "untaken"
 
 
+def check_table_matches_build(table: dict, layout, obs_size: int | None = None) -> int:
+    """Сколько слотов квестов брать. Отказ, если таблица не от этой сборки.
+
+    Порядок квестов в obs — это QUEST_ORDER конкретной сборки, и он НЕ совпадает
+    между версиями: у v0.42.2 (224) с v0.40.0 (214) расходится уже со второй
+    позиции, то есть позиционный маппинг ведёт агента по чужим координатам. Оракул
+    подаётся жёстким входом, поэтому здесь отказ, а не предупреждение. Осознанный
+    короткий список (204 — префикс 214-й) включается флагом WOC_QUEST_TABLE_ALLOW_SHORT.
+
+    Вынесено отдельной функцией после разбора: быстрый путь first_target() брал
+    min(число квестов в таблице, в obs) и этой проверки не делал — то есть тихо
+    считал по чужой таблице. Теперь проверку зовут оба пути.
+    """
+    n_quests_in_table = len(table["order"])
+    n_quests_in_obs = layout.n_quests
+    n = min(n_quests_in_table, n_quests_in_obs)
+    if n_quests_in_table != n_quests_in_obs:
+        msg = (
+            f"таблица оракула не от этой сборки: в ней {n_quests_in_table} квестов, "
+            f"окружение говорит про {n_quests_in_obs} (obs={obs_size}, "
+            f"действий={layout.n_actions}). Сгенерируй таблицу под свою сборку: "
+            f"bash tools/make_quest_oracle.sh <тег игры> data/quest_oracle.json; "
+            f"если таблица заведомо короче и порядок совпадает по префиксу — "
+            f"WOC_QUEST_TABLE_ALLOW_SHORT=1"
+        )
+        if not os.environ.get("WOC_QUEST_TABLE_ALLOW_SHORT"):
+            raise ValueError(msg)
+        import warnings
+        warnings.warn(msg + f". Используем первые {n}.", stacklevel=2)
+    return n
+
+
 def quest_slots(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
                 n_actions: int | None = None) -> list[tuple[str, str, float]]:
     """[(questId, state, progress)] для всех слотов квестов в obs.
@@ -92,28 +124,7 @@ def quest_slots(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
     """
     obs = np.asarray(obs, dtype=np.float32).reshape(-1)
     layout = layout or from_obs(obs, n_actions=n_actions)
-    n_quests_in_table = len(table["order"])
-    n_quests_in_obs = layout.n_quests
-    n = min(n_quests_in_table, n_quests_in_obs)
-    if n_quests_in_table != n_quests_in_obs:
-        # Порядок квестов в obs — это QUEST_ORDER конкретной сборки, и он НЕ
-        # совпадает между версиями: у v0.42.2 (224) с v0.40.0 (214) расходится
-        # уже со второй позиции, то есть позиционный маппинг ведёт агента по
-        # чужим координатам. Оракул — жёсткий вход, поэтому здесь отказ, а не
-        # предупреждение. Осознанный короткий список (204 — префикс 214-й)
-        # включается явным флагом.
-        msg = (
-            f"таблица оракула не от этой сборки: в ней {n_quests_in_table} квестов, "
-            f"окружение говорит про {n_quests_in_obs} (obs={obs.shape[0]}, "
-            f"действий={layout.n_actions}). Сгенерируй таблицу под свою сборку: "
-            f"bash tools/make_quest_oracle.sh <тег игры> data/quest_oracle.json; "
-            f"если таблица заведомо короче и порядок совпадает по префиксу — "
-            f"WOC_QUEST_TABLE_ALLOW_SHORT=1"
-        )
-        if not os.environ.get("WOC_QUEST_TABLE_ALLOW_SHORT"):
-            raise ValueError(msg)
-        import warnings
-        warnings.warn(msg + f". Используем первые {n}.", stacklevel=2)
+    n = check_table_matches_build(table, layout, obs_size=obs.shape[0])
     out = []
     for i in range(n):
         qid = table["order"][i]
@@ -124,6 +135,53 @@ def quest_slots(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
         prog = float(obs[base + 1])
         out.append((qid, state, prog))
     return out
+
+
+def _bounds_cached(table: dict) -> tuple[float, float, float, float]:
+    """world_bounds с кэшем на таблице: в горячем цикле это 4 чтения env на вызов."""
+    cached = table.get("_bounds_resolved")
+    if cached is not None:
+        return cached
+    b = world_bounds(table)
+    table["_bounds_resolved"] = b
+    return b
+
+
+def first_target(obs: np.ndarray, table: dict, layout: ObsLayout | None = None,
+                 n_actions: int | None = None):
+    """Первый по порядку незакрытый квест, у которого есть куда идти.
+
+    Возвращает (qid, state, prog, kind, target, quest) или шесть None.
+
+    Отличие от quest_slots() только в цене: тот строит список из 224 кортежей с
+    decode_state на каждый, а в шаге обучения нужен ровно первый подходящий. Здесь
+    незакрытые слоты отбираются одним numpy-сравнением по всему блоку квестов, и
+    Python-работа делается только по ним (обычно 1-3 штуки). Логика выбора цели —
+    та же (порядок слотов, приоритет «сдавать → брать → добивать»), эквивалентность
+    закреплена тестом tools/test_quest_oracle.py --parity.
+    """
+    o = np.asarray(obs, dtype=np.float32).reshape(-1)
+    layout = layout or from_obs(o, n_actions=n_actions)
+    # Та же проверка «таблица от этой сборки», что и в quest_slots(): без неё быстрый
+    # путь молча считал бы чужую таблицу (поймано tools/test_device.py, проверка 6).
+    n = check_table_matches_build(table, layout, obs_size=o.shape[0])
+    base = layout.quest_base
+    end = min(base + 2 * n, o.shape[0])
+    flat = o[base:end]
+    pairs = flat[: (flat.shape[0] // 2) * 2].reshape(-1, 2)
+    if pairs.size == 0:
+        return (None, None, None, None, None, None)
+    states, progs = pairs[:, 0], pairs[:, 1]
+    # decode_state: >=0.99 done | >=0.5 ready | >0.01 active | иначе untaken.
+    for i in np.nonzero(states < 0.99)[0]:
+        qid = table["order"][int(i)]
+        quest = table["quests"].get(qid) or {}
+        state = decode_state(float(states[i]))
+        prog = float(progs[i])
+        kind, target = _target_for(quest, prog, state)
+        if target is not None:
+            return qid, state, prog, kind, target, quest
+    return (None, None, None, None, None, None)
 
 
 def _target_for(quest: dict, prog: float, state: str) -> tuple[str, dict | None]:
@@ -143,6 +201,26 @@ def _target_for(quest: dict, prog: float, state: str) -> tuple[str, dict | None]
     return "no_coords", None
 
 
+def describe_target(qid, quest, kind, target, state, prog, x, z, facing) -> dict:
+    """Собрать ответ оракула для выбранной цели. Одна точка правды для guidance()
+    и guidance_from_obs(): раньше формула лежала внутри guidance(), и быстрый путь
+    неизбежно разошёлся бы с ней по округлениям."""
+    dx, dz = target["x"] - x, target["z"] - z
+    dist = float(np.hypot(dx, dz))
+    # WoC convention: facing=0 points along +Z; screen-right is (-cos(f), sin(f)).
+    # Therefore the world bearing uses atan2(dx, dz), not the mathematical atan2(dz, dx).
+    world_angle = float(np.arctan2(dx, dz))
+    rel = float(np.arctan2(np.sin(world_angle - facing), np.cos(world_angle - facing)))
+    return {
+        "quest": qid, "name": quest.get("name"), "quest_state": state,
+        "quest_progress": round(prog, 3), "target_kind": kind,
+        "target": {"x": round(target["x"], 1), "z": round(target["z"], 1)},
+        "dist": round(dist, 1), "dist_norm": round(min(dist / DIST_NORM, DIST_CLAMP), 3),
+        "bearing_rel": round(rel, 3),
+        "sin": round(float(np.sin(rel)), 3), "cos": round(float(np.cos(rel)), 3),
+    }
+
+
 def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | None = None,
              layout: ObsLayout | None = None) -> dict:
     """Первый по порядку незакрытый квест → куда идти и сколько осталось пути.
@@ -158,20 +236,7 @@ def guidance(obs: np.ndarray, x: float, z: float, facing: float, table: dict | N
         kind, target = _target_for(quest, prog, state)
         if target is None:
             continue
-        dx, dz = target["x"] - x, target["z"] - z
-        dist = float(np.hypot(dx, dz))
-        # WoC convention: facing=0 points along +Z; screen-right is (-cos(f), sin(f)).
-        # Therefore the world bearing uses atan2(dx, dz), not the mathematical atan2(dz, dx).
-        world_angle = float(np.arctan2(dx, dz))
-        rel = float(np.arctan2(np.sin(world_angle - facing), np.cos(world_angle - facing)))
-        return {
-            "quest": qid, "name": quest.get("name"), "quest_state": state,
-            "quest_progress": round(prog, 3), "target_kind": kind,
-            "target": {"x": round(target["x"], 1), "z": round(target["z"], 1)},
-            "dist": round(dist, 1), "dist_norm": round(min(dist / DIST_NORM, DIST_CLAMP), 3),
-            "bearing_rel": round(rel, 3),
-            "sin": round(float(np.sin(rel)), 3), "cos": round(float(np.cos(rel)), 3),
-        }
+        return describe_target(qid, quest, kind, target, state, prog, x, z, facing)
     return {"quest": None, "name": None, "target_kind": "all_done"}
 
 
@@ -183,10 +248,14 @@ def guidance_from_obs(obs: np.ndarray, table: dict | None = None,
     # obs.ts encodes x as x/WORLD_MAX_X, but z is centered/scaled over the full
     # world interval. Multiplying both by 900 (the old implementation) produces
     # systematically wrong quest distances and bearings on the current multi-zone world.
-    min_x, max_x, min_z, max_z = world_bounds(table)
+    min_x, max_x, min_z, max_z = _bounds_cached(table)
     x = float(o[4]) * max_x
     z = min_z + ((float(o[5]) + 1.0) * 0.5) * (max_z - min_z)
-    return guidance(o, x, z, facing, table, layout=from_obs(o, n_actions=n_actions))
+    layout = from_obs(o, n_actions=n_actions)
+    qid, state, prog, kind, target, quest = first_target(o, table, layout=layout)
+    if target is None:
+        return {"quest": None, "name": None, "target_kind": "all_done"}
+    return describe_target(qid, quest, kind, target, state, prog, x, z, facing)
 
 
 def oracle_vector(obs: np.ndarray, x: float | None = None, z: float | None = None,

@@ -18,7 +18,9 @@ import torch.nn as nn
 import numpy as np
 
 from src.fly_brain.engine import (
-    BrainEngine, SparseLIFModel, get_device, load_male_cns_weights
+    BrainEngine,
+    get_device,
+    load_male_cns_weights,
 )
 
 

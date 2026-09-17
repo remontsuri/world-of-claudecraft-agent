@@ -6,11 +6,12 @@ Provides the interface expected by the training script:
 - FlyBrain.reset(batch) -> resets brain state
 - FlyBrain.n_dn -> number of DN readout neurons
 """
-import numpy as np
 import torch
 
 from src.fly_brain.engine import (
-    BrainEngine, SparseLIFModel, get_device, load_male_cns_weights
+    BrainEngine,
+    get_device,
+    load_male_cns_weights,
 )
 
 

@@ -119,7 +119,10 @@ def main() -> int:
 
     print("\n2b) кэш _RESOLVED (окружение) важнее замеров — иначе не разобрать 567 = 28/224")
     obs_layout._RESOLVED = None
-    saved = obs_layout.configure(obs_size=567, n_actions=41, n_quests=224)
+    # Вызов ради побочного эффекта (кэш _RESOLVED), а не ради возвращаемого значения: результат
+    # сознательно не связываем — иначе «неиспользуемая переменная» соблазняет удалить
+    # строку, и проверка 2b молча превращается в проверку замеров.
+    obs_layout.configure(obs_size=567, n_actions=41, n_quests=224)
     d = obs_layout.from_obs(np.zeros(567, dtype=np.float32))
     good = (d.ability_slots, d.n_quests) == (28, 224)
     ok &= good
