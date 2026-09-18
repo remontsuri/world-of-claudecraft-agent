@@ -1,0 +1,74 @@
+{
+  "generatedAt": "2026-09-18T10:40:12.976Z",
+  "objective": [
+    "score = 100·quests_done + 5·kills - 10·deaths + 25·(level-1) + 20·[first_turn_in ≤ 40] - 0.001·world_steps",
+    "смысл весов: квест важнее фарма, фарм важнее суеты; смерть — штраф; ранняя сдача — бонус",
+    "объявлено до измерения; изменение весов = новая гипотеза и новая запись в learning/history.jsonl"
+  ],
+  "transport": "sim",
+  "steps": 60,
+  "trainSeeds": [
+    42
+  ],
+  "valSeeds": [
+    43,
+    44,
+    45
+  ],
+  "params": {
+    "combatMaxActions": 64,
+    "approachStop": 4,
+    "turnTolerance": 0.35,
+    "faceMaxActions": 6,
+    "approachRetry": 8,
+    "unkillableHpFactor": 5,
+    "engageRadius": 18,
+    "engageMaxNeighbours": 1,
+    "farmTriggerDist": 25,
+    "lowHpAbort": 0.55,
+    "crowdAbortHp": 0.75,
+    "crowdLimitFarm": 2,
+    "healMaxActions": 40,
+    "healTarget": 0.95,
+    "healThreatDist": 14,
+    "fleeMaxActions": 24,
+    "fleeTurnMax": 6,
+    "fleeSafeDist": 25,
+    "havenDist": 160,
+    "respawnWaitActions": 80,
+    "critHp": 0.15,
+    "lowHp": 0.3,
+    "crowdRadius": 18,
+    "crowdLimit": 2,
+    "fleeTriggerDist": 25,
+    "navMaxSteps": 80,
+    "searchActions": 12,
+    "unstuckMinMove": 0.4,
+    "loopThreshold": 6,
+    "failLimit": 3,
+    "failCooldown": 12,
+    "healBelow": 0.95,
+    "levelDeltaMax": 0,
+    "giverFailExhaust": 3
+  },
+  "paramsDiff": {
+    "levelDeltaMax": {
+      "from": 1,
+      "to": 0
+    }
+  },
+  "trainMean": 116.516,
+  "baselineTrainMean": -71.56,
+  "valMean": 72.95333333333333,
+  "baselineValMean": -3.75533333333334,
+  "accepted": 1,
+  "rejected": 3,
+  "distinctChanged": 1,
+  "minDelta": 1,
+  "warnings": [
+    "train-сидов 1: на одном сиде улучшение неотличимо от подгонки под конкретный эпизод",
+    "бюджет 60 решений: короткий прогон находит «осторожные» пороги, а не результативные (скор зависит от бюджета — см. LEARNING.md)"
+  ],
+  "budgetHit": false,
+  "elapsedSeconds": 182
+}

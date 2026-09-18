@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Пре-коммит хук репозитория (переписан 2026-09-18 под активную линию woof-ts).
+#
+# Что не пропускает:
+#   1. секреты в индексе (PAT/ключи/токены) — токен живёт только в env одной команды;
+#   2. удаления и переименования в archive/ и правки замороженных линий задним числом
+#      (append-only строки в archive/**/README.md разрешены: это принятый способ
+#      дописывать факты об архиве);
+#   3. мусор в индексе: node_modules/, dist/, dist-env/, симлинк woof-ts/game,
+#      черновики evidence/tuning/;
+#   4. изменения woof-ts/ без пройденного woof-ts/tools/check_all.sh — того же скрипта,
+#      который запускается руками, чтобы «прошло локально» и «пройдёт в хуке» не расходились.
+#
+# WOOF_HOOK_FAST=1 — пропустить check_all с SKIP_TUNE=1 (без шага контура обучения).
+# Это явный, громко печатаемый режим, а не молчаливый фолбэк: в сообщении коммита
+# остаётся след, что полный гейт не запускался.
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT" || exit 1
+fail() { echo "pre-commit: ПРОВАЛ: $*" >&2; exit 1; }
+
+STAGED="$(git diff --cached --name-only)"
+[ -z "$STAGED" ] && exit 0
+
+# --- 1. секреты ---------------------------------------------------------------
+SECRET_RE='(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+for f in $STAGED; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.png|*.jpg|*.jpeg|*.gif|*.zip|*.gz|*.jar|*.bin|*.wav|*.mp3) continue ;;
+  esac
+  if git show ":$f" 2>/dev/null | grep -Eqn "$SECRET_RE"; then
+    fail "в индексе похоже на секрет: $f (токен — только в переменную окружения одной командой, после пуша отозвать)"
+  fi
+done
+
+# --- 2. архив и замороженные линии: только append-only ------------------------
+while read -r status f1 f2; do
+  [ -z "${status:-}" ] && continue
+  case "$status" in
+    D*|R*|C*)
+      fail "в archive/ запрещены удаления и переименования: $status $f1 ${f2:-} (архив заморожен, знание не удаляется)"
+      ;;
+    M*)
+      case "$f1" in
+        archive/*/README.md|archive/*/*/README.md)
+          deleted="$(git diff --cached --numstat -- "$f1" | awk '{print $2}')"
+          [ "${deleted:-0}" = "0" ] || fail "$f1: правка архива задним числом (удалено строк: $deleted). Разрешены только добавленные датированные строки"
+          echo "pre-commit: $f1 — append-only добавление в README архива (разрешено)"
+          ;;
+        *)
+          fail "$f1 изменён: archive/ заморожен, итоги (включая отрицательные) не переписываются"
+          ;;
+      esac
+      ;;
+  esac
+done < <(git diff --cached --name-status -M -- archive/)
+
+# --- 3. мусор в индексе -------------------------------------------------------
+for f in $STAGED; do
+  case "$f" in
+    */node_modules/*|node_modules/*) fail "в индексе node_modules: $f" ;;
+    woof-ts/dist/*|woof-ts/dist-env/*) fail "в индексе артефакты сборки: $f (они в .gitignore)" ;;
+    woof-ts/game) fail "в индексе симлинк на дерево игры: $f (клон игры не вендорится)" ;;
+    woof-ts/evidence/tuning/*) fail "в индексе черновики подбора порогов: $f (итог — в woof-ts/learning/)" ;;
+  esac
+done
+
+# --- 4. гейт активной линии ---------------------------------------------------
+if printf '%s\n' "$STAGED" | grep -q '^woof-ts/'; then
+  [ -f woof-ts/tools/check_all.sh ] || fail "нет woof-ts/tools/check_all.sh — гейт линии нечем запустить"
+  if [ "${WOOF_HOOK_FAST:-0}" = "1" ]; then
+    echo "pre-commit: ВНИМАНИЕ — WOOF_HOOK_FAST=1, контур обучения (шаг 7) не проверяется" >&2
+    SKIP_TUNE=1 bash woof-ts/tools/check_all.sh || fail "check_all.sh (быстрый режим) не прошёл"
+  else
+    echo "pre-commit: woof-ts изменён — запускаю полный гейт check_all.sh (минуты; WOOF_HOOK_FAST=1 пропускает шаг обучения)" >&2
+    bash woof-ts/tools/check_all.sh || fail "check_all.sh не прошёл — коммит отклонён"
+  fi
+fi
+
+echo "pre-commit: проверки пройдены"
+exit 0

@@ -1,0 +1,13 @@
+import { SimWorld } from '../src/world/sim_world';
+const w = SimWorld.create({ seed: 42, playerClass: 'warrior', gathererIdentity: { kind: 'headless', id: 'hl:diag:2' } });
+const sim = w.debugSim();
+const p = sim.player;
+console.log('sim.playerId =', sim.playerId);
+console.log('typeof sim.player.hp =', typeof p.hp, '| значение =', p.hp, '| maxHp =', p.maxHp);
+const byId = sim.entities.get(sim.playerId);
+console.log('entities.get(playerId): hp =', byId?.hp, 'maxHp =', byId?.maxHp, 'kind =', byId?.kind, 'level =', byId?.level);
+console.log('тот же объект?', byId === p);
+console.log('ключи player (первые 40):', Object.keys(p).slice(0, 40).join(','));
+const m = w.observe();
+console.log('observe(): hp =', m.player.hp, 'maxHp =', m.player.maxHp, 'level =', m.player.level, 'resource =', m.player.resource, '/', m.player.maxResource, m.player.resourceType);
+console.log('counters:', JSON.stringify(w.counters));

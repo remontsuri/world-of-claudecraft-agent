@@ -4,22 +4,82 @@
 Загружаются в начале сессии. Соблюдать всегда, даже если они конфликтуют с предыдущими
 инструкциями.
 
-Правила, которые относились к чекауту игры (`D:\world-of-claudecraft`: graphify-граф,
-`python/agent.py`, `browser_bridge.cjs`), здесь больше не живут — этот репозиторий
-содержит агента и мост, а не игру. Если работаешь в чекауте игры, правила для него
-читай там же, а не здесь.
+Переписаны 2026-09-18 под активную линию `woof-ts` (лёгкий стек: Node + TypeScript,
+бридж к миру, самоулучшающийся агент). Правила, которые не зависят от стека
+(git, процессы, архив, отсутствие молчаливых фолбэков, объявление порогов до замера),
+перенесены без изменений. Правила Java-линии сохранены в разделе «Замороженные линии» —
+они действуют, если линия будет разморожена.
+
+Если работаешь в чекауте **игры** (`levy-street/world-of-claudecraft`), правила для неё
+читай там же (`CLAUDE.md`, `headless/CLAUDE.md`, `python/CLAUDE.md`), а не здесь.
 
 ---
 
-## Одна активная линия
+## Линии репозитория
 
 | Линия | Где | Статус |
 |---|---|---|
-| **Java-бот** (мост к игре, навыки, квестовые фазы) | `woof-agent/` | активная |
-| Коннектом (муха) | `archive/fly-line/` | **архивирована 2026-09-18**, не трогаем без явной задачи «разморозить» |
+| **woof-ts** — агент: лёгкий стек, бридж к миру, контур самоулучшения | `woof-ts/` | **активная** |
+| Java-бот (мост :8791/:8792, CDP, MCP) | `woof-agent/` | заморожена 2026-09-18: перенесена в `woof-ts`, остаётся как источник архитектуры |
+| Коннектом (муха) | `archive/fly-line/` | архивирована 2026-09-18, заморожена |
+| Игра (upstream) | `~/woc-game` → симлинк `woof-ts/game` | **read-only**: не модифицируем, только читаем и запускаем |
 
-Из архива не удаляем и не правим задним числом: там лежат итоги линии, включая
-отрицательные. Что именно и как восстановить — `archive/fly-line/README.md`.
+Из архива и из замороженных линий не удаляем и не правим задним числом: там лежат итоги,
+включая отрицательные. Новые факты о них — датированной строкой в README соответствующей
+линии (`archive/fly-line/README.md`). Знание не удаляется, а перемещается.
+
+---
+
+## Стек активной линии (обязательный)
+
+Node **20+**, TypeScript, esbuild (сборка), vitest (тесты). Никаких веб-фреймворков:
+Next.js не устанавливался и не нужен — операторский слой если и появится, то отдельно
+и только по явной задаче.
+
+Единственные зависимости — инструменты разработки (`typescript`, `esbuild`, `vitest`, `@types/node`); рантайм-зависимостей нет.
+Новую зависимость добавляем, лишь если без неё нельзя, и пишем причину в `knowledge/woof-ts.md`.
+
+**Все факты об игре — импортом из дерева игры** (`woof-ts/game → ~/woc-game`, создаёт
+`tools/setup_game.sh`). Ни одного числа, переписанного руками: `obs=607`, `actions=61`,
+диапазоны, лагеря, квесты, уровни мобов — всё из `game/src/sim`. Сверка —
+`tools/verify_facts.ts` (падает при расхождении) и `tests/facts.test.ts`.
+Историческая причина: захардкоженный `obs=607` в архивной fly-линии (баг B3).
+
+---
+
+## Архитектура: шов мира, бридж, пороги, обучение
+
+```
+run.ts (CLI, evidence)
+  └─ AgentCore: OBSERVE → DECIDE → EXECUTE → VERIFY → LEARN
+       ├─ GoalFSM            фаза квеста ВЫВОДИТСЯ из наблюдения (syncFrom)
+       ├─ ArbitrationLayer   владелец решения: survival gate → PHASE_ALLOWED → фильтр мира → антицикл
+       ├─ SkillExecutor      канон навыков + композиты (navigate/explore/flee/return_to_giver/noop)
+       ├─ WorldMemory        пятна мобов, квестодатели, посещённые клетки, провалы
+       └─ World  ← ЕДИНСТВЕННЫЙ интерфейс к миру (src/world/world.ts)
+            ├─ SimWorld        transport=in-process: стенд на src/sim игры
+            └─ NdjsonBridge    transport=ndjson-stdio: headless env server игры (src/bridge/)
+```
+
+Правила шва:
+
+1. **Возможности мира объявляются ДО прогона** (`capabilities`) и пишутся в evidence.
+   Привилегированный метод без объявленной возможности **бросает исключение**, а не
+   возвращает 0/«доступно по умолчанию» (`questState`, `countItem`).
+2. **Пороги агента живут в одной таблице** — `src/policy/params.ts` (`PARAM_SPECS`:
+   ключ, значение по умолчанию, min/max, шаг, группа, пояснение). Литералов-порогов
+   в модулях политики не держим. Загрузка — только `WOOF_PARAMS=<file.json>`
+   (статические импорты ESM поднимаются до разбора argv, поэтому `--params` невозможен
+   в принципе, а каждый прогон изолирован). Значение вне сетки/диапазона — исключение.
+3. **Самоулучшение** — `src/learn/`: целевая функция объявлена до измерения
+   (`objective.ts`), подбор по объявленной сетке отдельными процессами (`tune.ts`),
+   train/val сплит сидов без пересечения, история `learning/history.jsonl` append-only,
+   итог `learning/best.json` + `learning/last_report.md`. Отказ от гипотезы пишется
+   в историю так же, как принятие.
+4. **Бридж** (`woof-ts/BRIDGE.md`): мир в отдельном процессе, NDJSON-контракт upstream
+   (`info`/`reset`/`step`/`close`), наблюдение — вектор obs + `info`. Чего по проводу нет
+   (id и вид сущностей, накопленный урон, состояние квеста `available`, содержимое сумок) —
+   объявлено в `capabilities`, а не подделано.
 
 ---
 
@@ -30,160 +90,52 @@
 - **Запрещено**: `--force`, `--mirror`, пуш в `master`/`main`/`release/*`/`levy-street`.
 - Перед пушем — свежий клон и `merge-base --is-ancestor` (протокол из шести шагов:
   `GIT-WORKFLOW.md`). Истина — на remote, а не в локальном выводе.
-- Хелпер: `GH_TOKEN=<pat> bash tools/push_backup.sh` (токен не попадает в конфиг и argv).
+- Хелпер: `GH_TOKEN=<pat> bash tools/push_backup.sh`.
+- **PAT**: токен живёт только в переменной окружения на время одной команды. Никогда
+  в файлах, в `.git/config`, в argv и в истории переписки. После пуша токен **отозвать**;
+  скомпрометированный (засвеченный в чате) не переиспользовать.
+- Хуки: `bash tools/install_hooks.sh` → `core.hooksPath=.githooks`. Пре-коммит
+  (`.githooks/pre-commit`) не пропускает: секреты в индексе, изменения в `archive/`,
+  изменения `woof-ts/` без пройденного `woof-ts/tools/check_all.sh`.
+  В песочнице `.git` стирается между ходами — тогда хук поставить некуда, и это
+  сообщается явно, а не тихо пропускается.
 
 ---
 
 ## Process Kill Protocol (CRITICAL)
 
 Разрешено убивать **только свои инструменты**, и только по точному пути в cmdline:
-`fake_cdp.cjs`, `fake_bridge.cjs`, `browser_bridge.cjs`.
+у активной линии это `dist-env/env_server.cjs` (процесс мира за бриджем) и
+`dist/run.mjs` / `dist/tune.mjs` (свои прогоны).
 
-Запрещено: `hermes-agent`, `hermes-gateway`, любой `node.exe` с `hermes` в CommandLine.
+Запрещено: `hermes-agent`, `hermes-gateway`, любой процесс с `hermes` в CommandLine.
 Чужой процесс на порту теста — остановка и сообщение пользователю, а не `kill`.
 `pkill -f` не используем: шаблон совпадает с самой командой и убивает оболочку.
 
----
-
-## Game & Bridge (порты)
-
-| Порт | Кто |
-|---|---|
-| 5173 | игра (web, Vite) |
-| 9222 | Chrome DevTools Protocol существующего браузера |
-| 8791 | мост к игре (`BridgeMain` или эталонный Node-мост) |
-| 8792 | MCP-сервер агента (`WoofMcpServer`) / верхний тестовый мост |
-| 8794 | тестовый `CdpBackend`-мост (негативный сценарий) |
-| 9231 / 9232 | фейковый CDP в тестах (HTTP / WS) |
-
-Запрещено: `window.location.reload()` через CDP, перезапуск игры и браузера «чтобы
-применились правки», запуск игры, если пользователь уже в ней.
-
----
-
-## Decision Owner Chain (Production)
-
-```
-VoyagerAgent → ArbitrationLayer.decide(worldState) → SkillExecutor → SkillIndex → мост
-                     ↓
-      Survival gate (опасность → flee/heal независимо от фазы)
-                     ↓
-      PHASE_ALLOWED gate (фаза квеста → разрешённые навыки)
-                     ↓
-      Фильтр WorldState (есть моб? есть дающий? квест активен?)
-                     ↓
-      Защита от бесконечного цикла (после 5 повторов — другое действие)
-```
-
-Единственный источник истины по индексам навыков — `core/SkillIndex.java`: он обязан
-совпадать с эталоном `woof-agent/tools/ref/actions.cjs` (`applyAction`). Проверка —
-`TestSkillIndex`. Неизвестный навык — исключение, а не тишина.
-
-### Critical Invariants (по коду, `ArbitrationLayer.java`)
-
-- `hasActiveQuest() || hasReadyQuest() ⇒ accept_quest` убирается из кандидатов (квест
-  нельзя взять заново)
-- `hp < CRIT_HP (0.15)` ⇒ `flee`, если моб в мили-радиусе, иначе `heal`
-- `hp < LOW_HP (0.30)` **и** моб в мили-радиусе ⇒ `flee` (выживание выше цели)
-- одно и то же действие `LOOP_THRESHOLD (6)` раз подряд ⇒ принудительно другое из
-  разрешённых (защита от цикла)
-- навык провалился `FAIL_LIMIT (3)` раза подряд ⇒ `FAIL_COOLDOWN (60)` решений вне выбора
-- `PHASE_ALLOWED["NO_QUEST"] = [accept_quest, farm, loot, explore, navigate, gather]`
-- фаза ВЫВОДИТСЯ из наблюдения (`GoalFSM.syncFrom`), а не переключается вручную
-
-### Quest FSM
-
-`QUEST_NONE → FIND_GIVER → ACCEPT → DO_OBJECTIVE → RETURN_TO_GIVER → TURN_IN → QUEST_COMPLETE`
-
-### Два словаря навыков — не путать
-
-**Индексы моста** (`core/SkillIndex.SKILLS`, 13 штук, порядок обязан совпадать с эталоном
-`tools/ref/actions.cjs` → `applyAction`):
-
-```
-0 farm · 1 loot · 2 accept_quest · 3 turn_in_quest · 4 sell_junk · 5 gather · 6 craft
-7 heal · 8 equip · 9 buy · 10 cast_frostbolt · 11 cast_fireball · 12 craft_item
-```
-
-Алиасы: `turn_in → turn_in_quest`, `sell → sell_junk`. Навыка нет в таблице —
-`IllegalArgumentException`, а не «примерно тот» индекс (это и был баг: `heal` при idx=8
-превращался в `equip`).
-
-**Слова агента** (`SkillExecutor.execute`): композитные `navigate`, `return_to_giver`,
-`explore`, `flee` (это `env.rawMove("back")`), `turn_in` и `noop` индекса моста **не имеют** —
-они исполняются отдельными ветками; всё остальное идёт через `plain()` → `SkillIndex.idx()`.
-Неизвестное имя возвращает `UNKNOWN_SKILL:<имя>`, а не тишину.
-
----
-
-## WoOF Agent — как устроен
-
-### Stack
-
-Java **11** (проверено на OpenJDK 11; в доках раньше был 17 — факт сборки: `javac` 11),
-Jackson 2.15.2, Java-WebSocket 1.5.3, slf4j 2.0.9. **Без Maven и Gradle**: `tools/build.sh`
-вызывает `javac` напрямую, jar-ы лежат в `libs/`. Python-зависимостей у линии нет.
-
-### Модули (`src/main/java/com/woof/agent/`, 28 классов)
-
-| Пакет | Что |
-|---|---|
-| `VoyagerAgent`, `Bootstrap` | точка входа и полный старт |
-| `arbitration/ArbitrationLayer` | владелец решения |
-| `core/AgentCore`, `SkillExecutor`, `SkillIndex`, `SkillRegistry` | цикл OBSERVE→DECIDE→EXECUTE→VERIFY→LEARN и исполнение навыков |
-| `env/GameEnvironment`, `SnapshotMapper`, `WorldState`, … | связь с мостом и каноническое состояние мира |
-| `fsm/GoalFSM` | фазы квеста |
-| `bridge/BridgeServer`, `BridgeMain`, `UpstreamBackend`, `CdpBackend`, `CdpClient` | HTTP-мост (тот же контракт, что у `browser_bridge.cjs`), транспорт к CDP |
-| `memory/SkillLibrary`, `Skill`, `WorldMemory` | Voyager-память |
-| `mcp/WoofMcpServer` | HTTP JSON-RPC на `:8792` |
-
-Карта файлов с назначением каждого класса: `woof-agent/FILES.md`.
-
-### MCP Server (:8792) — честное состояние
-
-Заявлены инструменты: `woof_status`, `woof_logs`, `woof_config`, `woof_build`, `woof_test`,
-`woof_game_state`, `woof_execute_action`. Фактически на 2026-09-18:
-`woof_status` и `woof_game_state` работают, `woof_build` запускает `javac` с хардкодом
-пути Windows-машины, `woof_logs` / `woof_config` / `woof_test` / `woof_execute_action` —
-заглушки «not yet implemented». Пункт H5 в `woof-agent/ROADMAP.md` открыт именно поэтому.
-
-### Build & Run
-
-```bash
-bash woof-agent/tools/build.sh                       # build ok -> ... (28 files)
-bash woof-agent/tools/run_tests.sh                   # tests passed=3 failed=0
-bash woof-agent/tools/run_e2e.sh                     # УСПЕХ ... нарушений контракта нет
-java -cp "woof-agent/build/classes:woof-agent/libs/*" \
-     com.woof.agent.bridge.BridgeMain --port 8792 --upstream http://127.0.0.1:8791/
-java -cp "woof-agent/build/classes:woof-agent/libs/*" \
-     com.woof.agent.VoyagerAgent --bridge http://127.0.0.1:8792/ --steps 200
-```
-
-Русский текст в логах java требует `JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8
--Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8` — в скриптах это уже есть.
-
-### Integration
-
-Мост `:8791` (Node-эталон `tools/ref/browser_bridge.cjs` или Java `BridgeMain`),
-CDP `:9222`, игра `:5173`. Переход на Java постепенный: сейчас рабочий вариант —
-`UpstreamBackend` (Java впереди, Node за ним); полный порт `CdpBackend` — пункт J7.
+Процесс мира, поднятый бриджем, обязан закрываться и при исключении
+(`process.on('exit', …)` в `run.ts`, `finally` в тестах): незакрытые миры — это
+не только висящие процессы, но и OOM на машине с 2 ГБ (проверено на себе).
 
 ---
 
 ## What to Never Do
 
 1. ❌ Kill `hermes-agent` / `hermes-gateway`
-2. ❌ Reload игры через CDP, перезапуск игры/браузера
-3. ❌ Push куда-либо кроме `backup`, любой `--force`
-4. ❌ Править исходники игры
-5. ❌ Менять канон навыков в обход `SkillIndex` (и его теста)
-6. ❌ Молчаливые фолбэки: неготовый бэкенд моста обязан отвечать 500 с текстом,
-   неизвестный навык — бросать исключение
-7. ❌ Custom revive-логика (в игре есть встроенная)
-8. ❌ Спрашивать «что делать дальше» — идти по `woof-agent/ROADMAP.md`
-9. ❌ Бесконечно повторять `git status` — выполнять следующий пункт роадмапа
-10. ❌ Удалять или переписывать `archive/`
-11. ❌ Принимать зелёный тест за приёмку: приёмка — живой прогон
+2. ❌ Push куда-либо кроме `backup`, любой `--force`
+3. ❌ Править исходники игры (`woof-ts/game` → `~/woc-game`) — она read-only
+4. ❌ Переписывать факты игры руками в нашем коде (только импорт + `verify_facts`)
+5. ❌ Молчаливые фолбэки: неизвестный навык/действие, неготовая возможность мира,
+   значение вне объявленного диапазона — исключение с текстом, а не «как-нибудь»
+6. ❌ Двигать целевую функцию или пороги метрик ПОСЛЕ измерения
+7. ❌ Сравнивать прогоны с разными единицами или разным транспортом, не объявив это
+8. ❌ Удалять или переписывать `archive/` и замороженные линии
+9. ❌ Принимать зелёный тест за приёмку: приёмка — живой прогон (`check_all.sh`)
+10. ❌ Коммитить `node_modules/`, `dist/`, `dist-env/`, симлинк `game`,
+    черновики `evidence/tuning/` (всё уже в `.gitignore`)
+11. ❌ Спрашивать «что делать дальше» вместо следующего пункта плана
+    (`woof-ts/ROADMAP.md`)
+12. ❌ Пользоваться привилегией стенда (`--npc-view 0`) и выдавать результат за
+    переносимый: такие прогоны помечаются в evidence явно
 
 ---
 
@@ -191,37 +143,105 @@ CDP `:9222`, игра `:5173`. Переход на Java постепенный: 
 
 | Когда | Команда | Успех |
 |---|---|---|
-| после правок Java | `bash woof-agent/tools/build.sh && bash woof-agent/tools/run_tests.sh` | `build ok` / `tests passed=3 failed=0` |
-| перед пушем Java | `bash woof-agent/tools/run_e2e.sh` | `УСПЕХ ... нарушений контракта нет` |
-| после правок хуков/инструкций | `bash hermes/hooks/selftest.sh` | `хуки: passed=17 failed=0` |
-| живой прогон (машина с игрой) | `BridgeMain` + `VoyagerAgent --steps 200` | `[Agent] SUMMARY ... quests_done ≥ 1` |
+| в начале работы на новом ходу | `bash woof-ts/tools/setup_game.sh` | клон игры + зависимости + сборка (`node_modules` в песочнице стирается каждый ход) |
+| после любых правок | `bash woof-ts/tools/check_all.sh` | `ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ` |
+| быстрый прогон стенда | `node woof-ts/dist/run.mjs --seed 42 --steps 150 --quiet` | `SUMMARY … kills≥1`, детерминизм при повторе |
+| быстрый прогон через бридж | `bash woof-ts/tools/build_env.sh && node woof-ts/dist/run.mjs --transport ndjson --seed 42 --steps 120 --quiet` | `SUMMARY … kills≥1` или `quests_done≥1` |
+| подбор порогов | `node woof-ts/dist/tune.mjs --steps 150 --train-seeds 42,43 --val-seeds 44` | `learning/best.json` + `history.jsonl` + `last_report.md` |
+| только тесты | `cd woof-ts && npm test` | `Test Files … passed` |
 
-Проверок fly-линии в этом списке больше нет: линия в архиве
-(`archive/fly-line/TOOLS-fly.md` — если понадобится).
+`check_all.sh` — тот же набор, который зовёт пре-коммит хук: «прошло локально» и
+«пройдёт в хуке» не должны расходиться. Быстрые варианты: `SKIP_BRIDGE=1`, `SKIP_TUNE=1`.
+
+**Эталоны активной линии (seed 42, warrior, объявлены до прогона):**
+
+| Мир | Бюджет | world_steps | kills | deaths | quests_done | first_turn_in |
+|---|---|---|---|---|---|---|
+| стенд (`sim`, честная модель наблюдения) | 150 решений | 4323 | 24 | 22 | 2 | шаг 12 |
+| стенд (`sim`) | 400 решений | 6696 | 31 | 26 | 2 | шаг 12 |
+| бридж (`ndjson`, env-сервер игры) | 120 решений | 5530 | 2 | 0 | 1 | шаг 6 |
+
+Изменение эталона — это находка: её причина пишется в `woof-ts/PROGRESS-<дата>.md`
+и в `knowledge/woof-ts.md` датированной строкой, а не молча правится в таблице.
 
 ---
 
 ## User Preferences
 
 - Language: Russian
-- Tone: Direct, no filler, no "great question!"
+- Tone: Direct, no filler, no «great question!»
 - Verification: реальное поведение игры > тесты
-- Workflow: Phase-1 root-cause → TDD → live verification
+- Workflow: root-cause → тест, который умеет падать → живой прогон
 - Reporting: таблицы `LAYER | EXPECTED | ACTUAL | STATUS` + путь к артефакту
+- Вопросы пользователю — только когда без ответа нельзя продолжить; повторять
+  уже заданный и пропущенный вопрос не нужно
 
 ---
 
 ## Правила, которые спасали работу
 
-1. **Нет молчаливых фолбэков.** Неготовая часть моста, неизвестный навык, чужой процесс
-   на порту — ошибка с текстом, а не «как-нибудь».
-2. **`--force` push запрещён.** Перед пушем — свежий клон и `merge-base --is-ancestor`:
-   локальная история уже расходилась с remote (те же фиксы, другие SHA).
+1. **Нет молчаливых фолбэков.** Неготовая возможность мира, неизвестный навык,
+   чужой процесс на порту — ошибка с текстом, а не «как-нибудь».
+2. **`--force` push запрещён.** Перед пушем — свежий клон и `merge-base --is-ancestor`.
 3. **Пушим только в `backup`**, только fast-forward; `master` не трогаем.
-4. **Пороги метрик объявляются до замера** и после замера не двигаются.
-5. **Найденное записываем сразу**: факт — в `knowledge/`, поведение — в
-   `woof-agent/ARCHITECTURE.md`, долг — в `woof-agent/ROADMAP.md`. Знание, не записанное
+4. **Пороги и целевая функция объявляются до замера** и после замера не двигаются.
+5. **Найденное записываем сразу**: факт — в `knowledge/`, состояние — в
+   `woof-ts/PROGRESS-<дата>.md`, долг — в `woof-ts/ROADMAP.md`. Знание, не записанное
    в репозиторий, потеряно.
-6. **Тест обязан уметь падать.** Фейк, который не различает проверяемое (одинаковый URL у
-   мёртвой и живой вкладок), превращает тест в декорацию.
-7. **Отказ — это данные.** Клиент читает тело ошибки (`errorStream`), а не только код.
+6. **Тест обязан уметь падать.** Фейк, который не различает проверяемое, превращает
+   тест в декорацию. Проверка «другой сид даёт другой эпизод» — ровно для этого.
+7. **Отказ — это данные.** Читаем тело ошибки (stderr мира за бриджем), а не только код.
+8. **Проверяем код возврата, а не отфильтрованный вывод.** `tsc | grep '^src/'` однажды
+   выглядел «чисто» при полностью отсутствующем `node_modules`: пустой grep ≠ успех.
+9. **Сборка начинается с `setup_game.sh`.** В песочнице `node_modules` стирается между
+   ходами (и внутри хода) — любая команда, которой нужен `dist/`, обязана начинать с него.
+10. **Процессы мира закрываем сразу.** Накопленные живые миры до `afterAll` дали
+    OOM-kill на 2 ГБ, который выглядел как «тесты упали».
+11. **Единицы метрик сверяем между транспортами.** `world_steps` и у стенда, и за бриджем
+    — шаги мира (действия × frameSkip), иначе сравнение прогонов бессмысленно.
+12. **Синхронный канал к процессу — через воркер и `Atomics`.** `fs.readSync` на pipe
+    даёт EAGAIN (libuv делает pipe неблокирующим); `Buffer.from(typedArray, off, len)`
+    игнорирует offset/length — нужен `subarray`. Обе ловушки стоили часов.
+
+---
+
+## Замороженные линии (правила действуют при разморозке)
+
+### Java-бот `woof-agent/`
+
+Java **11** (факт сборки: `javac` 11, в доках раньше был 17), Jackson 2.15.2,
+Java-WebSocket 1.5.3, slf4j 2.0.9. Без Maven/Gradle: `tools/build.sh` зовёт `javac`,
+jar-ы в `libs/`. Русские логи требуют `JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8
+-Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8`.
+
+| Порт | Кто |
+|---|---|
+| 5173 | игра (web, Vite) |
+| 9222 | Chrome DevTools Protocol существующего браузера |
+| 8791 | мост к игре (`BridgeMain` или эталонный Node-мост) |
+| 8792 | MCP-сервер агента (`WoofMcpServer`) |
+| 8794 | тестовый `CdpBackend`-мост (негативный сценарий) |
+| 9231 / 9232 | фейковый CDP в тестах (HTTP / WS) |
+
+Запрещено: `window.location.reload()` через CDP, перезапуск игры и браузера «чтобы
+применились правки», запуск игры, если пользователь уже в ней.
+
+Единственный источник истины по индексам навыков — `core/SkillIndex.java`, он обязан
+совпадать с эталоном `woof-agent/tools/ref/actions.cjs` (`applyAction`); проверка —
+`TestSkillIndex`. Индексы моста (13): `0 farm · 1 loot · 2 accept_quest · 3 turn_in_quest
+· 4 sell_junk · 5 gather · 6 craft · 7 heal · 8 equip · 9 buy · 10 cast_frostbolt
+· 11 cast_fireball · 12 craft_item`; алиасы `turn_in → turn_in_quest`, `sell → sell_junk`.
+Композиты агента (`navigate`, `return_to_giver`, `explore`, `flee`, `turn_in`, `noop`)
+индекса моста **не имеют**. Навыка нет в таблице — `IllegalArgumentException`.
+
+MCP-сервер `:8792` — честное состояние на 2026-09-18: работают `woof_status` и
+`woof_game_state`; `woof_build` запускает `javac` с хардкодом пути Windows-машины;
+`woof_logs` / `woof_config` / `woof_test` / `woof_execute_action` — заглушки. Пункт H5
+в `woof-agent/ROADMAP.md` открыт именно поэтому.
+
+Проверки Java-линии: `bash woof-agent/tools/build.sh` → `build ok`;
+`bash woof-agent/tools/run_tests.sh` → `tests passed=3 failed=0`;
+`bash woof-agent/tools/run_e2e.sh` → `УСПЕХ … нарушений контракта нет`.
+
+Реальные дефекты Java-линии (B1–B8, B13) описаны в `archive/fly-line/README.md` §4 —
+они не исправлялись, а переносились в `woof-ts` осознанно (порт архитектуры, а не кода).

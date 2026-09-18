@@ -20,6 +20,20 @@ venv/
 # --- Node (инструменты и эталоны моста) ---
 node_modules/
 
+# --- линия woof-ts (активная): собираемое не коммитим, дерево игры — ссылка ---
+# dist/         — бандл агента (esbuild), воспроизводится `npm run build`;
+# dist-env/     — бандл headless env server upstream (tools/build_env.sh), 6.8 МБ;
+# game          — симлинк на чекаут игры (tools/setup_game.sh), не содержимое;
+# node_modules  — стирается в песочнице каждый ход, ставится setup-скриптом.
+# evidence/ и learning/ — НАПРОТИВ, отслеживаются: это доказательства прогонов
+# и история самоулучшения, их потеря обесценивает результаты.
+woof-ts/dist/
+woof-ts/dist-env/
+woof-ts/game
+# Черновики подбора порогов: десятки evidence-файлов на каждый раунд тюнинга.
+# Итог подбора отслеживается (learning/best.json, history.jsonl, last_report.md).
+woof-ts/evidence/tuning/
+
 # --- логи, рантайм-состояние агента, временные файлы ---
 *.log
 /logs/
