@@ -41,7 +41,7 @@ bash hermes/hooks/session_start.sh
 ## Проверка самих хуков
 
 ```bash
-bash hermes/hooks/selftest.sh     # ожидаем: хуки: passed=12 failed=0 → ВСЁ ЗЕЛЁНОЕ
+bash hermes/hooks/selftest.sh     # ожидаем: хуки: passed=17 failed=0 → ВСЁ ЗЕЛЁНОЕ
 ```
 
 Самотест проверяет и блокировки (force-push, убийство hermes-agent, правка игры,

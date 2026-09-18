@@ -51,7 +51,7 @@ case "$blob" in
 esac
 
 case "$blob" in
-  *"D:\\woc"*|*"D:/woc"*|*world-of-claudecraft/src/sim/*|*world-of-claudecraft/src/*)
+  *"D:\\woc"*|*"D:/woc"*|*world-of-claudecraft/src/sim/*|*world-of-claudecraft/src/*|*archive/fly-line/src-fly_brain/*)
     deny "исходники игры менять нельзя. Работаем только с мостом и агентом; игру считаем чужой системой." ;;
 esac
 
@@ -61,23 +61,28 @@ case "$blob" in
 esac
 
 case "$blob" in
-  *quest_oracle*.json*|*circuit.json*)
+  *archive/*)
+    case "$blob" in
+      *rm\ *|*"rm -"*|*del\ *|*Remove-Item*|*"git rm"*)
+        deny "archive/ удалять нельзя: там итоги fly-линии, включая отрицательные (M3 = 0 квестов). Знание не удаляется. Архив мешает — скажи пользователю, решение его." ;;
+      *"git mv"*|*mv\ *)
+        deny "из archive/ ничего не переносим и не переименовываем без явной задачи «разморозить fly-линию». Архив заморожен 2026-09-18." ;;
+      *"git commit"*|*"git add"*)
+        allow "ВНИМАНИЕ: правка в archive/. Архив заморожен: итоги задним числом не переписываем. Новый факт про архив — отдельной строкой с датой в archive/fly-line/README.md." ;;
+    esac ;;
+esac
+
+case "$blob" in
+  *circuit*.json*|*quest_oracle*.json*|*params_*.pt*)
     case "$blob" in
       *rm\ *|*"rm -"*|*del\ *|*Remove-Item*)
-        deny "удалять таблицы оракула и схему нельзя: circuit.json и data/quest_oracle*.json - это воспроизводимость. Если нужна новая версия, клади рядом и указывай sha старой." ;;
+        deny "схемы, таблицы квестов и чек-инты — это воспроизводимость (лежат в archive/fly-line/). Удалять нельзя: новая версия кладётся рядом, с sha старой." ;;
     esac ;;
 esac
 
 case "$blob" in
-  *male-cns*|*gsutil*|*build_full_circuit*|*"211K"*|*"full-connectome"*)
-    deny "полные данные MaleCNS и полномасштабная сборка/тренировка запускаются ТОЛЬКО с явного подтверждения пользователя (LFS исчерпан, в песочнице нет ни места, ни GPU)." ;;
-esac
-
-case "$blob" in
-  *".feather"*)
-    case "$blob" in
-      *"git add"*|*"git commit"*) deny "feather-файлы (веса/аннотации коннектома) в коммит не кладём: >100 МБ идут в Releases." ;;
-    esac ;;
+  *male-cns*|*gsutil*|*build_full_circuit*|*"211K"*|*"full-connectome"*|*".feather"*)
+    deny "тяжёлые данные коннектома (MaleCNS, .feather, полномасштабная сборка/тренировка) — ТОЛЬКО с явного подтверждения пользователя: линия в архиве, LFS исчерпан, файлы >100 МБ в репозиторий не кладутся." ;;
 esac
 
 case "$blob" in
@@ -104,8 +109,10 @@ case "$blob" in
 esac
 
 case "$blob" in
-  *run_tests.sh*|*run_e2e.sh*|*gpu_check.py*|*accel_m1_m3.sh*)
+  *run_tests.sh*|*run_e2e.sh*|*build.sh*|*selftest.sh*)
     allow "Это проверка — правильно. Ожидаемый результат сверяем со строкой из hermes/TOOLS.md." ;;
+  *archive/fly-line/*run_checks.sh*|*gpu_check.py*|*accel_m1_m3.sh*)
+    allow "ВНИМАНИЕ: это проверка АРХИВНОЙ fly-линии (нужен torch, пути с archive/fly-line/). Активная линия — woof-agent; запускаем только при задаче «разморозить муху»." ;;
 esac
 
 allow

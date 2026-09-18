@@ -57,19 +57,25 @@ Maven и Gradle **не нужны** и не используются: `tools/bui
 портах — остановка с сообщением (убиваются только свои: `fake_cdp.cjs`,
 `fake_bridge.cjs`, `browser_bridge.cjs`).
 
-## Переменные окружения (fly-линия, общий репозиторий)
+## Переменные окружения
 
 | Переменная | Смысл |
 |---|---|
-| `WOC_PYTHON_PATH` | путь к чекауту игры (в нём `python/wow_env.py`) |
-| `WOC_DEVICE` | устройство вычислений: `cuda` / `mps` / `cpu` (см. `fly-woc/GPU-DEVICE.md`) |
-| `WOC_BRAIN_BACKEND` | бэкенд схемы: `auto` / `edge` / `sparse` / `scipy` |
-| `WOC_QUEST_TABLE` | таблица оракула под конкретную сборку игры (204 / 214 / 224) |
+| `JAVA_TOOL_OPTIONS` | `-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8`: без этого русский текст в логах java/javac превращается в `?????`. В `tools/*.sh` уже выставлено |
+| `STEPS` | число шагов агента в `tools/run_e2e.sh` (по умолчанию 120) |
+| `repo.root` (system property) | корень репозитория для тестов: `-Drepo.root=...`, иначе тесты не найдут `tools/fake_cdp.cjs` |
 
-Правило: явно запрошенное недоступное устройство — ошибка, а не тихий откат на CPU.
+Переменные `WOC_PYTHON_PATH`, `WOC_DEVICE`, `WOC_BRAIN_BACKEND`, `WOC_QUEST_TABLE`
+относились к fly-линии и вместе с ней уехали в архив:
+`archive/fly-line/README.md`, `archive/fly-line/fly-woc/GPU-DEVICE.md`.
+Java-бот их не читает.
 
 ## Что НЕ является зависимостью
 
-* Python/RL-стек из `fly-woc/` — отдельная линия, `woof-agent` его не импортирует.
+* Python — у Java-линии его нет: ни в сборке, ни в рантайме (в корне репозитория остались
+  два питоновых клиента моста, `recover.py` и `dataset_collector.py`, но они не часть
+  сборки `woof-agent`).
 * `hermes-agent` / `hermes-gateway` — соседние процессы пользователя: агент с ними
   не взаимодействует и не имеет права их останавливать.
+* `archive/fly-line/` — архив: Python/RL-стек, схема коннектома, torch. Не импортируется
+  и не запускается в рамках Java-линии.

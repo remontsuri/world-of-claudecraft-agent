@@ -24,8 +24,11 @@ if grep -qE '^woof-agent/' <<< "$changed"; then
   run_note "" "bash woof-agent/tools/build.sh && bash woof-agent/tools/run_tests.sh" "build ok / tests passed=3 failed=0"
   run_note "" "bash woof-agent/tools/run_e2e.sh (перед пушем)" "УСПЕХ ... нарушений контракта нет"
 fi
-if grep -qE '^fly-woc/|^src/fly_brain/|^knowledge/' <<< "$changed"; then
-  run_note "" "bash fly-woc/tools/run_checks.sh" "ВСЁ ЗЕЛЁНОЕ"
+if grep -qE '^knowledge/|^hermes/' <<< "$changed"; then
+  run_note "" "bash hermes/hooks/selftest.sh" "хуки: passed=17 failed=0"
+fi
+if grep -qE '^archive/' <<< "$changed"; then
+  add "Правка в archive/: архив заморожен 2026-09-18, итоги fly-линии задним числом не переписываем. Новый факт — отдельной строкой с датой в archive/fly-line/README.md."
 fi
 
 # Незаписанное знание: правки в коде без правок в документах

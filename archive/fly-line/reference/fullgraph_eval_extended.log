@@ -1,0 +1,18 @@
+[fly]
+  fly             seed 900001: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly             seed 900002: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly             seed 900003: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly             seed 900004: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly             seed 900005: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+[fly-sampled]
+  fly-sampled     seed 900001: steps  1200 reward    23.688 lvl 1 xp 60 kills 0 deaths 0 quests 1
+  fly-sampled     seed 900002: steps  1200 reward    23.568 lvl 1 xp 60 kills 0 deaths 0 quests 1
+  fly-sampled     seed 900003: steps  1200 reward    23.434 lvl 1 xp 60 kills 0 deaths 0 quests 1
+  fly-sampled     seed 900004: steps  1200 reward     2.048 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly-sampled     seed 900005: steps  1200 reward    23.592 lvl 1 xp 60 kills 0 deaths 0 quests 1
+[fly-silenced]
+  fly-silenced    seed 900001: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly-silenced    seed 900002: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly-silenced    seed 900003: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly-silenced    seed 900004: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0
+  fly-silenced    seed 900005: steps  1200 reward     1.200 lvl 1 xp 0 kills 0 deaths 0 quests 0

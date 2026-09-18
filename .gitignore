@@ -1,60 +1,56 @@
-# dependencies
-node_modules
+# ============================================================
+# world-of-claudecraft-agent — .gitignore
+# Переписан 2026-09-18: раньше сюда был скопирован список чужого
+# проекта (игры) — ~100 строк про electron/, release-steam/, sfx-runtime/,
+# discord_bot_info.txt и т.п., которых в этом репозитории никогда не было.
+# Оставлено только то, что реально может появиться здесь.
+# ============================================================
 
-# agent-local git worktrees
-.worktrees/
+# --- Java-сборка woof-agent (javac без Maven) ---
+woof-agent/build/
+*.class
 
-# build outputs
-dist/
-dist-env/
-dist-ota/
-dist-server/
-release/
-release-steam/
-electron/vendor/
-media-cache/
-sfx-runtime/
-src/ui/i18n.resolved.generated/*.tmp
-src/admin/i18n.resolved.generated/*.tmp
-src/ui/i18n.status.json
-src/ui/i18n.status.summary.json
-src/ui/i18n.resolved.sha256
-private/*
-!private/.dockerkeep
-tmp/
-public/models/sfx-studio-security-*.glb
-pr-shots*/
-pr.diff
-.devpid
-.codex-research/
-.codex/*
-!.codex/config.toml
-!.codex/hooks.json
-!.codex/agents/
-!.codex/agents/*.toml
-!.codex/hooks/
-!.codex/hooks/*.sh
-.playwright-mcp/
-screenshots/
-docs/i18n-scaling/worklist/
-
-# python
+# --- Python (архив fly-линии и два клиента моста в корне) ---
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
 
-# environment / secrets
+# --- Node (инструменты и эталоны моста) ---
+node_modules/
+
+# --- логи, рантайм-состояние агента, временные файлы ---
+*.log
+/logs/
+tmp/
+.hermes-tmp.*
+*.pid
+*.lock
+bridge_pid.txt
+bridge_err.log
+bridge_out.log
+bridge_run.log
+nul
+.DS_Store
+Thumbs.db
+
+# --- секреты и окружение ---
 .env
 .env.*
 !.env.example
 AuthKey_*.p8
-scripts/generate_treasure_chest.mjs
+*.pem
+*.key
+id_rsa
+credentials
+.git-credentials
+.netrc
 
-# editor & OS noise
-.DS_Store
-Thumbs.db
-*.log
+# --- редакторы и агенты ---
 .idea/
+.vscode/
+.cursor/
 .claude/*
 !.claude/skills/
 !.claude/agents/
@@ -62,94 +58,65 @@ Thumbs.db
 !.claude/hooks/
 !.claude/settings.json
 .claude-scratch/
-.cursor/
-postgres/
-pr-assets-2fa
-.vite/
-.experimental-vitest-cache/
-node_modules/.experimental-vitest-cache/
-.turbo/
-discord_bot_info.txt
-dist-bot/
-chrome-headless-shell/
-docs/music/renders/
-/logs/
-/memory/
-/multibox.tokens.json
-/scripts/multibox*/
-/scripts/agent/
-/scripts/companion.*
-/scripts/browser_auth.mjs
-/scripts/token_sink.mjs
-/scripts/_farm_supervisor.sh
-/scripts/_multibox_backup/
-/scripts/MULTIBOX.md
-/scripts/hunter_agent*.mjs
-/scripts/hunter_agents.sh
-/scripts/gravewyrm_trio.mjs
-/TESTING-TALENTS-2-0.md
-parse-spool/
-public/models/sfx-studio-security-*.glb
-output/
+.codex-research/
+.playwright-mcp/
+.worktrees/
+screenshots/
+pr-shots*/
+pr.diff
 
-# WoC agent regenerable runtime state — do not grow Git history with these
-python/experience_autonomous.json
-python/replay_buffer.json
-python/*.jsonl
-python/step_trace.json
-python/agent_crash.log
-python/agent_lifecycle.log
-python/_cycle.log
-python/*.pid
-python/*.lock
-python/goal_state.json
-python/self_reflection.json
-python/world_memory.json
-python/strategy_memory.json
-
-# agent debug artifacts (untracked _*.py, _*.cjs, _*.ps1, _*.png)
-_*.cjs
+# --- отладочные артефакты агента (неотслеживаемые _*.py, _*.cjs, _*.json) ---
 _*.py
+_*.cjs
 _*.ps1
 _*.png
 _*.json
-_h*.json
-_snap*.json
 _*.tmp
-.hermes-tmp.*
+_snap*.json
 .rb_*.tmp
-bridge_pid.txt
-/python/.rb_*.tmp
-python/experience_autonomous.json
-python/replay_buffer.json
-python/self_reflection.json
-python/strategy_memory.json
-python/world_memory.json
-woc-llm/
 
-# VFB large binaries
-VFB Files.zip
-data/vfb_files/
-data/connectome/exported-traced-adjacencies-v1.2/*.csv
-data/connectome/exported-traced-adjacencies-v1.2/*.pkl
-data/connectome/exported-traced-adjacencies-v1.2/*.tar.gz
-data/connectome/exported-traced-adjacencies-v1.2/W_cached.pt
-data/connectome/exported-traced-adjacencies-v1.2/W_sparse.pt
-
-# WoC archive (keep source, not binaries)
-woc_archive/
-
-# Temp/cache files
-nul
-bridge_err.log
-bridge_out.log
-bridge_run.log
+# --- тяжёлые данные: в репозиторий не кладутся ---
+# LFS исчерпан; файлы >100 МБ — только в Releases.
 *.tar.gz
-data/ppo_*.zip
-fly-woc/data/circuit_full.json
+*.zip
+*.feather
+*.pkl
 
-# Java-сборка woof-agent (javac без Maven): классы, список источников, тестовые классы
-woof-agent/build/
-*.class
-data/male_cns/
-workspace-full-extract/
+# ============================================================
+# Архив fly-линии: КОД, ДОКУМЕНТАЦИЯ И ДОКАЗАТЕЛЬСТВА — в git,
+# ТЯЖЁЛЫЕ ДАННЫЕ — нет (2026-09-18, решение владельца).
+#
+# Снято с отслеживания (~108 МБ из 117):
+#   * три копии коннектома + контроль ER        (archive/fly-line/data/)
+#   * каноническая схема circuit.json, 26 МБ    (…/fly-woc/data/circuit.json)
+#   * чек-инты читаута *.pt                     (…/fly-woc/outputs/)
+#   * сцена визуализации scene-full.json, 0.9 МБ (…/fly-woc/viz/)
+#   * circuit_full.json (никогда не коммитился)
+#
+# Как вернуть файл:  git checkout 40f3ba6 -- <путь>
+# Как воспроизвести: контроли rewired/er regenerable из канона за 18 с —
+#   python3 archive/fly-line/fly-woc/tools/make_control_graph.py \
+#       --in <circuit.json> --out <…> --mode er|degree --seed 1
+#   (проверено 2026-09-18: результат идентичен закоммиченному по всем полям)
+#   канон собирается build_circuit.py из данных MaleCNS (CC BY 4.0),
+#   хеши исходников — в …/fly-woc/data/manifest.json.
+#
+# Таблицы квестов (4 × ~80 КБ), benchmark_*.json (3.7 МБ, числа F8),
+# train_log_*.json (конфигурации прогонов) и весь код/доки — ОСТАЮТСЯ в git:
+# это доказательства, а не веса.
+# ============================================================
+archive/fly-line/data/circuit_er.json
+archive/fly-line/data/circuit_rewired.json
+archive/fly-line/data/circuit_full.json
+archive/fly-line/data/circuit-full/circuit.json
+archive/fly-line/fly-woc/data/circuit.json
+archive/fly-line/fly-woc/data/circuit_full.json
+archive/fly-line/fly-woc/outputs/*.pt
+archive/fly-line/fly-woc/viz/scene-full.json
+
+# Отрицания: шаблоны выше/выше по списку не должны ловить нужные файлы.
+# `_*.py` (отладочные артефакты агента) совпадает с `__init__.py`, а `*.log` —
+# с логами-доказательствами в архиве. Оба найдены проверкой 2026-09-18:
+# git ls-files | git check-ignore --stdin  (после git rm --cached)
+!__init__.py
+!archive/fly-line/reference/*.log

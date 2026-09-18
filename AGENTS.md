@@ -1,213 +1,203 @@
 # WoC Agent — Standing Rules
 
-Этот файл загружается автоматически при работе в директории D:\world-of-claudecraft.
-Следуй этим правилам ВСЕГДА, даже если они конфликтуют с предыдущими инструкциями.
+Стоячие правила **этого репозитория** (`remontsuri/world-of-claudecraft-agent`).
+Загружаются в начале сессии. Соблюдать всегда, даже если они конфликтуют с предыдущими
+инструкциями.
+
+Правила, которые относились к чекауту игры (`D:\world-of-claudecraft`: graphify-граф,
+`python/agent.py`, `browser_bridge.cjs`), здесь больше не живут — этот репозиторий
+содержит агента и мост, а не игру. Если работаешь в чекауте игры, правила для него
+читай там же, а не здесь.
 
 ---
 
-## 📌 ПЕРВЫМ ДЕЛОМ: ЧИТАТЬ ГРАФ
+## Одна активная линия
 
-Перед любыми правками кода агента или моста — прочитай:
+| Линия | Где | Статус |
+|---|---|---|
+| **Java-бот** (мост к игре, навыки, квестовые фазы) | `woof-agent/` | активная |
+| Коннектом (муха) | `archive/fly-line/` | **архивирована 2026-09-18**, не трогаем без явной задачи «разморозить» |
 
-1. `graphify-out/GRAPH_REPORT.md` — highlights, key concepts, communities
-2. `graphify-out/graph.html` — интерактивный граф (открыть в браузере)
-3. `graphify-out/graph.json` — полный граф для запросов
-
-Граф строится автоматически через `graphify hook install` (post-commit, post-checkout).
-Если граф не обновлялся после последнего коммита — запусти вручную:
-
-```bash
-cd D:/world-of-claudecraft
-graphify extract . --code-only
-graphify cluster-only .
-```
-
-**Graph Freshness**: проверяй `graphify-out/manifest.json` → `git_commit` vs `git rev-parse HEAD`.
-
----
-
-## Working Directories
-
-| Путь | Назначение | Использовать? |
-|------|-----------|--------------|
-| D:\world-of-claudecraft | Основная рабочая папка (игра + агент) | ✅ ВСЕГДА |
-| D:\world-of-claudecraft-agent | Устаревшая папка агента | ❌ Никогда |
-| D:\woc | Официальный источник игры (source of truth) | ✅ Для reference |
+Из архива не удаляем и не правим задним числом: там лежат итоги линии, включая
+отрицательные. Что именно и как восстановить — `archive/fly-line/README.md`.
 
 ---
 
 ## Git Rules (CRITICAL)
 
-- **Ветка**: ТОЛЬКО backup
-- **Remote**: ТОЛЬКО origin backup (remontsuri/world-of-claudecraft-agent)
-- **Запрещено**: release/*, main, master, levy-street для push
+- **Ветка**: ТОЛЬКО `backup`, только fast-forward.
+- **Remote**: ТОЛЬКО `origin backup` (remontsuri/world-of-claudecraft-agent).
+- **Запрещено**: `--force`, `--mirror`, пуш в `master`/`main`/`release/*`/`levy-street`.
+- Перед пушем — свежий клон и `merge-base --is-ancestor` (протокол из шести шагов:
+  `GIT-WORKFLOW.md`). Истина — на remote, а не в локальном выводе.
+- Хелпер: `GH_TOKEN=<pat> bash tools/push_backup.sh` (токен не попадает в конфиг и argv).
 
 ---
 
 ## Process Kill Protocol (CRITICAL)
 
-Перед kill: `wmic process where "name='node.exe'" get ProcessId,CommandLine`
+Разрешено убивать **только свои инструменты**, и только по точному пути в cmdline:
+`fake_cdp.cjs`, `fake_bridge.cjs`, `browser_bridge.cjs`.
 
-Разрешено убивать: browser_bridge.cjs, python/play_autonomous.py
-Запрещено: hermes-agent, hermes-gateway, любой node.exe с hermes в CommandLine
+Запрещено: `hermes-agent`, `hermes-gateway`, любой `node.exe` с `hermes` в CommandLine.
+Чужой процесс на порту теста — остановка и сообщение пользователю, а не `kill`.
+`pkill -f` не используем: шаблон совпадает с самой командой и убивает оболочку.
 
 ---
 
-## Game & Bridge
+## Game & Bridge (порты)
 
-- Game: http://localhost:5173
-- CDP: http://127.0.0.1:9222
-- Bridge: http://127.0.0.1:8791
-- Python: C:/Users/vladc/AppData/Local/Programs/Python/Python312/python.exe
-- Args: -I -u -X faulthandler PYTHONPATH=D:/world-of-claudecraft/python
+| Порт | Кто |
+|---|---|
+| 5173 | игра (web, Vite) |
+| 9222 | Chrome DevTools Protocol существующего браузера |
+| 8791 | мост к игре (`BridgeMain` или эталонный Node-мост) |
+| 8792 | MCP-сервер агента (`WoofMcpServer`) / верхний тестовый мост |
+| 8794 | тестовый `CdpBackend`-мост (негативный сценарий) |
+| 9231 / 9232 | фейковый CDP в тестах (HTTP / WS) |
 
-Запрещено: window.location.reload() через CDP, перезапуск игры
+Запрещено: `window.location.reload()` через CDP, перезапуск игры и браузера «чтобы
+применились правки», запуск игры, если пользователь уже в ней.
 
 ---
 
 ## Decision Owner Chain (Production)
 
-play_autonomous → agent.Agent → arbitration.ArbitrationLayer → policy → skill
+```
+VoyagerAgent → ArbitrationLayer.decide(worldState) → SkillExecutor → SkillIndex → мост
+                     ↓
+      Survival gate (опасность → flee/heal независимо от фазы)
+                     ↓
+      PHASE_ALLOWED gate (фаза квеста → разрешённые навыки)
+                     ↓
+      Фильтр WorldState (есть моб? есть дающий? квест активен?)
+                     ↓
+      Защита от бесконечного цикла (после 5 повторов — другое действие)
+```
 
-arbitration_layer.py — МЁРТВЫЙ код, не трогать
+Единственный источник истины по индексам навыков — `core/SkillIndex.java`: он обязан
+совпадать с эталоном `woof-agent/tools/ref/actions.cjs` (`applyAction`). Проверка —
+`TestSkillIndex`. Неизвестный навык — исключение, а не тишина.
+
+### Critical Invariants (по коду, `ArbitrationLayer.java`)
+
+- `hasActiveQuest() || hasReadyQuest() ⇒ accept_quest` убирается из кандидатов (квест
+  нельзя взять заново)
+- `hp < CRIT_HP (0.15)` ⇒ `flee`, если моб в мили-радиусе, иначе `heal`
+- `hp < LOW_HP (0.30)` **и** моб в мили-радиусе ⇒ `flee` (выживание выше цели)
+- одно и то же действие `LOOP_THRESHOLD (6)` раз подряд ⇒ принудительно другое из
+  разрешённых (защита от цикла)
+- навык провалился `FAIL_LIMIT (3)` раза подряд ⇒ `FAIL_COOLDOWN (60)` решений вне выбора
+- `PHASE_ALLOWED["NO_QUEST"] = [accept_quest, farm, loot, explore, navigate, gather]`
+- фаза ВЫВОДИТСЯ из наблюдения (`GoalFSM.syncFrom`), а не переключается вручную
+
+### Quest FSM
+
+`QUEST_NONE → FIND_GIVER → ACCEPT → DO_OBJECTIVE → RETURN_TO_GIVER → TURN_IN → QUEST_COMPLETE`
+
+### Два словаря навыков — не путать
+
+**Индексы моста** (`core/SkillIndex.SKILLS`, 13 штук, порядок обязан совпадать с эталоном
+`tools/ref/actions.cjs` → `applyAction`):
+
+```
+0 farm · 1 loot · 2 accept_quest · 3 turn_in_quest · 4 sell_junk · 5 gather · 6 craft
+7 heal · 8 equip · 9 buy · 10 cast_frostbolt · 11 cast_fireball · 12 craft_item
+```
+
+Алиасы: `turn_in → turn_in_quest`, `sell → sell_junk`. Навыка нет в таблице —
+`IllegalArgumentException`, а не «примерно тот» индекс (это и был баг: `heal` при idx=8
+превращался в `equip`).
+
+**Слова агента** (`SkillExecutor.execute`): композитные `navigate`, `return_to_giver`,
+`explore`, `flee` (это `env.rawMove("back")`), `turn_in` и `noop` индекса моста **не имеют** —
+они исполняются отдельными ветками; всё остальное идёт через `plain()` → `SkillIndex.idx()`.
+Неизвестное имя возвращает `UNKNOWN_SKILL:<имя>`, а не тишину.
 
 ---
 
-## Key Files
+## WoOF Agent — как устроен
 
-- python/agent.py — главный агент
-- python/policy.py — decision gates
-- python/play_autonomous.py — runner
-- python/world_state.py — canonical world state
-- python/arbitration.py — REAL owner
-- src/bridge/actions.cjs — bridge actions
-- browser_bridge.cjs — bridge endpoint
+### Stack
+
+Java **11** (проверено на OpenJDK 11; в доках раньше был 17 — факт сборки: `javac` 11),
+Jackson 2.15.2, Java-WebSocket 1.5.3, slf4j 2.0.9. **Без Maven и Gradle**: `tools/build.sh`
+вызывает `javac` напрямую, jar-ы лежат в `libs/`. Python-зависимостей у линии нет.
+
+### Модули (`src/main/java/com/woof/agent/`, 28 классов)
+
+| Пакет | Что |
+|---|---|
+| `VoyagerAgent`, `Bootstrap` | точка входа и полный старт |
+| `arbitration/ArbitrationLayer` | владелец решения |
+| `core/AgentCore`, `SkillExecutor`, `SkillIndex`, `SkillRegistry` | цикл OBSERVE→DECIDE→EXECUTE→VERIFY→LEARN и исполнение навыков |
+| `env/GameEnvironment`, `SnapshotMapper`, `WorldState`, … | связь с мостом и каноническое состояние мира |
+| `fsm/GoalFSM` | фазы квеста |
+| `bridge/BridgeServer`, `BridgeMain`, `UpstreamBackend`, `CdpBackend`, `CdpClient` | HTTP-мост (тот же контракт, что у `browser_bridge.cjs`), транспорт к CDP |
+| `memory/SkillLibrary`, `Skill`, `WorldMemory` | Voyager-память |
+| `mcp/WoofMcpServer` | HTTP JSON-RPC на `:8792` |
+
+Карта файлов с назначением каждого класса: `woof-agent/FILES.md`.
+
+### MCP Server (:8792) — честное состояние
+
+Заявлены инструменты: `woof_status`, `woof_logs`, `woof_config`, `woof_build`, `woof_test`,
+`woof_game_state`, `woof_execute_action`. Фактически на 2026-09-18:
+`woof_status` и `woof_game_state` работают, `woof_build` запускает `javac` с хардкодом
+пути Windows-машины, `woof_logs` / `woof_config` / `woof_test` / `woof_execute_action` —
+заглушки «not yet implemented». Пункт H5 в `woof-agent/ROADMAP.md` открыт именно поэтому.
+
+### Build & Run
+
+```bash
+bash woof-agent/tools/build.sh                       # build ok -> ... (28 files)
+bash woof-agent/tools/run_tests.sh                   # tests passed=3 failed=0
+bash woof-agent/tools/run_e2e.sh                     # УСПЕХ ... нарушений контракта нет
+java -cp "woof-agent/build/classes:woof-agent/libs/*" \
+     com.woof.agent.bridge.BridgeMain --port 8792 --upstream http://127.0.0.1:8791/
+java -cp "woof-agent/build/classes:woof-agent/libs/*" \
+     com.woof.agent.VoyagerAgent --bridge http://127.0.0.1:8792/ --steps 200
+```
+
+Русский текст в логах java требует `JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8
+-Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8` — в скриптах это уже есть.
+
+### Integration
+
+Мост `:8791` (Node-эталон `tools/ref/browser_bridge.cjs` или Java `BridgeMain`),
+CDP `:9222`, игра `:5173`. Переход на Java постепенный: сейчас рабочий вариант —
+`UpstreamBackend` (Java впереди, Node за ним); полный порт `CdpBackend` — пункт J7.
 
 ---
 
 ## What to Never Do
 
-1. ❌ Kill hermes-agent/hermes-gateway processes
-2. ❌ Reload game via CDP
-3. ❌ Push to non-backup remotes
-4. ❌ Work in D:\world-of-claudecraft-agent
-5. ❌ Modify arbitration_layer.py (dead code)
-6. ❌ Restart bridge/agent after code edits
-7. ❌ Start game if user already logged in
-8. ❌ Custom revive logic (built-in exists)
-9. ❌ Ask "what to do next" — follow document TODO in order
-10. ❌ Repeat git status endlessly — execute next TODO item
-11. ❌ Править код без чтения GRAPH_REPORT.md и graph.json
+1. ❌ Kill `hermes-agent` / `hermes-gateway`
+2. ❌ Reload игры через CDP, перезапуск игры/браузера
+3. ❌ Push куда-либо кроме `backup`, любой `--force`
+4. ❌ Править исходники игры
+5. ❌ Менять канон навыков в обход `SkillIndex` (и его теста)
+6. ❌ Молчаливые фолбэки: неготовый бэкенд моста обязан отвечать 500 с текстом,
+   неизвестный навык — бросать исключение
+7. ❌ Custom revive-логика (в игре есть встроенная)
+8. ❌ Спрашивать «что делать дальше» — идти по `woof-agent/ROADMAP.md`
+9. ❌ Бесконечно повторять `git status` — выполнять следующий пункт роадмапа
+10. ❌ Удалять или переписывать `archive/`
+11. ❌ Принимать зелёный тест за приёмку: приёмка — живой прогон
 
 ---
 
-## Before Every Action
+## Обязательные проверки
 
-1. `cd D:/world-of-claudecraft` — убедись что в правильной папке
-2. `git status` — нет ли uncommitted изменений
-3. Прочитай `graphify-out/GRAPH_REPORT.md` — найди relevant communities
-4. Проверь процессы перед kill
-5. Выполни следующий TODO item
+| Когда | Команда | Успех |
+|---|---|---|
+| после правок Java | `bash woof-agent/tools/build.sh && bash woof-agent/tools/run_tests.sh` | `build ok` / `tests passed=3 failed=0` |
+| перед пушем Java | `bash woof-agent/tools/run_e2e.sh` | `УСПЕХ ... нарушений контракта нет` |
+| после правок хуков/инструкций | `bash hermes/hooks/selftest.sh` | `хуки: passed=17 failed=0` |
+| живой прогон (машина с игрой) | `BridgeMain` + `VoyagerAgent --steps 200` | `[Agent] SUMMARY ... quests_done ≥ 1` |
 
----
-
-## WoOF Agent — Java Rewrite Architecture
-
-### Stack
-- Java 17 (Eclipse Temurin), Maven, Jackson, Java-WebSocket
-- No Python dependency — full autonomy from python/
-
-### Project Location
-`D:\world-of-claudecraft\woof-agent\`
-
-### Module Structure
-```
-woof-agent/
-├── pom.xml
-├── libs/                          # jackson-*.jar, java-websocket.jar
-├── src/main/java/com/woof/agent/
-│   ├── Bootstrap.java             # Entry point
-│   ├── VoyagerAgent.java          # Main loop: OBSERVE→DECIDE→EXECUTE→VERIFY→LEARN
-│   ├── WorldState.java            # Canonical source of truth
-│   ├── PlayerState.java           # HP/position/facing/level
-│   ├── Entity.java                # Mob/NPC/resource/item
-│   ├── QuestInfo.java             # Active/ready/done quests
-│   ├── QuestEntry.java            # Single quest
-│   ├── Objective.java             # Kill/gather/interact/escort
-│   ├── ItemStack.java             # Inventory
-│   ├── arbitration/
-│   │   └── ArbitrationLayer.java  # Decision owner
-│   ├── fsm/
-│   │   └── GoalFSM.java           # Quest FSM
-│   ├── memory/
-│   │   ├── SkillLibrary.java      # Registry & retrieval
-│   │   ├── Skill.java             # Executable capability
-│   │   └── WorldMemory.java       # Persistent knowledge
-│   ├── env/
-│   │   └── GameEnvironment.java   # Bridge connection, snapshot, step
-│   ├── bridge/
-│   │   └── BridgeServer.java      # HTTP+WS bridge (замена browser_bridge.cjs)
-│   ├── core/
-│   │   ├── AgentCore.java         # Voyager loop engine
-│   │   └── SkillRegistry.java     # 14 skills
-│   └── mcp/
-│       └── WoofMcpServer.java     # HTTP JSON-RPC :8792
-└── build/classes/
-```
-
-### Decision Chain (Production)
-```
-VoyagerAgent → ArbitrationLayer.decide(worldState) → skill
-                ↓
-            Survival gate (danger → flee/heal regardless of phase)
-                ↓
-            PHASE_ALLOWED gate (QuestState → allowed skills)
-                ↓
-            WorldState filter (hasMob, hasGiver, quest active?)
-                ↓
-            Infinite loop detection (force different after 5 repeats)
-```
-
-### Critical Invariants
-- `qs == ACTIVE ⇒ accept_quest = INVALID` (never re-accept active quest)
-- `hp < 0.30 && danger ⇒ flee` (survival overrides objective)
-- `no nearby mob ⇒ farm removed from candidates`
-- `PHASE_ALLOWED["NO_QUEST"] = [accept_quest, farm, explore]`
-
-### Quest FSM
-```
-QUEST_NONE → FIND_GIVER → ACCEPT → DO_OBJECTIVE → RETURN_TO_GIVER → TURN_IN → QUEST_COMPLETE
-```
-
-### Skill Library ()
-farm, navigate, return_to_giver, turn_in, accept_quest, heal, flee, explore, loot, gather, sell, buy, craft, cast_frostbolt, cast_fireball
-
-### MCP Server (:8792)
-Tools: `woof_status`, `woof_logs`, `woof_config`, `woof_build`, `woof_test`, `woof_game_state`, `woof_execute_action`
-
-### Build & Run
-```bash
-cd D:/world-of-claudecraft/woof-agent
-JAVA_HOME='C:/Program Files/Java/jdk-17.0.20.1+1'
-find src -name "*.java" > sources.txt
-javac -encoding UTF-8 -cp "libs/*" -d build/classes @sources.txt
-java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:8792/
-```
-
-### Integration
-- Bridge :8791 (Node.js browser_bridge.cjs OR Java BridgeServer)
-- WoC-MCP: player state, quest log, action execution
-- CDP :9222 (Chrome DevTools)
-- Game :5173 (Vite dev)
-
-### Migration Status
-1. ✅ Java project skeleton + compiles
-2. ✅ MCP server + registered in Hermes
-3. 🔄 VoyagerAgent connects to WoC-MCP (real observation)
-4. ⬜ ArbitrationLayer produces real decisions
-5. ⬜ Execute skills via WoC-MCP
-6. ⬜ q_spiders E2E test (kill 6 spiders, collect 4 silk, turn in)
-7. ⬜ Commit + push to backup
+Проверок fly-линии в этом списке больше нет: линия в архиве
+(`archive/fly-line/TOOLS-fly.md` — если понадобится).
 
 ---
 
@@ -215,54 +205,23 @@ java -cp "build/classes;libs/*" com.woof.agent.VoyagerAgent http://127.0.0.1:879
 
 - Language: Russian
 - Tone: Direct, no filler, no "great question!"
-- Verification: Real game behavior > tests
+- Verification: реальное поведение игры > тесты
 - Workflow: Phase-1 root-cause → TDD → live verification
-- Reporting: Tables LAYER|EXPECTED|ACTUAL|STATUS
+- Reporting: таблицы `LAYER | EXPECTED | ACTUAL | STATUS` + путь к артефакту
 
 ---
 
-## Обновление 2026-09-17: Java-линия активна, база знаний, hermes
+## Правила, которые спасали работу
 
-### Что теперь главное
-
-* Активная линия — **автономный Java-бот** в `woof-agent/`. Fly-линия (коннектом) — на паузе,
-  её приёмка объявлена заранее и не меняется.
-* Новая документация бота: `woof-agent/README.md` (быстрый старт), `ARCHITECTURE.md`
-  (как устроено и почему), `ROADMAP.md` (что закрыто и чем), `DEPENDENCIES.md`
-  (java/jar/node/порты), `FILES.md` (карта всех файлов).
-* База знаний: `knowledge/` — `principles.md` (как думать), `woc-game.md` (игра и её числа),
-  `fly-connectome.md` (схема, контроли, LIF, атрибуция MaleCNS), `pitfalls.md` (наши грабли),
-  `verification.md` (протокол приёмки). **Читать перед работой, дописывать в тот же день.**
-* Корневые ориентиры: `README.md` (что это и с чего начать), `GIT-WORKFLOW.md`
-  (роли веток и протокол перед пушем).
-* Fly-линия (муха): `fly-woc/README.md` (протокол эксперимента), `fly-woc/ARCHITECTURE.md`
-  (слои, устройство, что доказано и что нет), `fly-woc/ROADMAP.md` (план, пороги M1–M4,
-  что нужно от машины), `fly-woc/DEPENDENCIES.md`, `fly-woc/FILES.md` (карта файлов),
-  `fly-woc/GPU-DEVICE.md`; журнал экспериментов — `knowledge/fly-experiments.md`.
-* Для hermes: `hermes/README.md` (порядок чтения и цикл работы), `hermes/TOOLS.md`
-  (что запускать, что считается успехом), `hermes/skills/woc-master-goal/SKILL.md`
-  (главная цель и инварианты), `hermes/hooks/` (session_start — напоминание о главном,
-  guard — блокировка запретов, task_end — проверки и «не потеряй результат»).
-
-### Обязательные проверки
-
-| Когда | Команда | Успех |
-|---|---|---|
-| после правок Java | `bash woof-agent/tools/build.sh && bash woof-agent/tools/run_tests.sh` | `build ok` / `tests passed=3 failed=0` |
-| перед пушем Java | `bash woof-agent/tools/run_e2e.sh` | `УСПЕХ ... нарушений контракта нет` |
-| после правок fly-линии | `bash fly-woc/tools/run_checks.sh` | `ВСЁ ЗЕЛЁНОЕ` |
-| на машине с GPU | `python3 fly-woc/tools/gpu_check.py --device cuda --bench` | выбран `cuda`, код возврата 0 |
-| после правок хуков/инструкций | `bash hermes/hooks/selftest.sh` | `хуки: passed=12 failed=0` |
-
-### Правила, добавленные сегодня
-
-1. **Нет молчаливых фолбэков.** Недоступное устройство, чужая таблица квестов,
-   неизвестный навык, неготовая часть моста — это ошибка с текстом, а не «как-нибудь».
+1. **Нет молчаливых фолбэков.** Неготовая часть моста, неизвестный навык, чужой процесс
+   на порту — ошибка с текстом, а не «как-нибудь».
 2. **`--force` push запрещён.** Перед пушем — свежий клон и `merge-base --is-ancestor`:
    локальная история уже расходилась с remote (те же фиксы, другие SHA).
-3. **Пушим только в `backup`** (и только fast-forward); `master` не трогаем.
-4. **Пороги метрик объявляются до замера** (M1–M4) и после замера не двигаются.
-5. **Устройство вычислений выбирается само** (`--device` → `WOC_DEVICE` → cuda → mps → cpu);
-   явный запрос недоступного GPU — `RuntimeError`. Подробности: `fly-woc/GPU-DEVICE.md`.
-6. **Найденное записываем сразу**: факт — в `knowledge/`, поведение — в `woof-agent/ARCHITECTURE.md`,
-   долг — в `woof-agent/ROADMAP.md`. Знание, не записанное в репозиторий, потеряно.
+3. **Пушим только в `backup`**, только fast-forward; `master` не трогаем.
+4. **Пороги метрик объявляются до замера** и после замера не двигаются.
+5. **Найденное записываем сразу**: факт — в `knowledge/`, поведение — в
+   `woof-agent/ARCHITECTURE.md`, долг — в `woof-agent/ROADMAP.md`. Знание, не записанное
+   в репозиторий, потеряно.
+6. **Тест обязан уметь падать.** Фейк, который не различает проверяемое (одинаковый URL у
+   мёртвой и живой вкладок), превращает тест в декорацию.
+7. **Отказ — это данные.** Клиент читает тело ошибки (`errorStream`), а не только код.
