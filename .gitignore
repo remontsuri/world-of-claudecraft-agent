@@ -34,6 +34,15 @@ woof-ts/game
 # Итог подбора отслеживается (learning/best.json, history.jsonl, last_report.md).
 woof-ts/evidence/tuning/
 
+# Копии дерева игры внутри репозитория запрещены: факты берутся импортом из клона
+# upstream (woof-ts/game -> .../woc-game), а не из рукописной/переименованной копии.
+# Симптом, который лечили таким костылём: «ReferenceError: exports is not defined
+# in ES module scope» — причина была в собранном .js внутри дерева игры, см.
+# knowledge/pitfalls.md (2026-09-18) и woof-ts/vitest.config.ts.
+.game-cjs/
+woof-ts/.game-cjs/
+
+
 # --- логи, рантайм-состояние агента, временные файлы ---
 *.log
 /logs/

@@ -32,6 +32,31 @@ node dist/tune.mjs --steps 150 --train-seeds 42,43 --val-seeds 44      # под�
 WOOF_PARAMS=learning/best.json node dist/run.mjs --seed 42 --steps 150 # прогон с найденным набором
 ```
 
+### Windows 11
+
+Окружение чинится и проверяется одной командой (причина и лечение — в
+`../knowledge/pitfalls.md`, запись «дерево игры и резолвер расширений»):
+
+```bat
+cd /d D:\<путь-к-репо>\woof-ts
+tools\fix_windows_env.bat
+:: дерево игры в другом месте / очистить его на месте:
+tools\fix_windows_env.bat -GameDir D:\woc-game -CleanInPlace
+```
+
+Сценарий идемпотентен и делает по шагам: удаляет копию дерева игры `.game-cjs\`
+(копия запрещена — факты берутся импортом из upstream); проверяет дерево игры на
+собранный вывод (`.js/.cjs/.mjs` в `src\sim` и `headless`); если дерево загрязнено —
+по умолчанию **не трогает его**, а кладёт чистый sparse-клон рядом (`D:\woc-game-clean`)
+и переводит ссылку на него (`-CleanInPlace` разрешает `git clean -xd src headless`
+на месте); создаёт `game` как **junction** (`mklink /J`, права разработчика не нужны);
+добавляет в `vitest.config.ts` блок `resolve.extensions` с `.ts` раньше `.js`; ставит
+зависимости, собирает, сверяет факты и гоняет тесты. В конце — таблица `Шаг | Статус |
+Детали` и код возврата: 0 = окружение готово.
+
+Ожидаемые числа: `сверка фактов: OK`, `Test Files 6 passed (6)`, `Tests 62 passed (62)`.
+Полный гейт линии — `bash tools/check_all.sh` в Git Bash.
+
 Флаги `run.mjs`: `--seed`, `--class`, `--steps` (бюджет решений агента), `--transport
 sim|ndjson`, `--env-server`, `--npc-view` (только стенд; `0` — привилегия, помечается в
 evidence), `--every`, `--quiet`, `--json <путь>`. Код возврата 1 = «не было убийств» или

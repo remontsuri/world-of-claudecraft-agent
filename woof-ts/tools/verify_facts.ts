@@ -92,6 +92,53 @@ for (const t of ['kill', 'collect', 'interact', 'gather', 'farm', 'escort']) {
   check((counts[t] ?? 0) > 0, `тип цели "${t}" исчез из данных игры — политика квестов устарела`);
 }
 
+// --- C) чистота дерева игры (факты — из ИСХОДНИКОВ upstream, не из сборки) ------
+// В upstream levy-street/world-of-claudecraft в src/sim и headless НЕТ .js-файлов:
+// там 793 .ts и 0 .js (проверено на чистом sparse-клоне 2026-09-18). Если .js
+// появились — это собранный вывод (tsc/esbuild/релизный dist), и он опасен вдвойне:
+//   1) Vite/vitest резолвит .js РАНЬШЕ .ts, поэтому факты молча берутся из устаревшей
+//      сборки, а не из исходников (сборка esbuild при этом зелёная — у него .ts раньше);
+//   2) игра объявляет "type": "module", а собранный .js часто CJS → на чужом дереве
+//      это «ReferenceError: exports is not defined in ES module scope» в тестах.
+// Лечится не алиасами на копию дерева, а очисткой дерева игры.
+{
+  const { existsSync, readdirSync, statSync } = await import('node:fs');
+  const { dirname, join, resolve } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+
+  // Бандл лежит в dist/, исходник в tools/ — ищем корень проекта вверх по дереву.
+  let root = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6 && !existsSync(join(root, 'game', 'src', 'sim', 'obs.ts')); i++) {
+    root = dirname(root);
+  }
+  const gameDir = resolve(root, 'game');
+  check(existsSync(join(gameDir, 'src', 'sim', 'obs.ts')), `в дереве игры нет src/sim/obs.ts: ${gameDir} — нужен клон ИСХОДНИКОВ upstream (bash tools/setup_game.sh)`);
+  check(existsSync(join(gameDir, 'src', 'sim', 'data.ts')), `в дереве игры нет src/sim/data.ts: ${gameDir}`);
+
+  const stray: string[] = [];
+  const scan = (dir: string, depth: number): void => {
+    if (depth > 4 || !existsSync(dir)) return;
+    for (const e of readdirSync(dir)) {
+      if (e === 'node_modules') continue;
+      const full = join(dir, e);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) scan(full, depth + 1);
+      else if (/\.(js|cjs|mjs)$/.test(e)) stray.push(full.slice(gameDir.length + 1));
+    }
+  };
+  scan(join(gameDir, 'src', 'sim'), 0);
+  scan(join(gameDir, 'headless'), 0);
+  check(
+    stray.length === 0,
+    `дерево игры загрязнено собранным выводом: ${stray.length} файл(ов) .js/.cjs/.mjs в src/sim и headless`
+      + ` (например: ${stray.slice(0, 3).join(', ')}). В upstream там только .ts.`
+      + ` Удалите сборку из дерева игры (git clean -xd в D:\\woc-game или свежий клон) —`
+      + ` иначе vitest берёт факты из .js вместо .ts. Копии дерева с переименованием`
+      + ` .js→.cjs и алиасы на них — не решение: факты обязаны браться из исходников upstream.`,
+  );
+}
+
 // --- отчёт --------------------------------------------------------------------
 console.log('Факты игры (импорт из upstream, руки ничего не переписывают):');
 console.log(`  obs=${facts.obsSize} actions=${facts.numActions} max_level=${facts.maxLevel} melee=${facts.meleeRange} interact=${facts.interactRange}`);

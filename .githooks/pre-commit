@@ -7,7 +7,7 @@
 #      (append-only строки в archive/**/README.md разрешены: это принятый способ
 #      дописывать факты об архиве);
 #   3. мусор в индексе: node_modules/, dist/, dist-env/, симлинк woof-ts/game,
-#      черновики evidence/tuning/;
+#      черновики evidence/tuning/, копии дерева игры (.game-cjs/);
 #   4. изменения woof-ts/ без пройденного woof-ts/tools/check_all.sh — того же скрипта,
 #      который запускается руками, чтобы «прошло локально» и «пройдёт в хуке» не расходились.
 #
@@ -64,6 +64,7 @@ for f in $STAGED; do
     woof-ts/dist/*|woof-ts/dist-env/*) fail "в индексе артефакты сборки: $f (они в .gitignore)" ;;
     woof-ts/game) fail "в индексе симлинк на дерево игры: $f (клон игры не вендорится)" ;;
     woof-ts/evidence/tuning/*) fail "в индексе черновики подбора порогов: $f (итог — в woof-ts/learning/)" ;;
+    *.game-cjs/*|.game-cjs/*) fail "в индексе копия дерева игры: $f — факты берутся импортом из клона upstream, а не из копии с переименованными расширениями (см. knowledge/pitfalls.md, 2026-09-18)" ;;
   esac
 done
 
