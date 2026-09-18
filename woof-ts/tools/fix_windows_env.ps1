@@ -52,7 +52,9 @@ param(
   [string]$GameDir = 'D:\woc-game',
   [string]$CleanGameDir,
   [switch]$CleanInPlace,
-  [switch]$SkipTests
+  [switch]$SkipTests,
+  [string]$GameRef = 'v0.43.2',
+  [string]$ExpectedVersion = '0.43.2'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -155,6 +157,16 @@ function Get-StrayJs {
 }
 
 $target = $null
+$gver = $null
+$gpkg = Join-Path $GameDir 'package.json'
+if (Test-Path $gpkg) {
+  try { $gver = (ConvertFrom-Json ([System.IO.File]::ReadAllText($gpkg))).version } catch { $gver = $null }
+}
+if ($gver -and $gver -ne $ExpectedVersion) {
+  Add-Result '3. версия дерева игры' 'ПРОВАЛ' "$GameDir имеет версию $gver, а эталоны измерены на $ExpectedVersion. Приведи к pinned-версии: git -C `"$GameDir`" fetch --tags ; git -C `"$GameDir`" checkout $GameRef — либо удали каталог, сценарий сделает чистый клон $GameRef"
+} elseif ($gver) {
+  Add-Result '3. версия дерева игры' 'OK' "$GameDir = $gver (ожидалось $ExpectedVersion)"
+}
 if (-not (Test-Path (Join-Path $GameDir 'src\sim'))) {
   Add-Result '3. дерево игры' 'ВНИМАНИЕ' "в $GameDir нет src\sim — нужен клон upstream, делаю чистый клон в $CleanGameDir"
 } else {
@@ -191,7 +203,7 @@ if (-not $target) {
     Add-Result '4. чистый клон' 'ВНИМАНИЕ' "$CleanGameDir уже существует — использую как есть (удали каталог, если нужен свежий клон)"
   } else {
     Write-Host "[4. чистый клон] клонирую upstream (sparse, blobless) в $CleanGameDir ..."
-    $c1 = Invoke-Tool 'git' @('clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', 'main', $repo, $CleanGameDir) $null
+    $c1 = Invoke-Tool 'git' @('clone', '--depth', '1', '--filter=blob:none', '--no-checkout', '--branch', $branch, $repo, $CleanGameDir) $null
     if ($c1.Exit -ne 0) {
       Add-Result '4. чистый клон' 'ПРОВАЛ' "git clone код=$($c1.Exit): $($c1.Out)"
       $script:Results | Format-Table -AutoSize | Out-Host

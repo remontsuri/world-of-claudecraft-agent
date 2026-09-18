@@ -13,6 +13,7 @@
  *      значением с указанием источника в дереве игры. Если upstream их меняет,
  *      скрипт обязан упасть, а не «подстроиться».
  */
+import gamePkg from '../game/package.json';
 import { CAMPS, MOBS, NPCS, QUESTS } from '../game/src/sim/data';
 import { ACTIONS, NUM_ACTIONS, obsSize } from '../game/src/sim/obs';
 import {
@@ -33,6 +34,12 @@ import {
   questOrder,
 } from '../src/facts';
 import { objectiveTypeCounts } from '../src/world/quest_policy';
+
+/** Версия игры, на которой измерены эталоны приёмки и контракты ниже.
+ *  Совпадает с GAME_EXPECTED_VERSION в tools/setup_game.sh и -ExpectedVersion в
+ *  tools/fix_windows_env.ps1. Переезд на другую версию — отдельная задача (ROADMAP A5). */
+const EXPECTED_GAME_VERSION = '0.43.2';
+const gameVersion = String((gamePkg as { version?: unknown }).version ?? '?');
 
 const fails: string[] = [];
 function check(cond: boolean, msg: string): void {
@@ -140,7 +147,7 @@ for (const t of ['kill', 'collect', 'interact', 'gather', 'farm', 'escort']) {
 }
 
 // --- отчёт --------------------------------------------------------------------
-console.log('Факты игры (импорт из upstream, руки ничего не переписывают):');
+console.log(`Факты игры (импорт из upstream v${gameVersion}, руки ничего не переписывают):`);
 console.log(`  obs=${facts.obsSize} actions=${facts.numActions} max_level=${facts.maxLevel} melee=${facts.meleeRange} interact=${facts.interactRange}`);
 console.log(`  квестов=${questOrder.length} NPC=${npcPins().length} лагерей=${allCamps().length} мобов=${Object.keys(MOBS).length}`);
 console.log(`  цели квестов: ${Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t}=${n}`).join(', ')}`);
@@ -148,7 +155,22 @@ console.log(`  RUN_SPEED=${RUN_SPEED} forest_wolf=${wolf?.moveSpeed} wild_boar=$
 
 if (fails.length > 0) {
   console.error('\nДерево игры разошлось с тем, на чём стоят политики агента:');
+  console.error(`  дерево игры: версия ${gameVersion} (контракты линии измерены на ${EXPECTED_GAME_VERSION})`);
   for (const f of fails) console.error(`  - ${f}`);
+  if (gameVersion !== EXPECTED_GAME_VERSION) {
+    console.error(`\nПЕРВОЕ, что проверить: версия дерева игры ${gameVersion} != ${EXPECTED_GAME_VERSION}.`);
+    console.error('  Расхождение контрактов в этом случае означает НЕ «upstream уехал вперёд»,');
+    console.error('  а «дерево игры другое» — чаще старое (на v0.41.x obs=593 и нет цели "farm")');
+    console.error('  или неполное (data.ts тянет 56 модулей из src/sim/content/**, где 92 файла;');
+    console.error('  obs = 16 + 96 + 9 + 30 + 5 + 2·число_квестов + 3, то есть 607 при 224 квестах,');
+    console.error('  593 при 217 и 587 при 214 — по obs видно, сколько квестов не доехало).');
+    console.error('  Привести дерево к pinned-версии:');
+    console.error('    git -C <дерево игры> fetch --tags && git -C <дерево игры> checkout v' + EXPECTED_GAME_VERSION);
+    console.error('    git -C <дерево игры> clean -xd src headless     # убрать собранный вывод, если есть');
+    console.error('  или переклонировать: bash tools/setup_game.sh (GAME_REF=v' + EXPECTED_GAME_VERSION + ')');
+    console.error('  Осознанный переезд на другую версию игры — задача ROADMAP A5: пересчитать');
+    console.error('  контракты ниже и заново измерить эталоны прогонов, а не «подстроиться» молча.');
+  }
   process.exit(1);
 }
 console.log('сверка фактов: OK');

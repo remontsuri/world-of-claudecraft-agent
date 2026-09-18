@@ -10,7 +10,11 @@
 #
 # Переменные:
 #   GAME_REPO   источник игры (по умолчанию upstream)
-#   GAME_REF    ветка/тег (по умолчанию main)
+#   GAME_REF    ветка/тег. По умолчанию ТЕГ, на котором измерены эталоны приёмки
+#               (v0.43.2), а не main: дерево игры — часть воспроизводимости прогона.
+#               Переезд на новую версию игры — отдельная задача (ROADMAP A5), потому
+#               что вместе с ней едут контракты фактов (obsSize, словарь действий,
+#               типы целей квестов) и все эталонные числа.
 #   GAME_DIR    куда класть клон (по умолчанию ~/woc-game)
 #   GAME_FULL=1 дотянуть ещё src/world_api/** и server/** — нужно для живого
 #               бриджа (WebSocket-клиент авторитетного сервера), для стенда не нужно
@@ -18,7 +22,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GAME_REPO="${GAME_REPO:-https://github.com/levy-street/world-of-claudecraft.git}"
-GAME_REF="${GAME_REF:-main}"
+GAME_REF="${GAME_REF:-v0.43.2}"
+GAME_EXPECTED_VERSION="${GAME_EXPECTED_VERSION:-0.43.2}"
 GAME_DIR="${GAME_DIR:-$HOME/woc-game}"
 
 cd "$ROOT"
@@ -50,6 +55,31 @@ elif [ ! -d "$GAME_DIR/.git" ]; then
 fi
 ln -sfn "$GAME_DIR" "$ROOT/game"
 [ -d "$ROOT/game/src/sim" ] || { echo "ПРОВАЛ: в $GAME_DIR нет src/sim — дерево игры неполное"; exit 1; }
+
+# 1b) версия дерева игры обязана совпасть с той, на которой измерены эталоны.
+# Без этой проверки расхождение версии выглядит как мистика: «obs стал 587»,
+# «тип farm исчез», «тесты красные» — хотя причина в другом дереве игры.
+GAME_VERSION="$(node -e 'process.stdout.write(String(require("'"$ROOT"'/game/package.json").version ?? "?"))' 2>/dev/null || echo '?')"
+if [ "$GAME_VERSION" != "$GAME_EXPECTED_VERSION" ]; then
+  echo "ПРОВАЛ: дерево игры $GAME_DIR имеет версию $GAME_VERSION, а эталоны линии измерены на $GAME_EXPECTED_VERSION (GAME_REF=$GAME_REF)."
+  echo "  Что делать: привести дерево к pinned-версии —"
+  echo "    git -C $GAME_DIR fetch --tags && git -C $GAME_DIR checkout $GAME_REF"
+  echo "  или переклонировать: rm -rf $GAME_DIR && bash tools/setup_game.sh"
+  echo "  Осознанный переезд на другую версию: GAME_REF=<тег> GAME_EXPECTED_VERSION=<версия> bash tools/setup_game.sh"
+  echo "  и дальше — по ROADMAP A5 (пересчёт контрактов фактов и эталонов)."
+  exit 1
+fi
+echo "[setup] дерево игры: версия $GAME_VERSION (совпадает с ожидаемой), ref=$GAME_REF"
+
+# 1c) собранный вывод в дереве игры — тоже причина «сборка зелёная, тесты красные»
+STRAY_JS="$(find "$ROOT/game/src/sim" "$ROOT/game/headless" \( -name '*.js' -o -name '*.cjs' -o -name '*.mjs' \) -not -path '*/node_modules/*' 2>/dev/null | head -5)"
+if [ -n "$STRAY_JS" ]; then
+  echo "ПРОВАЛ: в дереве игры есть собранный вывод (.js/.cjs/.mjs) — в upstream там только .ts:"
+  echo "$STRAY_JS" | sed 's/^/    /'
+  echo "  Vite/vitest резолвит .js РАНЬШЕ .ts, поэтому факты молча берутся из сборки."
+  echo "  Что делать: git -C $GAME_DIR clean -xd src headless   (или переклонировать дерево)"
+  exit 1
+fi
 
 # 2) зависимости ----------------------------------------------------------------
 if [ ! -x node_modules/.bin/esbuild ] || [ ! -x node_modules/.bin/vitest ]; then
