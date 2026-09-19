@@ -187,3 +187,145 @@
   `GAME_EXPECTED_VERSION=0.43.2`, в PS — параметры `-GameRef`/`-ExpectedVersion`) и
   **падают** с инструкцией, если версия дерева другая или в `src/sim`/`headless` есть
   собранный вывод. Переезд на новую версию игры — отдельная задача `ROADMAP.md` A5.
+
+
+## 2026-09-18 (вечер) — живой мир: первая рантайм-зависимость и два дерева игры
+
+* **`ws` — единственная рантайм-зависимость линии.** Причина: Node 20 не имеет
+  глобального `WebSocket`, а upstream делает ровно так же — игра зависит от `ws@^8.21.0`,
+  её Node-бот `bot/gateway.ts` импортирует `ws` и инжектирует `socketFactory`
+  (`tsconfig.bot.json`: `types:["node"]`, lib ES2022, без DOM). Порядок разрешения в
+  `src/bridge/ws_socket.ts`: инжектированная фабрика → глобальный `WebSocket` (Node 22+)
+  → `ws` → громкий ПРОВАЛ (`NO_SOCKET_MESSAGE` называет оба лекарства). В бандле `ws`
+  внешний (`--external:ws`): стенд и бридж собираются и без него.
+* **Два дерева игры, две роли.** `~/woc-game` (sparse, `tools/setup_game.sh`) — дерево
+  фактов агента: `src/sim`, `src/world_api*`, `headless`, `python`. Хостинг живого мира
+  требует ПОЛНОГО чекаута (`docker-compose.yml` собирает образ из контекста репозитория,
+  `build: context: .`; публичного образа upstream не публикует) — `tools/run_world.sh`
+  кладёт его в `~/woc-world` и пинит ту же версию 0.43.2: мир и факты разных версий —
+  две разные игры. WS-транспорт импортирует `src/net/**`, которого нет в лёгком дереве,
+  поэтому для A1.3 симлинк `game` переводится на полный чекаут (`--link-game`).
+  Полный чекаут с `docs/` и `tests/` — гигабайты: в песочнице его держать нельзя
+  (предел снимка ~128 МБ), клонируем на время и удаляем.
+* **Протокол живого мира (v0.43.2), факты:** первый кадр — `buildWebSocketAuthMessage`
+  (`src/net/world_auth_message.ts`); сервер сверяет каждое объявленное поле по точному
+  равенству и **молча понижает** сессию на legacy-wire при отсутствии поля
+  (`server/ws_auth.ts`); команды — `{t:'cmd', cmd: <ClientCommand>, …}`
+  (`src/net/online.ts:2222-2235`); движение — отдельный провод `movementWire: 2`
+  (`sendMovementFrame`), не команда; отказ всегда приходит кадром `{t:'error'}` до
+  закрытия сокета; `DISPATCH_ONLY_COMMANDS` (`src/world_api.ts:855`) — dev-читы
+  (`dev_level`, `dev_teleport`, `dev_give`, `dev_complete_quest`, …) и RL-токен
+  `targetNearest`: агент их не отправляет, и это закреплено тестом, а не намерением.
+* **Один персонаж = один сеанс.** `planJoin` (`server/linkdead.ts`) отвечает
+  `reject 'character already in world'`; повторный вход — только
+  `POST /api/characters/:id/takeover`. Отсюда схема A: у агента свой персонаж.
+* **Возможности мира выводятся, а не объявляются.** `liveWorldCapabilities()` берёт
+  `targetSelection`/`abandonQuest`/`vendor`/`partyLootRolls` из таблицы `COMMAND_NAMES`
+  upstream (v0.43.2: `target`, `tab`, `abandon`, `buy`, `sell` есть; токены ролов ищет
+  `lootRollTokens()`), а всё неизмеренное объявляет консервативно
+  (`entityIdentity='slot'`, `questStateApi='none'`, `entityTemplates=false`, …):
+  заявленная возможность разрешает политике на неё опираться. `latencyMs` — обязательный
+  параметр без дефолта: выдуманная задержка была бы подделкой доказательства.
+* **Проверка без docker.** `tools/run_world.sh` прогнан исполнением с заглушкой `docker`
+  в PATH: пин версии (провал на 0.41.4 с командами лечения), создание `.env`, генерация
+  `POSTGRES_PASSWORD` (64 hex, в журнал не попадает, `DATABASE_URL` согласован),
+  `compose up -d --build postgres game`, провал готовности с выводом журнала,
+  предупреждение о привилегированном прогоне при `ALLOW_DEV_COMMANDS=1`. С настоящим
+  docker не проверялось — его в песочнице нет; это объявлено, а не скрыто.
+* **Грабли:** `npm install` в песочнице убирает симлинк `woof-ts/game` — после установки
+  зависимостей проверять `readlink game` и пересоздавать (`ln -sfn ~/woc-game game`),
+  иначе tsc сыплет «Cannot find module '../game/src/sim/obs'». `git sparse-checkout add`
+  в cone-режиме не принимает ведущий слэш и отдельные файлы (только каталоги; файлы корня
+  и родителей указанных каталогов попадают сами). `--reporter=basic` в vitest 4 отсутствует:
+  vitest пытается загрузить его как кастомный модуль и падает с `ERR_LOAD_URL`.
+
+* **Грабли живого провода (из кода upstream-ботов):** чат и `/dev`-читы — это КОМАНДЫ
+  (`{t:'cmd', cmd:'chat', text}`); кадр `{t:'chat'}` верхнего уровня сервер выбрасывает
+  молча, и скрипт верит, что боты прокачаны. Снапшоты дельта-кодированы: отсутствующее
+  тяжёлое поле `self` (`inv, equip, qlog, qdone, cds, stats, weapon, party, trade, duel`)
+  означает «как раньше», а сущности делятся на полные (с полями личности `k, tid, nm, lv,
+  sc, c, dgn`) и лёгкие (наследуют их); `snap.keep` — живые, но не изменившиеся id, а чего
+  нет ни в `ents`, ни в `keep` — вышло из интереса. Отказ входа при смене эпохи раскладки
+  отличается по литералу `ONLINE_WORLD_INCOMPATIBLE_MESSAGE`. Минимальный кадр
+  `worldAuthMessage` = `{t, token, character}` понижает сессию на legacy-wire, поэтому
+  наш `buildAuthFrame` шлёт полный набор wire-версий.
+
+## 2026-09-19 — археология: что именно было «почти сделано» в браузерной линии (`woof-agent/`)
+
+Проверено в песочнице (java 11, node 20), не по документам: `bash tools/build.sh` →
+`build ok -> build/classes (28 files)`; `bash tools/run_tests.sh` → `tests passed=3 failed=0`;
+`bash tools/run_e2e.sh` → `УСПЕХ: квест сдан обоими путями (Node-мост и Java-мост),
+нарушений контракта нет`, `[Agent] SUMMARY steps=120 kills=3 deaths=0 quests_done=1
+first_turn_in_step=8`. Значит J1–J6 замороженной линии до сих пор воспроизводятся.
+
+* **Что было рабочим эталоном (и лежит в репозитории, 1569 строк):**
+  `woof-agent/tools/ref/browser_bridge.cjs` (145, HTTP-мост :8791, `info` — ВСЕГДА плоский
+  снимок, dispatch `snapshot|step|navigate|raw_move|respawn|explore|health`, очередь команд
+  продолжается только после успешного `client.health()`), `tools/ref/snapshot.cjs` (456) и
+  `tools/ref/actions.cjs` (968, 13 навыков).
+* **Поверхность мира в браузере (из `snapshot.cjs`/`actions.cjs`) — богаче RL-обсервации:**
+  `window.__game.sim.player` (`hp,maxHp,level,facing,dead`), абсолютные `player_pos=[x,z]`,
+  `sim.entities.values()`, `sim.entitiesNear(pos,r)`, `sim.bags`/`bagCapacity`,
+  `sim.recipeList`, `sim.stationPlacements`, `sim.known[]` (ResolvedAbility),
+  и — главное — `sim.questState(qid)` помечен в эталоне как **AUTHORITATIVE in offline
+  (проверено 2026-08-27)**, то есть состояние квеста полное, а не «0 = нет или уже сдан»,
+  как в `src/sim/obs.ts`. Действия: `sim.targetEntity(id)`, `sim.startAutoAttack()`,
+  `sim.interact()`, `sim.lootCorpse(mobId,pid)`, `sim.acceptQuest(qid,null,pid)`,
+  `sim.turnInQuest(qid)`, `sim.sellItem(id,n)`, `sim.addEntity({...})`.
+* **Грабли, найденные той линией экспериментально (не повторять):**
+  (1) `controller.face()` — **no-op**, поворот делается только через
+  `g.controller.move({[kind]:true}, desiredFacing)`; (2) единый порог курса в chase+face
+  даёт автоколебание (курс проскакивает нуль, знак flipping) — нужен гистерезис;
+  (3) в браузере висят **мёртвые вкладки с тем же URL**, поэтому `CdpClient.acquirePage()`
+  обязан выбирать вкладку пробой `window.__game.sim` + `primaryId` + существующей сущностью
+  игрока, иначе бот «работает» ни с чем; (4) `farm` держит вкладку ~17 с → нужна ограниченная
+  очередь команд и watchdog; (5) страница **не надёжно** отдаёт `sim.questDefs`/`sim.npcDefs`,
+  из-за чего эталон их захардкодил — в активной линии так нельзя: контент берём из
+  `woof-ts/game/content/**`, а не из страницы.
+* **Чего в репозитории НЕТ (это и есть «почти»):** J7 — `CdpBackend` не портирован (честно
+  отвечает HTTP 500 + «BRIDGE-PORT», проверено `TestJavaBridge`); отсутствуют
+  `src/bridge/game_client.cjs` (151, CDP-транспорт), `cmd_queue.cjs` (77), `heading.cjs`/
+  `fence_hop.cjs`/`quests_done.cjs` (145) — ~230 строк транспорта и обвязки. J8 — **живой
+  прогон в реальной игре не выполнялся никогда**: логов живого прогона в репозитории нет,
+  есть только SUMMARY с полигона. J9 (`q_spiders` целиком), J10 (устойчивость), J11
+  (`run_tests.sh` поднимает `fake_cdp` дважды → `EADDRINUSE` в каждом прогоне; готовность
+  фейка проверяется «порт занят», а не `kill -0 $PID` + строка `listening` — воспроизвёл),
+  J12 (`BridgeServer`/`WoofMcpServer` на `0.0.0.0` без аутентификации, а `woof_build` через
+  MCP запускает `javac`) — не закрыты.
+* **Что уже перенесено в активную линию:** транспорт CDP написан заново в
+  `src/bridge/cdp_client.ts` (выбор вкладки, id-сопоставление `Runtime.evaluate`, запрет
+  `Page.reload`/`Page.navigate` и перехвата ввода) — это ровно тот отсутствующий
+  `game_client.cjs`. Наследовать из `woof-agent/` надо ПОВЕДЕНИЕ (`snapshot.cjs`,
+  `actions.cjs`, `SkillIndex`) и приёмку, а не Java-сборку: AGENTS.md отводит замороженной
+  линии роль «источник архитектуры».
+
+## 2026-09-19 (вторая половина) — браузерная линия C1 построена, полигон J8 зелёный
+
+Что добавлено в активную линию (проверяется `bash tools/check_all.sh`, шаг 8):
+`src/world/browser_world.ts` (мир в браузере: снимок страницы → `WorldModel`, действия через
+публичные `sim.*`, навигация с гистерезисом), `src/core/browser_agent.ts` (асинхронный цикл,
+переиспользует `GoalFSM`/`ArbitrationLayer`/`WorldMemory`/`SkillLibrary` без изменений),
+`acquireLivePage`/`livenessExpression` в `src/bridge/cdp_client.ts`, `tools/cdp_probe.ts`,
+`tools/run_offline.ts`, полигон `tests/browser_world.test.ts` (26 проверок), runbook
+`woof-ts/OFFLINE-BROWSER.md`. В `world.ts` транспорт дополнен значением `cdp`, словарь команд —
+`page-api`; заодно исправлена печать возможностей: было
+`состояние любого квеста=${c.questStateApi ? 'да' : 'нет'}` — строка всегда истинна, поэтому
+при `questStateApi:'observed'` и даже `'none'` печаталось «да». Теперь печатается само значение.
+
+* **Грабли полигона (пойманы 2026-09-19, стоят в гейте):**
+  (1) `set -o pipefail` + `grep -q` в конвейере с vitest = ЛОЖНЫЙ ПРОВАЛ: `grep -q` выходит
+  сразу после совпадения, vitest получает SIGPIPE (141), и конвейер «провален» при зелёных
+  тестах. Лечится ловлей вывода в переменную и сверкой через `[[ "$out" =~ … ]]`, без конвейера.
+  (2) `NO_COLOR=1` обязателен: в выводе vitest ANSI-коды стоят МЕЖДУ `Tests` и `26 passed`,
+  поэтому обычный grep по строке итога не совпадает.
+  (3) Фейковая страница обязана держать сущности и игрока в `pos:{x,y,z}`, а не в `x`/`z`:
+  страничный код читает `e.pos.x`, и расхождение молча превращает мир в пустой.
+  (4) В ветке побега нужен guard `if (!e || !e.pos) continue;` — страница отдаёт сущности без
+  `pos` (в снимке эталона такой guard был, в моей первой версии побега — нет: падало на чтении).
+  (5) Цель приобретается ПОСЛЕ наблюдения, а страница сбрасывает `targetId` в кадр смерти,
+  поэтому наблюдаемый счётчик убийств обязан помнить цель с прошлого кадра (`prevTargetId`
+  выставляется и в `act('farm')`), иначе `kills` всегда 0 при реально убитых мобах.
+  (6) Фейк обязан отдавать журнал квеста (`sim.questLog`/`world.questLog`) той же структурой,
+  которую заводит `acceptQuest`, иначе снимок приходит без `resolvedCounts` и прогресса.
+* **Что осталось до J8:** только машина владельца (игра :5173 + Chrome :9222). Порядок,
+  пороги и границы среды — `woof-ts/OFFLINE-BROWSER.md`.

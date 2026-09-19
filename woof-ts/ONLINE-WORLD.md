@@ -177,3 +177,177 @@ seed 42, warrior, 150 решений:
   потерянных/повторённых команд.
 - Метрика `deaths` на живом мире включает чужое вмешательство (PvP, кража агgro),
   поэтому сравнивать её со стендовой напрямую нельзя — только внутри одного мира.
+
+---
+
+## 2026-09-18 — факты из серверной части игры (полный клон v0.43.2, GAME_FULL=1)
+
+Записано по свежему клону `GAME_DIR=… GAME_FULL=1 bash tools/setup_game.sh` (пин v0.43.2).
+Клон удалён после снятия фактов: полное дерево занимает **4.0 ГБ** (docs, медиа, tests),
+а предел снимка рабочего места ~128 МБ — держать его в песочнице нельзя. Клонируем
+на время работы и удаляем, либо держим вне workspace.
+
+**Полное дерево совместимо с нашей линией**: `tsc --noEmit` чисто и `сверка фактов: OK`
+(obs=607, actions=61, 224 квеста, цели kill=106 collect=76 interact=60 gather=4 escort=4
+farm=2) — то есть `GAME_FULL=1` не ломает гейт, факты те же, что в лёгком дереве.
+
+### Как поднимается живой мир (README игры, «Host your own world (one command)»)
+
+```bash
+cp .env.example .env            # задать длинный случайный POSTGRES_PASSWORD
+docker compose up -d --build    # postgres и игровой сервер, полностью собранные
+# открыть http://localhost:8787 — аккаунты, персонажи и весь мир
+```
+
+`docker-compose.yml`: сервисы `postgres` (image `postgres:16-alpine`,
+`POSTGRES_USER/DB=eastbrook`, порт `127.0.0.1:5433:5432`, volume `eastbrook_pgdata`),
+`game` (image `eastbrook-game:${EASTBROOK_IMAGE_TAG:-local}`, `DATABASE_URL=postgres://…@postgres:5432/eastbrook`,
+порт `127.0.0.1:8787:8787`, монтируются media-cache/sfx-runtime/parse-spool,
+`host.docker.internal:host-gateway`) и опциональный `discord-bot`.
+Порты привязаны к `127.0.0.1` — мир локальный, наружу не торчит.
+
+Сервер: `npm run server` = `npm run build:server && node dist-server/server.cjs`;
+персист в Postgres, раздаёт собранный клиент из `dist/` (`server/CLAUDE.md`).
+`main.ts` — HTTP + prefix-ladder (`/api`, `/admin/api`, `/oauth`, `/internal`) и
+upgrade WS на `/ws` (собирает deps-мешок `createWsAuth`). `game.ts` — `GameServer`:
+владеет `Sim`, цикл 50 мс, interest-scoped снапшоты, диспетчер команд, чат.
+
+Отдельно есть **офлайн-режим в браузере**: `npm run dev` (vite :5173), одиночный мир
+без аккаунта и без авторитета сервера, только в dev-сборках (появляется в переключателе
+режимов). Именно к нему подключалась замороженная Java-линия через CDP 9222.
+
+### Контракт подключения агента (WS)
+
+Первый кадр рукопожатия — `src/net/world_auth_message.ts`, `buildWebSocketAuthMessage(token, characterId, clientSeed='')`:
+
+```ts
+{ t: ONLINE_WORLD_AUTH_TYPE, token, character: <characterId>, clientSeed,
+  dungeonEntryFacingWire, timerWire, petSpecialWire, movementWire: 2 }
+```
+
+`server/ws_auth.ts` сверяет **каждую** объявленную возможность по точному равенству и
+при отсутствии поля молча понижает сессию на legacy-wire — значит все поля обязаны
+заполняться из констант игры, а не придумываться (комментарий в самом файле: «an omitted
+field silently downgrades the session with nothing reddening»). Строгая проверка
+`msg?.t !== ONLINE_WORLD_AUTH_TYPE` идёт до любой работы с учетными данными и БД
+(`ws_auth.ts:271`); лимит на IP, лимит допуска на.realm (`MAX_PLAYERS_PER_REALM`,
+по умолчанию 5000), аренда персонажа, `game.join`.
+
+Команды клиента уходят одним сокетом кадром `{ t: 'cmd', …payload }`
+(`src/net/online.ts:2224`). Любой отказ приходит кадром `{t:'error'}` **до** закрытия
+сокета: клиент классифицирует литерал отказа (литералы `ws_auth.ts` — wire-контракт,
+совпадают дословно с `src/ui/api_error_i18n.ts`), а отказ без кадра превращается в
+тихий цикл ретраев.
+
+**Один персонаж = один сеанс.** `server/linkdead.ts`, `planJoin`: если персонаж уже в
+мире — `resume` только для linkdead-сессии, иначе `reject` с литералом
+`'character already in world'`; явный takeover — единственный способ занять персонажа
+заново (`POST /api/characters/{id}/takeover`, `src/net/online.ts:807`).
+**Следствие для нас: человек в браузере и агент не могут одновременно играть одним
+персонажем.** Либо у агента свой персонаж (и человек видит его в мире как другого
+игрока), либо takeover, который выбрасывает сеанс человека.
+
+### Клиент игры как готовый транспорт
+
+`src/net/online.ts` = REST `Api` (auth, characters, realms, leaderboard, wallet linking)
++ `ClientWorld implements IWorld`: зеркалит авторитетные снапшоты сервера и отправляет
+команды по одному WebSocket; **PRESENTATION ONLY** — исходы (бой, лут, зачёт квестов,
+таланты) не вычисляет, только отражает состояние сервера (`src/net/CLAUDE.md`).
+Локально он вызывает `abilitiesKnownAt`/`computeQuestState` исключительно для отображения
+того, что сервер уже решил.
+
+Важная для нас деталь: WebSocket берётся из **global** — тестовый harness подменяет
+`globals.WebSocket` своим классом (`tests/helpers/online_harness.ts`, строки ~360–377),
+и `ClientWorld` поднимается против заглушки. Значит клиента можно поднять в Node,
+подставив global WebSocket (Node 22+: встроенный; Node 20: shim). REST — обычный `fetch`
+(в Node 20 есть). Это путь «импортировать upstream, а не переписывать протокол руками»:
+наш `WsWorld` становится адаптером `ClientWorld` (IWorld) → наш интерфейс `World`.
+
+### Ограничения сервера, которые обязан уважать агент
+
+* `msg_rate_limit.ts` — pre-parse гейт (бакеты кадров и байт + общее окно злоупотреблений,
+  которое кикает), `msg_lanes.ts` — post-parse полосы по классам сообщений;
+* `ws_backpressure.ts` — сервер завершает сессию, у которой `ws.bufferedAmount` превысил
+  жёсткий лимит (не читающий клиент может уронить realm по памяти);
+* `keepalive_sweep.ts` — keepalive-sweep с защитой от late-fire и жёсткий дедлайн тишины
+  `WS_SILENCE_DEADLINE_MS` (10 минут без кадров → reap);
+* `bot_detector/contract.ts` + `stub.ts` — seam антибота: no-op заглушка, когда приватный
+  клон отсутствует (локально, значит, скорее всего no-op), плюс `antibot_config_db.ts`
+  (JSONB-конфиг на realm + append-only аудит).
+
+Для агента это означает: команды отправлять в темпе живого клиента (не очередью из
+сотен кадров), читать всё, что присылает сервер, держать keepalive. Это объявляется в
+возможностях транспорта (задержка, реальное время, рейт-окна) и проверяется в приёмке:
+кик по рейт-лимиту — провал, а не «сервер строгий».
+
+`ALLOW_DEV_COMMANDS=1` включает весь набор `/dev`-читов: level и teleport
+(«the level and teleport cheats the test bots use»), выдачу предметов, спавн мобов,
+телепорты в инстанции и внутриигровой dev-GUI. Только локально; в проде — никогда
+(README игры). Для наших прогонов это привилегия: если она включена, evidence обязан
+это объявлять, а результат не считается переносимым.
+
+### План A1 (живой мир) — шаги и критерии
+
+| Шаг | Что | Критерий |
+|---|---|---|
+| A1.1 | Поднять мир: `GAME_FULL=1` клон, `.env`, `docker compose up -d --build`, health-проверка :8787; инструмент `tools/run_world.sh` | `curl -sf http://127.0.0.1:8787/…/health` отвечает; в браузере мир открывается |
+| A1.2 | Аккаунт и персонаж агента через REST (`Api` из `src/net/online.ts` или минимальные fetch-вызовы): регистрация/логин → token, список/создание персонажа → id | токен и characterId получены; секреты только из env и никогда в evidence |
+| A1.3 | `src/bridge/ws_world.ts` + `ws_client.ts`: `ClientWorld` (импорт из игры) против global WebSocket, адаптация IWorld → наш `World`; возможности объявлены (стабильные id, серверное состояние квестов, realtime, otherPlayers, targetSelection='free') | `--transport ws` поднимает сессию и получает снапшот; возможности печатаются до прогона |
+| A1.4 | Команды: маппинг наших навыков на `{t:'cmd', …}`; темп в пределах рейт-окон; keepalive; reconnect/backoff (импорт чистых модулей игры `src/net/backoff.ts`, `reconnect_policy.ts`) | 1000 команд без кика; обрыв соединения → переподключение без потери эпизода |
+| A1.5 | Приёмка: тот же агент **без правок политики** делает ≥1 убийство и ≥1 квест за живым сервером; человек видит агента в браузере как другого игрока | `[Agent] SUMMARY … kills≥1 quests_done≥1` при `--transport ws`; evidence с объявленными возможностями |
+| A1.6 | Записи: `PROGRESS-<дата>.md`, `knowledge/woof-ts.md`, обновление эталонов (живой мир — другие единицы: реальное время, снапшоты 50 мс) | датированные строки, эталоны объявлены до замера |
+
+### Развилка, которую решает владелец
+
+* **A (рекомендую): агент — отдельный WS-клиент со своим персонажем.** Человек держит
+  браузер на :8787 и видит агента в мире. Никакого CDP, никакой зависимости от вкладки.
+  Ограничение сервера (один сеанс на персонажа) при этом не мешает.
+* **B: агент играет персонажем человека.** Упирается в `'character already in world'`:
+  takeover выбросит сеанс браузера, то есть «смотреть, как агент играет моим героем»
+  не получится — смотреть будет нечем.
+* **C: офлайн-режим в браузере (`npm run dev`, :5173) + CDP 9222** — путь замороженной
+  Java-линии: сервер и Postgres не нужны, но клиент presentation-only, стабильного API
+  нет, правила репозитория запрещают перезагружать страницу и трогать игру, в которой
+  уже играет пользователь; наблюдение — только чтением `window.__game.sim`.
+
+### Открытый технический вопрос (объявить до реализации)
+
+WebSocket-клиент в Node: либо **Node 22+** (глобальный `WebSocket`, ноль зависимостей),
+либо одна рантайм-зависимость **`ws@^8`** (та же библиотека, которую использует сама
+игра). Сейчас линия объявляет Node 20+ и ноль рантайм-зависимостей — решение и его
+причина обязаны попасть в `AGENTS.md` §«Стек активной линии» и `knowledge/woof-ts.md`
+до первой строчки кода A1.3.
+
+
+---
+
+## 2026-09-18 (вечер) — что уже реализовано и что дальше
+
+Реализовано (A1.0/A1.1, статусы в `ROADMAP.md`):
+
+* `src/bridge/ws_protocol.ts` — кадр рукопожатия (`buildAuthFrame`), кадр команды
+  (`buildCommandFrame`), `assertClientCommand` (dispatch-only = ПРОВАЛ), `parseFrame`
+  (не-JSON и кадр без `t` = ПРОВАЛ), `liveWorldCapabilities` + `unmeasuredCapabilityNotes`.
+  Все константы — импорт из `game/src/world_api.ts`, который есть и в лёгком дереве фактов.
+* `src/bridge/ws_socket.ts` — `SocketLike`, `adaptSocket` (browser-style и `ws`),
+  `resolveSocketFactory` (injected → global → ws → ПРОВАЛ), `NO_SOCKET_MESSAGE`.
+* `tests/ws_live.test.ts` — 21 проверка; привязка `movementWire` к исходнику upstream
+  пропускается вслух, если дерево лёгкое.
+* `tools/run_world.sh` — подъём мира (см. PROGRESS: проверено с заглушкой docker).
+
+REST-пути, снятые с `server/*.ts` v0.43.2 (для A1.2): `/api/register`, `/api/login`,
+`/api/me/characters`, `/api/characters`, `/api/characters/:id`, `/api/characters/:id/sheet`,
+`/api/characters/:id/takeover`, `/api/realms`, `/api/status`, `/api/account`.
+Тела запросов и порядок шагов берутся из `src/net/online.ts` (`Api`) на машине с полным
+чекаутом — угадывать форму полей нельзя.
+
+Словарь команд v0.43.2 (`COMMAND_NAMES`, `src/world_api.ts:453`), нужный агенту в первую
+очередь: `cast`, `target`, `tab`, `attack`, `stopattack`, `interact`, `loot`, `pickup`,
+`accept`, `turnin`, `abandon`, `equip`, `inv_move`, `unequip_item`, `use`, `discard`,
+`buy`, `sell`, `buyback`, `sell_all_junk`, `harvest_node`, `craft_item`, `chat`, `emote`,
+`pinvite`/`paccept`/`pdecline`/`pleave`. Dispatch-only (не отправляем): `dev_level`,
+`dev_teleport`, `dev_give`, `dev_complete_quest`, `dev_complete_all_quests`,
+`enter_crypt`, `leave_crypt`, `social_refresh`, `targetNearest`, `dev_bg_start`,
+`mount_train_answer`, `mount_train_abort`, `dev_profiler_invulnerable`, `rift_enchant_item`.
+
+Дальше по шагам A1.2 → A1.6 (критерии в `ROADMAP.md`).

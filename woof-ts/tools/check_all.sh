@@ -122,4 +122,35 @@ else
   ' || fail "контур обучения: отчёт и best.json расходятся"
 fi
 
+echo "== 8. браузерная линия C1: полигон + честный отказ инструментов без Chrome =="
+# Полигон: страничный код исполняется против фейкового window.__game — без портов,
+# серверов и браузера (долг J11 замороженной линии закрыт конструкцией).
+# NO_COLOR=1 — иначе совпадения не найти из-за ANSI-кодов в выводе vitest.
+# ВАЖНО: вывод ловим в переменную и сверяем через [[ =~ ]], а НЕ конвейером с `grep -q`:
+# при `set -o pipefail` grep -q закрывает канал рано, vitest получает SIGPIPE (141),
+# и конвейер оказывается «провальным» при полностью зелёных тестах (поймано 2026-09-19).
+poly=$(NO_COLOR=1 npx vitest run tests/browser_world.test.ts --reporter=default 2>&1)
+[[ "$poly" =~ Tests[[:space:]]+[0-9]+[[:space:]]+passed ]] || fail "полигон браузерной линии не пройден"
+if [[ "$poly" =~ Tests.*failed ]]; then
+  echo "$poly" | grep -E "FAIL|AssertionError" | head -5
+  fail "полигон браузерной линии: есть упавшие проверки"
+fi
+echo "$poly" | grep -E "Tests +[0-9]+ passed" | head -1
+# Приёмка J8 на полигоне: тот же файл, фильтр по имени проверки.
+j8=$(NO_COLOR=1 npx vitest run tests/browser_world.test.ts -t 'цикл «взять квест' --reporter=default 2>&1)
+[[ "$j8" =~ Tests[[:space:]]+1[[:space:]]+passed ]] || fail "приёмка J8 на полигоне (взять→убить→сдать) не прошла"
+echo "приёмка J8 на полигоне: взять квест → убить → сдать — пройдена (kills>=1, quests_done>=1)"
+# Инструменты собраны и отказывают ЧЕСТНО: без Chrome — код 1 и инструкция, а не «успех».
+[ -f dist/cdp_probe.mjs ] || npm run build >/dev/null 2>&1
+[ -f dist/cdp_probe.mjs ] || fail "не собран dist/cdp_probe.mjs"
+[ -f dist/run_offline.mjs ] || fail "не собран dist/run_offline.mjs"
+probe_out=$(node dist/cdp_probe.mjs --cdp http://127.0.0.1:9299 2>&1); probe_code=$?
+[ "$probe_code" = "1" ] || fail "зонд без Chrome вернул код $probe_code, ждём 1"
+[[ "$probe_out" == *"Chrome должен быть запущен с отладочным портом"* ]] || fail "зонд без Chrome не дал инструкцию"
+run_out=$(node dist/run_offline.mjs --cdp http://127.0.0.1:9299 --steps 3 2>&1); run_code=$?
+[ "$run_code" = "1" ] || fail "раннер без Chrome вернул код $run_code, ждём 1"
+[[ "$run_out" == *"ОБЪЯВЛЕНО ДО ИЗМЕРЕНИЯ"* ]] || fail "раннер не объявил пороги до измерения"
+[[ "$run_out" == *"приёмка J8: quests_done >= 1 И kills >= 1"* ]] || fail "раннер объявил не те пороги приёмки J8"
+echo "браузерная линия: инструменты собраны, без Chrome отказывают кодом 1 и инструкцией"
+
 echo "ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ"

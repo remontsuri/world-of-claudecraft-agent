@@ -29,8 +29,9 @@ import type { Counters, WorldModel } from './types';
 export type QuestStateAccess = 'full' | 'observed' | 'none';
 
 export interface WorldCapabilities {
-  /** Транспорт: как агент связан с миром. */
-  transport: 'in-process' | 'ndjson-stdio' | 'websocket' | 'unknown';
+    /** Транспорт: как агент связан с миром. 'cdp' — мир живёт в странице браузера
+     *  (офлайн-режим Vite), связь через Chrome DevTools Protocol. */
+    transport: 'in-process' | 'ndjson-stdio' | 'websocket' | 'cdp' | 'unknown';
   /** Мир отдаёт абсолютные координаты сущностей.
    *  В RL-наблюдении игры их нет — там только дистанция/пеленг, поэтому
    *  навигация по координатам лагерей при transport!='in-process' должна
@@ -67,8 +68,9 @@ export interface WorldCapabilities {
   abandonQuest: boolean;
   vendor: boolean;
   partyLootRolls: boolean;
-  /** Словарь команд мира: RL-действия стенда или wire-команды сервера. */
-  commandVocabulary: 'rl-actions' | 'wire-commands';
+    /** Словарь команд мира: RL-действия стенда, wire-команды сервера или
+     *  'page-api' — публичные методы `window.__game.sim`/`controller` в браузере. */
+    commandVocabulary: 'rl-actions' | 'wire-commands' | 'page-api';
   /** Идентичность сущностей в наблюдении:
    *  - 'stable' — у каждой сущности есть id, живущий между кадрами (in-process Sim);
    *  - 'slot'   — мир показывает только «ближайших» без id: позиция в списке
@@ -133,7 +135,7 @@ export interface World {
 export function describeCapabilities(c: WorldCapabilities): string[] {
   return [
     `транспорт=${c.transport}, frameSkip=${c.frameSkip}, реальное время=${c.realtime ? 'да' : 'нет'}, другие игроки=${c.otherPlayers ? 'да' : 'нет'}, задержка=${c.latencyMs} мс`,
-    `абсолютные координаты=${c.absoluteCoords ? 'да' : 'нет'}, состояние любого квеста=${c.questStateApi ? 'да' : 'нет'}, предметы в сумках=${c.itemCountApi ? 'да' : 'нет'}, данные контента=${c.contentData ? 'да' : 'нет'}, детерминизм=${c.deterministic ? 'да' : 'нет'}`,
+      `абсолютные координаты=${c.absoluteCoords ? 'да' : 'нет'}, состояние любого квеста=${c.questStateApi}, предметы в сумках=${c.itemCountApi ? 'да' : 'нет'}, данные контента=${c.contentData ? 'да' : 'нет'}, детерминизм=${c.deterministic ? 'да' : 'нет'}`,
     `выбор цели=${c.targetSelection}, сдача/отказ от квеста=${c.abandonQuest ? 'accept+turn-in+abandon' : 'только то, что даёт стенд'}, продавец=${c.vendor ? 'да' : 'нет'}, груп-лут (roll)=${c.partyLootRolls ? 'да' : 'нет'}, словарь команд=${c.commandVocabulary}`,
     `состояние квестов=${c.questStateApi}, идентичность сущностей=${c.entityIdentity}, вид сущностей (templateId)=${c.entityTemplates ? 'да' : 'нет'}, абсолютное HP сущностей=${c.entityAbsoluteHp ? 'да' : 'нет'}`,
     `счётчики урона=${c.damageCounters ? 'да' : 'нет (0, не используется как сигнал)'}, счётчики по целям квеста=${c.questObjectiveCounts ? 'да' : 'нет (доля; для многоцельных have=0 консервативно)'}`,

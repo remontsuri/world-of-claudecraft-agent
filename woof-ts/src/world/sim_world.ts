@@ -224,8 +224,13 @@ export class SimWorld implements World {
       realtime: false,
       otherPlayers: false,
       // Headless RL-стенд беднее онлайн-мира: `targetNearest` в src/world_api.ts игры
-      // помечен как dispatch-only RL-токен (по проводу не ходит), а онлайн есть
-      // `target`/`tab`, abandon квеста, продавец и груп-лут (need/greed roll).
+      // помечен как dispatch-only RL-токен (по проводу не ходит), а в словаре команд
+      // `COMMAND_NAMES` того же файла есть `target`/`tab` (свободный выбор цели),
+      // `abandon` (отказ от квеста) и `buy`/`sell` (продавец). Возможности живого мира
+      // выводятся из этой таблицы, а не объявляются на глаз: liveWorldCapabilities()
+      // в src/bridge/ws_protocol.ts. Про груп-лут честно: фасет IWorldLoot.submitLootRoll
+      // в upstream есть, а токена команды в COMMAND_NAMES v0.43.2 не нашлось — поэтому
+      // partyLootRolls выводится поиском токенов (lootRollTokens()), а не утверждается.
       targetSelection: 'nearest-only',
       abandonQuest: false,
       vendor: false,

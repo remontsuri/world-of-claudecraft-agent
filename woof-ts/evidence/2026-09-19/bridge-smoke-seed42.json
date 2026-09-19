@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-18T20:47:00.440Z",
+  "generatedAt": "2026-09-19T12:20:49.788Z",
   "line": "woof-ts (TypeScript + headless src/sim)",
   "game": {
     "version": "0.43.2",
@@ -115,7 +115,7 @@
     "worldSteps": 0,
     "quiet": true,
     "every": false,
-    "json": "evidence/2026-09-18/bridge-smoke-seed42.json"
+    "json": "evidence/2026-09-19/bridge-smoke-seed42.json"
   },
   "worldCapabilities": {
     "transport": "ndjson-stdio",
@@ -314,7 +314,7 @@
         "lastResult": "TURN_IN:q_hub_know_your_numbers"
       }
     },
-    "elapsedMs": 31114
+    "elapsedMs": 31124
   },
   "finalCounters": {
     "kills": 2,
